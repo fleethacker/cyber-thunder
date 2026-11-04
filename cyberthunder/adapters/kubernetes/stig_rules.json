@@ -4,15 +4,19 @@
   "group_id": "V-242386",
   "rule_id": null,
   "severity": "high",
-  "title": "API server insecure port flag must be disabled",
+  "title": "API server insecure port flag must be disabled (withdrawn in V2R6)",
   "check_summary": "Look for --insecure-port in the kube-apiserver command line; anything other than 0 is a finding.",
   "fix_summary": "Set --insecure-port=0 in the API server manifest.",
   "object_evidence": "kube-system kube-apiserver pod.spec.containers[].command/args --insecure-port",
   "cci": [
-   "CCI-000213"
+   "CCI-000213",
+   "CCI-000382",
+   "CCI-000366"
   ],
   "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000320",
-  "confirmed": true
+  "confirmed": true,
+  "withdrawn_in": "V2R6",
+  "note": "Withdrawn from the Kubernetes STIG in V2R6: the API server insecure port was removed upstream in Kubernetes 1.24. The check still applies to older clusters; cite the CCI as the current authority."
  },
  {
   "stig_id": "CNTR-K8-000330",
@@ -34,15 +38,19 @@
   "group_id": "V-242388",
   "rule_id": null,
   "severity": "high",
-  "title": "API server insecure bind address must not be set",
+  "title": "API server insecure bind address must not be set (withdrawn in V2R6)",
   "check_summary": "The API server manifest must not carry an --insecure-bind-address flag.",
   "fix_summary": "Remove the --insecure-bind-address value from the API server manifest.",
   "object_evidence": "kube-apiserver args --insecure-bind-address",
   "cci": [
-   "CCI-000213"
+   "CCI-000213",
+   "CCI-000382",
+   "CCI-000366"
   ],
   "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000340",
-  "confirmed": true
+  "confirmed": true,
+  "withdrawn_in": "V2R6",
+  "note": "Withdrawn from the Kubernetes STIG in V2R6: the API server insecure port was removed upstream in Kubernetes 1.24. The check still applies to older clusters; cite the CCI as the current authority."
  },
  {
   "stig_id": "CNTR-K8-000360",
