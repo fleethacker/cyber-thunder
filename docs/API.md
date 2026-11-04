@@ -87,6 +87,13 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/ingest/history` | → `{deltas: [DeltaReport], bulletins: [...]}` |
 | GET | `/outbox` | → `{connected, pending: [{name, kind, bytes, created_at}], synced: [{name, kind, bytes, synced_at, seconds}]}` |
 | POST | `/outbox/sync` | → `{sent, bytes, seconds}`; `409` if disconnected |
+| GET | `/ingest/updates` | → the last DISA content check `{checked_at, source, index_entries, index_wire_bytes, gzip, wanted, updates: [{filename, url, product_key, kind, version_label, upload_date, expected_bytes?, targets}], current, skipped: [{target_id|filename|product_key, reason}], estimate_seconds_at_link}` plus `index_estimate: {bytes, seconds, link}` and `connected`; `checked_at: null` before the first check. See [CONTENT.md](CONTENT.md) |
+| POST | `/ingest/updates/check` | `{source?: "live"|"snapshot"}` → the check report. `409` (naming the manifest path) when the link is down and source is live. Audit `content.check` |
+| POST | `/ingest/updates/pull` | `{filenames?: [..]}` or `{all_matching: true}`, `pace?` → `202` job `{id, state, files: [{filename, state, bytes, total, error, delta?, datastream_path?}], deltas}`. `409` when the link is down, `400` while the kill switch is engaged. Audit `content.fetch`, `content.fetch_failed`, `content.quarantine`, and `ingest.stig` per manual STIG |
+| GET | `/ingest/updates/jobs/{id}` | → the pull job with per-file progress; `404` if unknown |
+| GET | `/ingest/content` | → `{files: [{filename, product_key, kind, version, sha256, etag, bytes, url, fetched_at, fetched_by, source, ingest: {delta_id?, catalog_path?, datastream_path?}}], products, scap: [{product_key, filename, datastream_path}], quarantine, dir}` |
+| POST | `/ingest/manifest` | → `{generated_at, node, items: [{filename, url, product_key, kind, version, expected_bytes?, expected_etag?}], path, sha256}` written to `<state>/content/manifest.json`. Audit `content.manifest` |
+| POST | `/ingest/import-dir` | `{path}` (a folder on this node) → `{imported, refused: [{filename, reason}], skipped, missing, verified_by, deltas}`; verified against `manifest.lock.json` when present. Audit `content.import`, `content.quarantine` |
 
 ## Reports
 | GET | `/reports/commander` | `?scan_id&format=html|md` → rendered one-pager |

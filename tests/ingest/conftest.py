@@ -87,3 +87,18 @@ def add_targets(ctx, *target_ids: str) -> None:
     from cyberthunder.inventory.targets import Target
     for tid in target_ids:
         ctx.inventory.add(Target(id=tid, name=tid, asset_type="linux", transport="fixture"))
+
+
+@pytest.fixture(autouse=True)
+def _no_internet(monkeypatch):
+    """Content updates reach out on reconnect; in tests only loopback resolves."""
+    from tests.ingest.content_helpers import guard_network
+    guard_network(monkeypatch)
+
+
+@pytest.fixture
+def file_server():
+    from tests.ingest.content_helpers import FileServer
+    srv = FileServer().start()
+    yield srv
+    srv.stop()

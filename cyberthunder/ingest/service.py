@@ -36,6 +36,7 @@ class IngestService:
         self._link = Link(self.store, ctx.settings, self.audit)
         self._outbox = Outbox(self.store, self._link, self.audit)
         self._link.on_reconnect = self._flush_on_reconnect
+        self._content = None
 
     # -- link / outbox -----------------------------------------------------------------------------
     @property
@@ -53,7 +54,54 @@ class IngestService:
         return self._link.set(actor=actor, **changes)
 
     def _flush_on_reconnect(self, actor: str) -> dict:
-        return self._outbox.sync(actor=actor)
+        result = self._outbox.sync(actor=actor)
+        try:
+            content = self.content.on_reconnect(actor)
+        except Exception as e:  # noqa: BLE001 - the outbox flush already happened; report, do not undo
+            content = {"error": str(e)}
+        return dict(result, content=content)
+
+    # -- DISA content updates (see cyberthunder/ingest/content/) ------------------------------------
+    @property
+    def content(self):
+        if self._content is None:
+            from cyberthunder.ingest.content.service import ContentService
+            self._content = ContentService(self)
+        return self._content
+
+    def check_updates(self, actor: str = "operator", *, source: str = "live", include_automation: bool = False,
+                      include_compilation: bool = False) -> dict:
+        """Fetch the DISA STIG index (or read the bundled snapshot) and work out what this node needs."""
+        return self.content.check_updates(actor, source=source, include_automation=include_automation,
+                                          include_compilation=include_compilation)
+
+    def last_update_check(self) -> dict | None:
+        return self.content.last_check()
+
+    def pull(self, actor: str = "operator", *, filenames: list[str] | None = None, all_matching: bool = False,
+             pace: bool = False, background: bool = True) -> dict:
+        """Download content (named files, or every update from the last check) as a job record."""
+        return self.content.pull(actor, filenames=filenames, all_matching=all_matching, pace=pace,
+                                 background=background)
+
+    def pull_job(self, job_id: str) -> dict:
+        return self.content.get_job(job_id)
+
+    def held_content(self) -> dict:
+        return self.content.content()
+
+    def write_manifest(self, actor: str = "operator", path: str | Path | None = None) -> dict:
+        """The wanted-but-missing list as a manifest a connected machine can fetch."""
+        return self.content.write_manifest(actor, path)
+
+    def fetch_manifest(self, manifest_path: str | Path, out_dir: str | Path, opener=None, **kw) -> dict:
+        """Run the downloader for a manifest (normally on the connected machine; see content.service)."""
+        from cyberthunder.ingest.content.service import fetch_manifest
+        return fetch_manifest(manifest_path, out_dir, opener, link=self._link.state(), **kw)
+
+    def import_dir(self, path: str | Path, actor: str = "operator") -> dict:
+        """Import every DISA file in a folder (removable media), verified against manifest.lock.json if present."""
+        return self.content.import_dir(path, actor)
 
     # -- STIG releases -----------------------------------------------------------------------------
     def ingest_stig(self, path_or_bytes: str | Path | bytes, filename: str | None = None, *,

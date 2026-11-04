@@ -13,18 +13,21 @@ Service methods used (first name found wins):
   history()                            -> {deltas, bulletins}
   outbox()                             -> {connected, pending, synced}
   sync(actor=)                         -> {sent, bytes, seconds}
+  check_updates / last_update_check / pull / pull_job / held_content / write_manifest / import_dir
+                                       -> DISA content updates (cyberthunder/ingest/content/)
 """
 from __future__ import annotations
 
 import inspect
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from cyberthunder.api import util
-from cyberthunder.api.errors import MappedRoute, feature, requires
+from cyberthunder.api.errors import MappedRoute, feature, requires, unavailable
 from cyberthunder.api.routes.scans import start_scan
 from cyberthunder.api.schemas import LinkBody
 from cyberthunder.api.util import ActorDep, CtxDep, call_first, finding_plus, to_plain
@@ -199,3 +202,79 @@ def outbox_sync(ctx=CtxDep, actor: str = ActorDep) -> dict:
         if ob is not None and callable(getattr(ob, "sync", None)):
             return to_plain(ob.sync(actor=actor))
         return to_plain(call_first(svc, ("sync", "sync_outbox", "flush"), actor=actor))
+
+
+# -- DISA content updates ------------------------------------------------------------------------
+# Read-only egress to the two allow-listed DoD hosts; nothing here changes an asset. The service refuses
+# with LinkDisconnected (409) when the link is down and IngestError (400) on any other refusal.
+class UpdateCheckBody(BaseModel):
+    source: Literal["live", "snapshot"] = "live"
+
+
+class PullBody(BaseModel):
+    filenames: list[str] | None = Field(default=None, max_length=200)
+    all_matching: bool = False
+    pace: bool = False
+
+
+class ImportDirBody(BaseModel):
+    path: str
+
+
+def _content_svc(ctx):
+    svc = _svc(ctx, "content updates")
+    if not callable(getattr(svc, "check_updates", None)):
+        raise unavailable("content updates")
+    return svc
+
+
+@router.get("/ingest/updates")
+def get_updates(ctx=CtxDep) -> dict:
+    svc = _content_svc(ctx)
+    last = to_plain(svc.last_update_check()) or {"checked_at": None, "wanted": [], "updates": [], "current": [],
+                                                 "skipped": []}
+    last["index_estimate"] = svc.content.index_estimate()
+    last["connected"] = bool(util.link_state(ctx).get("connected", False))
+    return last
+
+
+@router.post("/ingest/updates/check")
+def check_updates(body: UpdateCheckBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    svc = _content_svc(ctx)
+    return to_plain(svc.check_updates(actor, source=(body or UpdateCheckBody()).source))
+
+
+@router.post("/ingest/updates/pull", status_code=202)
+def pull_updates(body: PullBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    svc = _content_svc(ctx)
+    b = body or PullBody()
+    if not b.all_matching and not b.filenames:
+        raise ValueError("send {\"filenames\": [...]} or {\"all_matching\": true}")
+    return to_plain(svc.pull(actor, filenames=None if b.all_matching else b.filenames, all_matching=b.all_matching,
+                             pace=b.pace, background=True))
+
+
+@router.get("/ingest/updates/jobs/{job_id}")
+def pull_job(job_id: str, ctx=CtxDep) -> dict:
+    return to_plain(_content_svc(ctx).pull_job(job_id))
+
+
+@router.get("/ingest/content")
+def held_content(ctx=CtxDep) -> dict:
+    return to_plain(_content_svc(ctx).held_content())
+
+
+@router.post("/ingest/manifest")
+def write_manifest(ctx=CtxDep, actor: str = ActorDep) -> dict:
+    return to_plain(_content_svc(ctx).write_manifest(actor))
+
+
+@router.post("/ingest/import-dir")
+def import_dir(body: ImportDirBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    svc = _content_svc(ctx)
+    if body is None or not body.path.strip():
+        raise ValueError("send {\"path\": \"<folder on this node>\"}")
+    p = Path(body.path.strip()).expanduser()
+    if not p.is_dir():
+        raise ValueError(f"no such folder on this node: {p}")
+    return to_plain(svc.import_dir(p, actor))
