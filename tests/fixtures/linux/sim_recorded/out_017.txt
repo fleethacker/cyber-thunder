@@ -1,0 +1,9 @@
+root:x:0:
+bin:x:1:
+daemon:x:2:
+wheel:x:10:itadmin
+sshd:x:74:
+chrony:x:994:
+sailor:x:1000:
+itadmin:x:1001:
+svc_backup:x:2000:

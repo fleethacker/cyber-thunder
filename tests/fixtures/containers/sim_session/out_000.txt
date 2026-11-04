@@ -1,0 +1,1 @@
+{"Client": {"Version": "24.0.9"}, "Server": {"Version": "24.0.9", "Os": "linux", "Arch": "amd64"}}

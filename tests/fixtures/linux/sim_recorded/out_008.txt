@@ -1,0 +1,4 @@
+firewalld|disabled|inactive
+auditd|enabled|active
+sshd|enabled|active
+ctrl-alt-del.target|disabled|inactive

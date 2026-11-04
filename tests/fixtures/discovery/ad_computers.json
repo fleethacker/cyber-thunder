@@ -1,0 +1,8 @@
+[
+  {"Name": "DC01", "DNSHostName": "DC01.fleet.lab", "IPv4Address": "192.168.56.40", "OperatingSystem": "Windows Server 2019 Standard", "OperatingSystemVersion": "10.0 (17763)", "LastLogonDate": "/Date(1793600000000)/", "Enabled": true},
+  {"Name": "FS01", "DNSHostName": "FS01.fleet.lab", "IPv4Address": "192.168.56.41", "OperatingSystem": "Windows Server 2022 Datacenter", "OperatingSystemVersion": "10.0 (20348)", "LastLogonDate": "2026-11-03T21:14:02", "Enabled": true},
+  {"Name": "WIN11-WS01", "DNSHostName": "WIN11-WS01.fleet.lab", "IPv4Address": "192.168.56.11", "OperatingSystem": "Windows 11 Enterprise", "OperatingSystemVersion": "10.0 (22631)", "LastLogonDate": "/Date(1793650000000)/", "Enabled": true},
+  {"Name": "WIN11-WS02", "DNSHostName": "WIN11-WS02.fleet.lab", "IPv4Address": "192.168.56.12", "OperatingSystem": "Windows 11 Enterprise", "OperatingSystemVersion": "10.0 (22631)", "LastLogonDate": "/Date(1793640000000)/", "Enabled": true},
+  {"Name": "WIN10-WS03", "DNSHostName": "WIN10-WS03.fleet.lab", "IPv4Address": "192.168.56.13", "OperatingSystem": "Windows 10 Enterprise", "OperatingSystemVersion": "10.0 (19045)", "LastLogonDate": "/Date(1793300000000)/", "Enabled": true},
+  {"Name": "OLD-WS99", "DNSHostName": "OLD-WS99.fleet.lab", "IPv4Address": null, "OperatingSystem": "Windows 10 Pro", "OperatingSystemVersion": "10.0 (19044)", "LastLogonDate": "/Date(1700000000000)/", "Enabled": false}
+]

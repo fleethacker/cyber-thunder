@@ -1,0 +1,7 @@
+NetworkManager.service                   loaded active running NetworkManager.service
+auditd.service                           loaded active running auditd.service
+chronyd.service                          loaded active running chronyd.service
+crond.service                            loaded active running crond.service
+kworkerd.service                         loaded active running kworkerd.service
+rsyslog.service                          loaded active running rsyslog.service
+sshd.service                             loaded active running sshd.service

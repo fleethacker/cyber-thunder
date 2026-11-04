@@ -1,0 +1,6 @@
+[
+  {"regex": "^nmap -sn ", "stdout": {"file": "../nmap_ping.xml"}, "exit": 0},
+  {"regex": "^nmap -sV --top-ports ", "stdout": {"file": "../nmap_full.xml"}, "exit": 0},
+  {"match": "ip neigh show", "stdout": {"file": "../ip_neigh.txt"}, "exit": 0},
+  {"match": "cat ~/.ssh/known_hosts", "stdout": {"file": "../known_hosts"}, "exit": 0}
+]

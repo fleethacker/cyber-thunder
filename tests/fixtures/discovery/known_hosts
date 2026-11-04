@@ -1,0 +1,5 @@
+# operator known_hosts (keys shortened)
+rocky9-app01,192.168.56.10 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOne
+[192.168.56.30]:2222 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAExampleKeyTwo
+|1|hashedsalt=|hashedhost= ssh-rsa AAAAB3NzaC1yc2EAAAAExampleKeyThree
+@cert-authority *.fleet.lab ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleCA

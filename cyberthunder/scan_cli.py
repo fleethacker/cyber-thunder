@@ -1,0 +1,100 @@
+"""Scan commands: `cyberthunder scan` and `cyberthunder scans list|show <id>`.
+
+A command-line process cannot leave a scan running after it exits, so `scan` always waits for the run to
+finish. `--wait` additionally prints each target as it completes, which is useful over a slow link.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+
+
+def _ctx(a: argparse.Namespace):
+    from cyberthunder.config import Settings
+    from cyberthunder.context import AppContext
+    return AppContext(Settings.from_env(state_dir=a.state_dir))
+
+
+def _print_table(run) -> None:
+    print(f"{'target':<28} {'status':<9} {'findings':>8} {'open':>5}  errors")
+    for tid in run.targets:
+        r = run.results.get(tid)
+        if r is None:
+            continue
+        err = "; ".join(r.errors)[:80]
+        print(f"{tid:<28} {r.status:<9} {r.findings:>8} {r.open:>5}  {err}")
+
+
+def _print_summary(run) -> None:
+    s = run.summary or {}
+    sev = s.get("open_by_severity", {})
+    print(f"\nscan {run.id}: {run.status}  findings={run.findings_count}  "
+          f"open CAT I={sev.get('high', 0)} CAT II={sev.get('medium', 0)} CAT III={sev.get('low', 0)}")
+    for key in ("proposals_created", "auto_propose_error", "explanations_queued", "explain_error"):
+        if key in s:
+            print(f"  {key}: {s[key]}")
+    if run.error:
+        print(f"  error: {run.error}")
+
+
+def cmd_scan(a: argparse.Namespace) -> int:
+    ctx = _ctx(a)
+    if a.no_propose:
+        ctx.settings.auto_propose = False
+    run = ctx.scanner.start(a.targets or None, modules=a.modules or None, rule_filter=a.rules or None,
+                            trigger=a.trigger, requested_by=a.actor, background=True)
+    print(f"scan {run.id} started: {len(run.targets)} target(s)", file=sys.stderr)
+    reported: set[str] = set()
+    while ctx.scanner.is_running(run.id):
+        if a.wait:
+            cur = ctx.scanner.get(run.id)
+            for tid, r in (cur.results.items() if cur else []):
+                if tid not in reported and r.status in ("done", "error", "skipped"):
+                    reported.add(tid)
+                    print(f"  {tid}: {r.status} ({r.findings} findings)", file=sys.stderr)
+        ctx.scanner.join(run.id, timeout=0.5)
+    final = ctx.scanner.join(run.id) or run
+    _print_table(final)
+    _print_summary(final)
+    return 0 if final.status == "done" else 1
+
+
+def cmd_scans(a: argparse.Namespace) -> int:
+    ctx = _ctx(a)
+    if a.sub == "list":
+        for r in ctx.scanner.list():
+            print(f"{r.id:<32} {r.status:<8} {r.trigger:<10} {r.started_at:<26} "
+                  f"targets={len(r.targets)} findings={r.findings_count}")
+        return 0
+    if not a.id:
+        print("scans show needs a scan id", file=sys.stderr)
+        return 2
+    run = ctx.scanner.get(a.id)
+    if run is None:
+        print(f"no scan {a.id}", file=sys.stderr)
+        return 2
+    if a.json:
+        print(json.dumps(run.to_dict(), indent=2, default=str))
+    else:
+        _print_table(run)
+        _print_summary(run)
+    return 0
+
+
+def register_cli(subparsers) -> None:
+    p = subparsers.add_parser("scan", help="scan in-scope targets (read-only) and record findings")
+    p.add_argument("--targets", nargs="*", help="target ids (default: every in-scope target)")
+    p.add_argument("--modules", nargs="*", choices=["check", "hunt", "cve"], help="detection modules to run")
+    p.add_argument("--rules", nargs="*", help="only these rule ids / STIG ids (targeted rescan)")
+    p.add_argument("--trigger", default="manual", choices=["manual", "stig_delta", "bulletin", "verify", "demo"])
+    p.add_argument("--no-propose", action="store_true", help="do not propose fixes after the scan")
+    p.add_argument("--wait", action="store_true", help="print each target as it completes")
+    p.set_defaults(fn=cmd_scan)
+
+    p = subparsers.add_parser("scans", help="list scan runs or show one")
+    p.add_argument("sub", choices=["list", "show"])
+    p.add_argument("id", nargs="?")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_scans)
+

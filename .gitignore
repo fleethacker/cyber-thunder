@@ -1,0 +1,50 @@
+# secrets / installers / event docs (never commit)
+*Secret*
+*secret*
+*.key
+*.pem
+*.exe
+*.winmd
+*.pdf
+tmp/
+
+# runtime state
+state/
+*.audit.jsonl
+*.log
+findings*.json
+!tests/fixtures/*.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+
+# vendored wheels are committed on purpose for offline install
+!vendor/*.whl
+
+# editors / os
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# DISA STIG downloads (public, large; fetch per README, do not commit)
+U_*_STIG*/
+U_*_STIG*.zip
+*.zip
+
+# large downloads (STIG zips, SSG content, model files) stay out of git
+range/downloads/
+*.litertlm
+ssg-*-ds.xml
+
+# ui toolchain
+node_modules/
+cyberthunder/ui/.vite/
+cyberthunder/ui/*.local

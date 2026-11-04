@@ -1,0 +1,8 @@
+NetworkManager.service                   enabled
+auditd.service                           enabled
+chronyd.service                          enabled
+crond.service                            enabled
+firewalld.service                        disabled
+kworkerd.service                         enabled
+rsyslog.service                          enabled
+sshd.service                             enabled

@@ -1,0 +1,6 @@
+127.0.0.1   localhost localhost.localdomain
+::1         localhost6
+# enclave hosts
+192.168.56.10  rocky9-app01 rocky9
+192.168.56.11  win11-ws01
+10.20.0.5      offsite-backup   # outside the discovery scope, must be dropped

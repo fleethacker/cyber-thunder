@@ -1,0 +1,6 @@
+Protocol  Address          Age (min)  Hardware Addr   Type   Interface
+Internet  192.168.56.2            -   7010.5caa.bb01  ARPA   Vlan56
+Internet  192.168.56.10           3   5254.0012.3410  ARPA   Vlan56
+Internet  192.168.56.66           1   b827.eb5a.6601  ARPA   Vlan56
+Internet  192.168.56.71           9   dca6.3200.0071  ARPA   Vlan56
+Internet  10.99.0.4               2   0050.5600.0004  ARPA   Vlan99

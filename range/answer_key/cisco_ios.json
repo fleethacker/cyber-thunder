@@ -1,0 +1,420 @@
+{
+  "target": "sim-switch-01",
+  "config": "range/cisco/seeded_switch.cfg",
+  "purpose": "Score detection rate (measure of success #1). Do not show to the model.",
+  "matching": "A finding matches an item when check_id equals the finding's rule_version (STIG ID or hunt check) or rule_id.",
+  "items": [
+    {
+      "id": "M1",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-000010",
+      "rule_id": "SV-220518r960735_rule",
+      "severity": "medium",
+      "what": "vty 0 4 and 5 15 have no session-limit",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-000010"
+    },
+    {
+      "id": "M2",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-000150",
+      "rule_id": "SV-220524r960840_rule",
+      "severity": "medium",
+      "what": "no login block-for lockout",
+      "fix_ref": "cisco:rule:CISC-ND-000150"
+    },
+    {
+      "id": "M3",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-000160",
+      "rule_id": "SV-220525r960843_rule",
+      "severity": "medium",
+      "what": "only a motd banner; no DoD notice on banner login",
+      "fix_ref": "cisco:rule:CISC-ND-000160"
+    },
+    {
+      "id": "M4",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-000210",
+      "rule_id": "SV-220526r1186346_rule",
+      "severity": "medium",
+      "what": "no archive / log config / logging enable",
+      "fix_ref": "cisco:rule:CISC-ND-000210"
+    },
+    {
+      "id": "M5",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-000470",
+      "rule_id": "SV-220534r1043177_rule",
+      "severity": "high",
+      "what": "ip http server enabled",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-000470"
+    },
+    {
+      "id": "M6",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-000490",
+      "rule_id": "SV-220535r1051115_rule",
+      "severity": "medium",
+      "what": "two local accounts (admin, netops2)",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-000490"
+    },
+    {
+      "id": "M7",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-000550",
+      "rule_id": "SV-220537r991912_rule",
+      "severity": "medium",
+      "what": "no 15-character minimum password length policy",
+      "fix_ref": "cisco:rule:CISC-ND-000550"
+    },
+    {
+      "id": "M8",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-000620",
+      "rule_id": "SV-220543r991922_rule",
+      "severity": "high",
+      "what": "enable password 7 present; service password-encryption off",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-000620"
+    },
+    {
+      "id": "M9",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-000720",
+      "rule_id": "SV-220544r961068_rule",
+      "severity": "high",
+      "what": "con 0 exec-timeout 0 0, vty 0 4 30 min, vty 5 15 default 10 min",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-000720"
+    },
+    {
+      "id": "M10",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-001000",
+      "rule_id": "SV-220548r991923_rule",
+      "severity": "medium",
+      "what": "no logging trap level",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-001000"
+    },
+    {
+      "id": "M11",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-001030",
+      "rule_id": "SV-220549r991924_rule",
+      "severity": "medium",
+      "what": "single NTP server",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-001030"
+    },
+    {
+      "id": "M12",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-001130",
+      "rule_id": "SV-220552r1107175_rule",
+      "severity": "medium",
+      "what": "SNMP communities public RO / private RW",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-001130"
+    },
+    {
+      "id": "M13",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-001140",
+      "rule_id": "SV-220553r961506_rule",
+      "severity": "medium",
+      "what": "SNMP communities and v3 group NETMGMT at auth, not priv",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-001140"
+    },
+    {
+      "id": "M14",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-001150",
+      "rule_id": "SV-220554r1107160_rule",
+      "severity": "medium",
+      "what": "ntp authenticate missing; server 10.1.1.10 without key",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-001150"
+    },
+    {
+      "id": "M15",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-001200",
+      "rule_id": "SV-220555r961554_rule",
+      "severity": "high",
+      "what": "no ip ssh server algorithm mac (SHA-1 allowed)",
+      "fix_ref": "cisco:rule:CISC-ND-001200"
+    },
+    {
+      "id": "M16",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-001210",
+      "rule_id": "SV-220556r961557_rule",
+      "severity": "high",
+      "what": "no ip ssh server algorithm encryption (CBC allowed)",
+      "fix_ref": "cisco:rule:CISC-ND-001210"
+    },
+    {
+      "id": "M17",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-001260",
+      "rule_id": "SV-220560r961824_rule",
+      "severity": "medium",
+      "what": "login on-failure log missing",
+      "fix_ref": "cisco:rule:CISC-ND-001260"
+    },
+    {
+      "id": "M18",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-001370",
+      "rule_id": "SV-220565r1195273_rule",
+      "severity": "high",
+      "what": "only one TACACS+ server",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-001370"
+    },
+    {
+      "id": "M19",
+      "kind": "misconfig",
+      "check_id": "CISC-ND-001450",
+      "rule_id": "SV-220568r961863_rule",
+      "severity": "high",
+      "what": "one syslog host, and it is the rogue 10.10.10.10",
+      "fix_ref": "cisco:sim-switch-01:CISC-ND-001450"
+    },
+    {
+      "id": "M20",
+      "kind": "misconfig",
+      "check_id": "CISC-L2-000100",
+      "rule_id": "SV-220656r856278_rule",
+      "severity": "medium",
+      "what": "Gi1/0/2 and Gi1/0/4 access ports without BPDU guard",
+      "fix_ref": "cisco:sim-switch-01:CISC-L2-000100"
+    },
+    {
+      "id": "M21",
+      "kind": "misconfig",
+      "check_id": "CISC-L2-000130",
+      "rule_id": "SV-220659r928999_rule",
+      "severity": "medium",
+      "what": "DHCP snooping off for user VLANs 20,30",
+      "fix_ref": "cisco:sim-switch-01:CISC-L2-000130"
+    },
+    {
+      "id": "M22",
+      "kind": "misconfig",
+      "check_id": "CISC-L2-000210",
+      "rule_id": "SV-220667r991904_rule",
+      "severity": "medium",
+      "what": "shut ports Gi1/0/5 (vlan 20) and Gi1/0/6 (vlan 1) not in VLAN 999",
+      "fix_ref": "cisco:sim-switch-01:CISC-L2-000210"
+    },
+    {
+      "id": "M23",
+      "kind": "misconfig",
+      "check_id": "CISC-L2-000230",
+      "rule_id": "SV-220669r991906_rule",
+      "severity": "medium",
+      "what": "trunk Gi1/0/1 allows VLAN 1",
+      "fix_ref": "cisco:sim-switch-01:CISC-L2-000230"
+    },
+    {
+      "id": "M24",
+      "kind": "misconfig",
+      "check_id": "CISC-L2-000260",
+      "rule_id": "SV-220672r991909_rule",
+      "severity": "medium",
+      "what": "trunk Gi1/0/1 native VLAN 1",
+      "fix_ref": "cisco:sim-switch-01:CISC-L2-000260"
+    },
+    {
+      "id": "I1",
+      "kind": "intrusion",
+      "check_id": "hunt:cisco:unknown_user:netops2",
+      "attack": [
+        "T1136.001",
+        "T1098"
+      ],
+      "severity": "high",
+      "what": "backdoor local user netops2 privilege 15",
+      "fix_ref": "cisco:sim-switch-01:hunt:cisco:unknown_user:netops2"
+    },
+    {
+      "id": "I2",
+      "kind": "intrusion",
+      "check_id": "hunt:cisco:snmp_community:public",
+      "attack": [
+        "T1602.001",
+        "T1552"
+      ],
+      "severity": "medium",
+      "what": "SNMP community public RO (default name)",
+      "fix_ref": "cisco:sim-switch-01:hunt:cisco:snmp_community:public"
+    },
+    {
+      "id": "I3",
+      "kind": "intrusion",
+      "check_id": "hunt:cisco:snmp_community:private",
+      "attack": [
+        "T1602.001",
+        "T1552"
+      ],
+      "severity": "high",
+      "what": "SNMP community private RW with no ACL",
+      "fix_ref": "cisco:sim-switch-01:hunt:cisco:snmp_community:private"
+    },
+    {
+      "id": "I4",
+      "kind": "intrusion",
+      "check_id": "hunt:cisco:http_server",
+      "attack": [
+        "T1190"
+      ],
+      "severity": "high",
+      "what": "ip http server with local authentication",
+      "fix_ref": "cisco:sim-switch-01:hunt:cisco:http_server"
+    },
+    {
+      "id": "I5",
+      "kind": "intrusion",
+      "check_id": "hunt:cisco:eem_applet:CFG-BACKUP",
+      "attack": [
+        "T1053",
+        "T1602.002"
+      ],
+      "severity": "high",
+      "what": "EEM applet copies running-config to tftp://10.10.10.10 nightly",
+      "fix_ref": "cisco:sim-switch-01:hunt:cisco:eem_applet:CFG-BACKUP"
+    },
+    {
+      "id": "I6",
+      "kind": "intrusion",
+      "check_id": "hunt:cisco:static_route:10.10.10.0/24",
+      "attack": [
+        "T1599",
+        "T1572"
+      ],
+      "severity": "medium",
+      "what": "static route to 10.10.10.0/24 via 192.168.250.66 (not a connected gateway)",
+      "fix_ref": "cisco:sim-switch-01:hunt:cisco:static_route:10.10.10.0/24"
+    },
+    {
+      "id": "I7",
+      "kind": "intrusion",
+      "check_id": "hunt:cisco:log_host:10.10.10.10",
+      "attack": [
+        "T1020",
+        "T1562"
+      ],
+      "severity": "medium",
+      "what": "syslog sent to rogue collector 10.10.10.10",
+      "fix_ref": "cisco:sim-switch-01:hunt:cisco:log_host:10.10.10.10"
+    },
+    {
+      "id": "I8",
+      "kind": "intrusion",
+      "check_id": "hunt:cisco:telnet_vty:vty_0_4",
+      "attack": [
+        "T1021"
+      ],
+      "severity": "high",
+      "what": "telnet accepted on vty 0 4",
+      "fix_ref": "cisco:sim-switch-01:hunt:cisco:telnet_vty:vty_0_4"
+    },
+    {
+      "id": "I9",
+      "kind": "intrusion",
+      "check_id": "hunt:cisco:telnet_vty:vty_5_15",
+      "attack": [
+        "T1021"
+      ],
+      "severity": "high",
+      "what": "telnet accepted on vty 5 15",
+      "fix_ref": "cisco:sim-switch-01:hunt:cisco:telnet_vty:vty_5_15"
+    }
+  ],
+  "router": {
+    "target": "rtr-01 (file transport)",
+    "config": "range/cisco/seeded_router.cfg",
+    "options": {
+      "known_users": [
+        "admin"
+      ],
+      "known_syslog": [
+        "10.1.1.5",
+        "10.1.2.5"
+      ]
+    },
+    "items": [
+      {
+        "id": "RM1",
+        "kind": "misconfig",
+        "check_id": "CISC-ND-000980",
+        "rule_id": "SV-220547r961392_rule",
+        "severity": "medium",
+        "what": "no logging buffered (router)",
+        "fix_ref": "cisco:rule:CISC-ND-000980"
+      },
+      {
+        "id": "RM2",
+        "kind": "misconfig",
+        "check_id": "CISC-RT-000060",
+        "rule_id": "SV-216646r531086_rule",
+        "severity": "low",
+        "what": "Gi0/0/2 has no address and is not shut down",
+        "fix_ref": "cisco:rtr-01:CISC-RT-000060"
+      },
+      {
+        "id": "RM3",
+        "kind": "misconfig",
+        "check_id": "CISC-RT-000160",
+        "rule_id": "SV-216654r855815_rule",
+        "severity": "low",
+        "what": "ip directed-broadcast on Gi0/0/1",
+        "fix_ref": "cisco:rtr-01:CISC-RT-000160"
+      },
+      {
+        "id": "RM4",
+        "kind": "misconfig",
+        "check_id": "CISC-RT-000190",
+        "rule_id": "SV-216657r855818_rule",
+        "severity": "medium",
+        "what": "ICMP redirects on external Gi0/0/0",
+        "fix_ref": "cisco:rtr-01:CISC-RT-000190"
+      },
+      {
+        "id": "RM5",
+        "kind": "misconfig",
+        "check_id": "CISC-RT-000330",
+        "rule_id": "SV-216671r531086_rule",
+        "severity": "medium",
+        "what": "no inbound ACL on external Gi0/0/0 (EXTERNAL-IN exists, never applied)",
+        "fix_ref": "cisco:rtr-01:CISC-RT-000330"
+      },
+      {
+        "id": "RM6",
+        "kind": "misconfig",
+        "check_id": "CISC-RT-000380",
+        "rule_id": "SV-216676r855823_rule",
+        "severity": "medium",
+        "what": "proxy ARP on external Gi0/0/0",
+        "fix_ref": "cisco:rtr-01:CISC-RT-000380"
+      },
+      {
+        "id": "RI1",
+        "kind": "intrusion",
+        "check_id": "hunt:cisco:tunnel:Tunnel99",
+        "attack": [
+          "T1572"
+        ],
+        "severity": "high",
+        "what": "GRE tunnel Tunnel99 to 198.51.100.77 sourced from the WAN interface",
+        "fix_ref": "cisco:rtr-01:hunt:cisco:tunnel:Tunnel99"
+      },
+      {
+        "id": "RI2",
+        "kind": "intrusion",
+        "check_id": "hunt:cisco:acl_permit_any:EXTERNAL-IN",
+        "attack": [
+          "T1562.004"
+        ],
+        "severity": "high",
+        "what": "permit ip any any ahead of the deny rules in EXTERNAL-IN",
+        "fix_ref": "cisco:rtr-01:hunt:cisco:acl_permit_any:EXTERNAL-IN"
+      }
+    ]
+  }
+}

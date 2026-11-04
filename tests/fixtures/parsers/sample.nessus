@@ -1,0 +1,93 @@
+<?xml version="1.0" ?>
+<NessusClientData_v2>
+<Policy><policyName>Fleet Credentialed Patch Audit</policyName></Policy>
+<Report name="Enclave-B Weekly">
+<ReportHost name="ws-014.enclave.example">
+<HostProperties>
+<tag name="host-ip">10.20.1.14</tag>
+<tag name="operating-system">Microsoft Windows 10 Enterprise</tag>
+<tag name="netbios-name">WS-014</tag>
+<tag name="host-fqdn">ws-014.enclave.example</tag>
+</HostProperties>
+<ReportItem port="445" svc_name="cifs" protocol="tcp" severity="4" pluginID="97833" pluginName="MS17-010: Security Update for Microsoft Windows SMB Server" pluginFamily="Windows : Microsoft Bulletins">
+<description>The remote Windows host is affected by multiple vulnerabilities in SMBv1.</description>
+<synopsis>The remote Windows host is affected by multiple vulnerabilities.</synopsis>
+<solution>Apply the Microsoft security updates listed in MS17-010 or disable SMBv1.</solution>
+<plugin_output>
+  KB4012212 is not installed.
+</plugin_output>
+<risk_factor>Critical</risk_factor>
+<cvss3_base_score>8.1</cvss3_base_score>
+<exploit_available>true</exploit_available>
+<cve>CVE-2017-0143</cve>
+<cve>CVE-2017-0144</cve>
+<xref>IAVA:2017-A-0065</xref>
+<xref>MSFT:MS17-010</xref>
+<see_also>https://technet.microsoft.com/library/security/MS17-010</see_also>
+<stig_severity>I</stig_severity>
+</ReportItem>
+<ReportItem port="3389" svc_name="msrdp" protocol="tcp" severity="2" pluginID="18405" pluginName="Microsoft Windows Remote Desktop Protocol Server Man-in-the-Middle Weakness" pluginFamily="Windows">
+<description>The remote version of the Remote Desktop Protocol Server is vulnerable to a man-in-the-middle attack.</description>
+<synopsis>It may be possible to get access to the remote host.</synopsis>
+<solution>Force the use of SSL as a transport layer for this service.</solution>
+<plugin_output>Encryption level not enforced.</plugin_output>
+<risk_factor>Medium</risk_factor>
+<cvss3_base_score>5.9</cvss3_base_score>
+<cve>CVE-2005-1794</cve>
+<xref>CWE:294</xref>
+</ReportItem>
+<ReportItem port="0" svc_name="general" protocol="tcp" severity="0" pluginID="19506" pluginName="Nessus Scan Information" pluginFamily="Settings">
+<description>This plugin displays information about the scan.</description>
+<synopsis>Information about the scan.</synopsis>
+<solution>n/a</solution>
+<risk_factor>None</risk_factor>
+</ReportItem>
+</ReportHost>
+<ReportHost name="10.20.1.30">
+<HostProperties>
+<tag name="host-ip">10.20.1.30</tag>
+<tag name="operating-system">Linux Kernel 5.14 on Red Hat Enterprise Linux 9</tag>
+<tag name="host-fqdn">app-30.enclave.example</tag>
+</HostProperties>
+<ReportItem port="22" svc_name="ssh" protocol="tcp" severity="3" pluginID="187315" pluginName="OpenSSH &lt; 9.6 Multiple Vulnerabilities" pluginFamily="Misc.">
+<description>The version of OpenSSH installed is prior to 9.6 and affected by multiple issues.</description>
+<synopsis>The SSH server is affected by multiple vulnerabilities.</synopsis>
+<solution>Upgrade to OpenSSH 9.6 or later.</solution>
+<plugin_output>Installed version : 8.7p1
+Fixed version     : 9.6p1</plugin_output>
+<risk_factor>High</risk_factor>
+<cvss3_base_score>7.5</cvss3_base_score>
+<cve>CVE-2023-48795</cve>
+<xref>IAVB:2024-B-0003</xref>
+</ReportItem>
+<ReportItem port="443" svc_name="www" protocol="tcp" severity="2" pluginID="51192" pluginName="SSL Certificate Cannot Be Trusted" pluginFamily="General">
+<description>The server X.509 certificate cannot be trusted.</description>
+<synopsis>The SSL certificate for this service cannot be trusted.</synopsis>
+<solution>Purchase or generate a proper SSL certificate for this service.</solution>
+<plugin_output>The certificate chain ends in an untrusted root.</plugin_output>
+<risk_factor>Medium</risk_factor>
+<cvss3_base_score>6.5</cvss3_base_score>
+<xref>CWE:295</xref>
+<stig_severity>III</stig_severity>
+</ReportItem>
+<ReportItem port="8443" svc_name="www" protocol="tcp" severity="2" pluginID="51192" pluginName="SSL Certificate Cannot Be Trusted" pluginFamily="General">
+<description>The server X.509 certificate cannot be trusted.</description>
+<synopsis>The SSL certificate for this service cannot be trusted.</synopsis>
+<solution>Purchase or generate a proper SSL certificate for this service.</solution>
+<plugin_output>The certificate chain ends in an untrusted root (management port).</plugin_output>
+<risk_factor>Medium</risk_factor>
+<xref>CWE:295</xref>
+<stig_severity>III</stig_severity>
+</ReportItem>
+<ReportItem port="22" svc_name="ssh" protocol="tcp" severity="1" pluginID="71049" pluginName="SSH Weak MAC Algorithms Enabled" pluginFamily="Misc.">
+<description>The remote SSH server is configured to allow weak MD5 and 96-bit MAC algorithms.</description>
+<synopsis>The remote SSH server is configured to allow weak MAC algorithms.</synopsis>
+<solution>Contact the vendor or consult product documentation to disable the weak algorithms.</solution>
+<plugin_output>The following weak server-to-client MAC algorithms are supported : hmac-md5</plugin_output>
+<risk_factor>Low</risk_factor>
+<cvss3_base_score>2.6</cvss3_base_score>
+<xref>CWE:327</xref>
+</ReportItem>
+</ReportHost>
+</Report>
+</NessusClientData_v2>

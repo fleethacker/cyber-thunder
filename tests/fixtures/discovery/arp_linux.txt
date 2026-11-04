@@ -1,0 +1,3 @@
+? (192.168.56.2) at 70:10:5c:aa:bb:01 [ether] on eth0
+rocky9-app01 (192.168.56.10) at 52:54:00:12:34:10 [ether] on eth0
+? (192.168.56.88) at <incomplete> on eth0

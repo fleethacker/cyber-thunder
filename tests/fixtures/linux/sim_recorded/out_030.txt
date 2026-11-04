@@ -1,0 +1,1 @@
+sailor  pts/0  10.0.20.5  Mon Nov  3 08:14 still logged in

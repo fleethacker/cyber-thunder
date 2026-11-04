@@ -1,0 +1,11 @@
+permitrootlogin yes
+permitemptypasswords yes
+usepam yes
+x11forwarding no
+hostbasedauthentication no
+port 22
+ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com
+macs hmac-sha2-512,hmac-sha2-256
+clientaliveinterval 600
+clientalivecountmax 1
+banner /etc/issue

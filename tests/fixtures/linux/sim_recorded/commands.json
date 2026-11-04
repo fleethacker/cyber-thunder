@@ -1,0 +1,282 @@
+[
+  {
+    "match": "cat /etc/os-release",
+    "stdout": {
+      "file": "out_000.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "hostname",
+    "stdout": {
+      "file": "out_001.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "uname -r",
+    "stdout": {
+      "file": "out_002.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "ip -4 -o addr show",
+    "stdout": {
+      "file": "out_003.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "rpm -qa --qf '%{NAME}|%{EPOCH}|%{VERSION}|%{RELEASE}|%{ARCH}\n'",
+    "stdout": {
+      "file": "out_004.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "dpkg-query -W -f '${Package}|${Version}|${Architecture}\n'",
+    "stdout": {
+      "file": "out_005.txt"
+    },
+    "stderr": "",
+    "exit": 127
+  },
+  {
+    "match": "sshd -T",
+    "stdout": {
+      "file": "out_006.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "stat -c '%a %U %G %n' /etc/shadow /etc/passwd /etc/group /etc/gshadow /etc/ssh/sshd_config",
+    "stdout": {
+      "file": "out_007.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "for u in firewalld auditd sshd ctrl-alt-del.target; do printf '%s|%s|%s\n' \"$u\" \"$(systemctl is-enabled \"$u\" 2>/dev/null)\" \"$(systemctl is-active \"$u\" 2>/dev/null)\"; done",
+    "stdout": {
+      "file": "out_008.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "getenforce",
+    "stdout": {
+      "file": "out_009.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "rpm -q telnet-server rsh-server",
+    "stdout": {
+      "file": "out_010.txt"
+    },
+    "stderr": "",
+    "exit": 1
+  },
+  {
+    "match": "cat /etc/login.defs",
+    "stdout": {
+      "file": "out_011.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "sysctl -n kernel.randomize_va_space",
+    "stdout": {
+      "file": "out_012.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "grep -rsH gpgcheck /etc/dnf/dnf.conf /etc/yum.repos.d",
+    "stdout": {
+      "file": "out_013.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "grep -rshE '^[[:space:]]*Storage=' /etc/systemd/coredump.conf /etc/systemd/coredump.conf.d",
+    "stdout": {
+      "file": "out_014.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "find /var/log -xdev -type d -perm -0002 -printf '%m %u %p\n'",
+    "stdout": {
+      "file": "out_015.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "cat /etc/passwd",
+    "stdout": {
+      "file": "out_016.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "cat /etc/group",
+    "stdout": {
+      "file": "out_017.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "cat /etc/shadow",
+    "stdout": {
+      "file": "out_018.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "find /etc/sudoers /etc/sudoers.d -maxdepth 1 -type f -exec sh -c 'for f; do printf \"==> %s <==\n\" \"$f\"; cat \"$f\"; done' _ {} +",
+    "stdout": {
+      "file": "out_019.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "find /root/.ssh /home -maxdepth 3 -type f -name 'authorized_keys' -exec sh -c 'for f; do printf \"==> %s <==\n\" \"$f\"; cat \"$f\"; done' _ {} +",
+    "stdout": {
+      "file": "out_020.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "find /etc/crontab /etc/cron.d /var/spool/cron -maxdepth 1 -type f -exec sh -c 'for f; do printf \"==> %s <==\n\" \"$f\"; cat \"$f\"; done' _ {} +",
+    "stdout": {
+      "file": "out_021.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "find /etc/systemd/system -maxdepth 1 -type f -name '*.service' -exec sh -c 'for f; do printf \"==> %s <==\n\" \"$f\"; cat \"$f\"; done' _ {} +",
+    "stdout": {
+      "file": "out_022.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "systemctl list-unit-files --type=service --no-legend --no-pager",
+    "stdout": {
+      "file": "out_023.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "systemctl list-units --type=service --state=running --no-legend --no-pager",
+    "stdout": {
+      "file": "out_024.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "ss -H -lntup",
+    "stdout": {
+      "file": "out_025.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "ps -eo pid=,unit=,args=",
+    "stdout": {
+      "file": "out_026.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "find / -xdev -perm /6000 -type f -printf '%m|%u|%s|%p\n'",
+    "stdout": {
+      "file": "out_027.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "find /usr/local/lib /var/tmp /dev/shm /opt /etc/cron.d -xdev -path '*/.*' -printf '%y|%m|%u|%T@|%C@|%p\n'",
+    "stdout": {
+      "file": "out_028.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "tail -n 400 /var/log/secure 2>/dev/null || tail -n 400 /var/log/auth.log",
+    "stdout": {
+      "file": "out_029.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "last -n 50",
+    "stdout": {
+      "file": "out_030.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "lastb -n 50",
+    "stdout": {
+      "file": "out_031.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "sha256sum -- /usr/bin/bash /usr/bin/dash /usr/bin/perl /usr/bin/python3 /usr/bin/sh /usr/bin/zsh /usr/libexec/platform-python /usr/bin/sudo /usr/bin/su /usr/bin/passwd /usr/bin/chage /usr/bin/mount /usr/bin/umount /usr/bin/pkexec /usr/bin/crontab /usr/bin/write /usr/sbin/unix_chkpwd /usr/local/lib/.cache/.b 2>/dev/null",
+    "stdout": {
+      "file": "out_032.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "command -v oscap",
+    "stdout": {
+      "file": "out_033.txt"
+    },
+    "stderr": "",
+    "exit": 1
+  },
+  {
+    "match": "command -v trivy",
+    "stdout": {
+      "file": "out_034.txt"
+    },
+    "stderr": "",
+    "exit": 1
+  }
+]

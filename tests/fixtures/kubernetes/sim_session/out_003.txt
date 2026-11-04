@@ -1,0 +1,869 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "app": "kube-proxy-helper"
+        },
+        "name": "kube-proxy-helper",
+        "namespace": "apps",
+        "resourceVersion": "1025",
+        "uid": "6eda6a9b-sim"
+      },
+      "spec": {
+        "containers": [
+          {
+            "command": [
+              "/bin/sh",
+              "-c",
+              "sleep infinity"
+            ],
+            "image": "ghcr.io/x0rcist/node-tools:latest",
+            "name": "helper",
+            "securityContext": {
+              "privileged": true
+            },
+            "volumeMounts": [
+              {
+                "mountPath": "/host",
+                "name": "host-root"
+              }
+            ]
+          }
+        ],
+        "hostPID": true,
+        "volumes": [
+          {
+            "hostPath": {
+              "path": "/",
+              "type": "Directory"
+            },
+            "name": "host-root"
+          }
+        ]
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "helper",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "app": "payments-api",
+          "ct.sim/owner": "payments-api",
+          "pod-template-hash": "1e18898b94"
+        },
+        "name": "payments-api-1e18898b94-61606",
+        "namespace": "apps",
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "controller": true,
+            "kind": "ReplicaSet",
+            "name": "payments-api-1e18898b94"
+          }
+        ],
+        "resourceVersion": "1023",
+        "uid": "d13c927f-sim"
+      },
+      "spec": {
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "env": [
+              {
+                "name": "LOG_LEVEL",
+                "value": "info"
+              },
+              {
+                "name": "DB_PASSWORD",
+                "valueFrom": {
+                  "secretKeyRef": {
+                    "key": "password",
+                    "name": "payments-db"
+                  }
+                }
+              }
+            ],
+            "image": "registry.local/apps/payments:1.8.0",
+            "name": "api",
+            "ports": [
+              {
+                "containerPort": 8443,
+                "protocol": "TCP"
+              }
+            ],
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              },
+              "requests": {
+                "cpu": "100m",
+                "memory": "128Mi"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "readOnlyRootFilesystem": true,
+              "runAsNonRoot": true,
+              "runAsUser": 10001
+            }
+          }
+        ]
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "api",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "app": "web-frontend",
+          "ct.sim/owner": "web-frontend",
+          "pod-template-hash": "825348d13c"
+        },
+        "name": "web-frontend-825348d13c-d28e6",
+        "namespace": "apps",
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "controller": true,
+            "kind": "ReplicaSet",
+            "name": "web-frontend-825348d13c"
+          }
+        ],
+        "resourceVersion": "1020",
+        "uid": "d61d4636-sim"
+      },
+      "spec": {
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "image": "registry.local/apps/web-frontend:2.4.1",
+            "name": "web",
+            "ports": [
+              {
+                "containerPort": 8080,
+                "protocol": "TCP"
+              }
+            ],
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              },
+              "requests": {
+                "cpu": "100m",
+                "memory": "128Mi"
+              }
+            },
+            "securityContext": {
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "privileged": true,
+              "readOnlyRootFilesystem": true,
+              "runAsNonRoot": true,
+              "runAsUser": 10001
+            }
+          }
+        ]
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "web",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "app": "web-frontend",
+          "ct.sim/owner": "web-frontend",
+          "pod-template-hash": "825348d13c"
+        },
+        "name": "web-frontend-825348d13c-e31f7",
+        "namespace": "apps",
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "controller": true,
+            "kind": "ReplicaSet",
+            "name": "web-frontend-825348d13c"
+          }
+        ],
+        "resourceVersion": "1021",
+        "uid": "4c9e227b-sim"
+      },
+      "spec": {
+        "automountServiceAccountToken": false,
+        "containers": [
+          {
+            "image": "registry.local/apps/web-frontend:2.4.1",
+            "name": "web",
+            "ports": [
+              {
+                "containerPort": 8080,
+                "protocol": "TCP"
+              }
+            ],
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              },
+              "requests": {
+                "cpu": "100m",
+                "memory": "128Mi"
+              }
+            },
+            "securityContext": {
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "privileged": true,
+              "readOnlyRootFilesystem": true,
+              "runAsNonRoot": true,
+              "runAsUser": 10001
+            }
+          }
+        ]
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "web",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "ct.sim/owner": "coredns",
+          "k8s-app": "kube-dns",
+          "pod-template-hash": "2083a978b2"
+        },
+        "name": "coredns-2083a978b2-b7489",
+        "namespace": "kube-system",
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "controller": true,
+            "kind": "ReplicaSet",
+            "name": "coredns-2083a978b2"
+          }
+        ],
+        "resourceVersion": "1015",
+        "uid": "baa0472d-sim"
+      },
+      "spec": {
+        "containers": [
+          {
+            "args": [
+              "-conf",
+              "/etc/coredns/Corefile"
+            ],
+            "image": "registry.local/k8s/coredns:1.11.1",
+            "name": "coredns",
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              },
+              "requests": {
+                "cpu": "100m",
+                "memory": "128Mi"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "readOnlyRootFilesystem": true,
+              "runAsNonRoot": true,
+              "runAsUser": 10001
+            }
+          }
+        ]
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "coredns",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "annotations": {
+          "kubernetes.io/config.source": "file"
+        },
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "component": "etcd",
+          "tier": "control-plane"
+        },
+        "name": "etcd-k3s-01",
+        "namespace": "kube-system",
+        "resourceVersion": "1012",
+        "uid": "4acdd508-sim"
+      },
+      "spec": {
+        "containers": [
+          {
+            "command": [
+              "etcd",
+              "--client-cert-auth=true",
+              "--peer-client-cert-auth=true",
+              "--auto-tls=false"
+            ],
+            "image": "registry.local/k8s/etcd:3.5.15-0",
+            "name": "etcd",
+            "resources": {
+              "requests": {
+                "cpu": "100m"
+              }
+            }
+          }
+        ],
+        "hostNetwork": true,
+        "priorityClassName": "system-node-critical"
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "etcd",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "annotations": {
+          "kubernetes.io/config.source": "file"
+        },
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "component": "kube-apiserver",
+          "tier": "control-plane"
+        },
+        "name": "kube-apiserver-k3s-01",
+        "namespace": "kube-system",
+        "resourceVersion": "1009",
+        "uid": "252bfc2c-sim"
+      },
+      "spec": {
+        "containers": [
+          {
+            "command": [
+              "kube-apiserver",
+              "--advertise-address=10.20.0.10",
+              "--allow-privileged=true",
+              "--anonymous-auth=true",
+              "--authorization-mode=Node,RBAC",
+              "--enable-admission-plugins=NodeRestriction",
+              "--audit-policy-file=/etc/kubernetes/audit-policy.yaml",
+              "--insecure-port=0",
+              "--profiling=false",
+              "--secure-port=6443",
+              "--tls-min-version=VersionTLS12",
+              "--tls-cert-file=/var/lib/rancher/k3s/server/tls/serving-kube-apiserver.crt",
+              "--tls-private-key-file=/var/lib/rancher/k3s/server/tls/serving-kube-apiserver.key"
+            ],
+            "image": "registry.local/k8s/kube-apiserver:v1.30.6",
+            "name": "kube-apiserver",
+            "resources": {
+              "requests": {
+                "cpu": "100m"
+              }
+            }
+          }
+        ],
+        "hostNetwork": true,
+        "priorityClassName": "system-node-critical"
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "kube-apiserver",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "annotations": {
+          "kubernetes.io/config.source": "file"
+        },
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "component": "kube-controller-manager",
+          "tier": "control-plane"
+        },
+        "name": "kube-controller-manager-k3s-01",
+        "namespace": "kube-system",
+        "resourceVersion": "1010",
+        "uid": "8684af31-sim"
+      },
+      "spec": {
+        "containers": [
+          {
+            "command": [
+              "kube-controller-manager",
+              "--use-service-account-credentials=true",
+              "--profiling=false",
+              "--bind-address=127.0.0.1",
+              "--tls-min-version=VersionTLS12"
+            ],
+            "image": "registry.local/k8s/kube-controller-manager:v1.30.6",
+            "name": "kube-controller-manager",
+            "resources": {
+              "requests": {
+                "cpu": "100m"
+              }
+            }
+          }
+        ],
+        "hostNetwork": true,
+        "priorityClassName": "system-node-critical"
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "kube-controller-manager",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "annotations": {
+          "kubernetes.io/config.source": "file"
+        },
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "component": "kube-scheduler",
+          "tier": "control-plane"
+        },
+        "name": "kube-scheduler-k3s-01",
+        "namespace": "kube-system",
+        "resourceVersion": "1011",
+        "uid": "22fa0b5c-sim"
+      },
+      "spec": {
+        "containers": [
+          {
+            "command": [
+              "kube-scheduler",
+              "--profiling=false",
+              "--bind-address=127.0.0.1"
+            ],
+            "image": "registry.local/k8s/kube-scheduler:v1.30.6",
+            "name": "kube-scheduler",
+            "resources": {
+              "requests": {
+                "cpu": "100m"
+              }
+            }
+          }
+        ],
+        "hostNetwork": true,
+        "priorityClassName": "system-node-critical"
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "kube-scheduler",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "annotations": {
+          "kubernetes.io/config.source": "file"
+        },
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "component": "kubelet",
+          "tier": "control-plane"
+        },
+        "name": "kubelet-k3s-01",
+        "namespace": "kube-system",
+        "resourceVersion": "1013",
+        "uid": "61046125-sim"
+      },
+      "spec": {
+        "containers": [
+          {
+            "command": [
+              "kubelet",
+              "--config=/var/lib/kubelet/config.yaml",
+              "--anonymous-auth=false",
+              "--authorization-mode=Webhook",
+              "--read-only-port=10255"
+            ],
+            "image": "registry.local/k8s/kubelet:v1.30.6",
+            "name": "kubelet",
+            "resources": {
+              "requests": {
+                "cpu": "100m"
+              }
+            }
+          }
+        ],
+        "hostNetwork": true,
+        "priorityClassName": "system-node-critical"
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "kubelet",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "app": "local-path-provisioner",
+          "ct.sim/owner": "local-path-provisioner",
+          "pod-template-hash": "2bc4a84767"
+        },
+        "name": "local-path-provisioner-2bc4a84767-94591",
+        "namespace": "kube-system",
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "controller": true,
+            "kind": "ReplicaSet",
+            "name": "local-path-provisioner-2bc4a84767"
+          }
+        ],
+        "resourceVersion": "1017",
+        "uid": "58522450-sim"
+      },
+      "spec": {
+        "containers": [
+          {
+            "image": "registry.local/k8s/local-path-provisioner:v0.0.28",
+            "name": "local-path-provisioner",
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              },
+              "requests": {
+                "cpu": "100m",
+                "memory": "128Mi"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "readOnlyRootFilesystem": true,
+              "runAsNonRoot": true,
+              "runAsUser": 10001
+            }
+          }
+        ]
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "local-path-provisioner",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "app": "metrics-collector"
+        },
+        "name": "metrics-collector-7d9f4",
+        "namespace": "kube-system",
+        "resourceVersion": "1018",
+        "uid": "2a57762d-sim"
+      },
+      "spec": {
+        "containers": [
+          {
+            "command": [
+              "/collector",
+              "--push",
+              "198.51.100.23:9091"
+            ],
+            "image": "198.51.100.23:5000/collector:1.0",
+            "name": "collector",
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              },
+              "requests": {
+                "cpu": "100m",
+                "memory": "128Mi"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "readOnlyRootFilesystem": true,
+              "runAsNonRoot": true,
+              "runAsUser": 10001
+            }
+          }
+        ]
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "collector",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Pod",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "labels": {
+          "app": "prometheus",
+          "ct.sim/owner": "prometheus",
+          "pod-template-hash": "4eb380d89b"
+        },
+        "name": "prometheus-4eb380d89b-afdca",
+        "namespace": "monitoring",
+        "ownerReferences": [
+          {
+            "apiVersion": "apps/v1",
+            "controller": true,
+            "kind": "ReplicaSet",
+            "name": "prometheus-4eb380d89b"
+          }
+        ],
+        "resourceVersion": "1028",
+        "uid": "5273da4b-sim"
+      },
+      "spec": {
+        "automountServiceAccountToken": true,
+        "containers": [
+          {
+            "image": "registry.local/monitoring/prometheus:v2.53.0",
+            "name": "prometheus",
+            "ports": [
+              {
+                "containerPort": 9090,
+                "protocol": "TCP"
+              }
+            ],
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              },
+              "requests": {
+                "cpu": "100m",
+                "memory": "128Mi"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "readOnlyRootFilesystem": true,
+              "runAsNonRoot": true,
+              "runAsUser": 10001
+            }
+          }
+        ],
+        "serviceAccountName": "prometheus"
+      },
+      "status": {
+        "containerStatuses": [
+          {
+            "name": "prometheus",
+            "ready": true,
+            "restartCount": 0,
+            "state": {
+              "running": {
+                "startedAt": "2026-10-20T08:00:00Z"
+              }
+            }
+          }
+        ],
+        "phase": "Running"
+      }
+    }
+  ],
+  "metadata": {
+    "resourceVersion": ""
+  }
+}

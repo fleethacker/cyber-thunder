@@ -1,0 +1,7 @@
+192.168.56.1 dev eth0 lladdr 0a:00:27:00:00:01 REACHABLE
+192.168.56.2 dev eth0 lladdr 70:10:5c:aa:bb:01 STALE
+192.168.56.11 dev eth0 lladdr 00:15:5d:38:0a:11 DELAY
+192.168.56.66 dev eth0 lladdr b8:27:eb:5a:66:01 REACHABLE
+192.168.56.88 dev eth0  FAILED
+192.168.56.255 dev eth0 lladdr ff:ff:ff:ff:ff:ff PERMANENT
+fe80::5054:ff:fe12:3410 dev eth0 lladdr 52:54:00:12:34:10 router STALE

@@ -1,0 +1,8 @@
+root:x:0:0:root:/root:/bin/bash
+bin:x:1:1:bin:/bin:/sbin/nologin
+daemon:x:2:2:daemon:/sbin:/sbin/nologin
+sshd:x:74:74:Privilege-separated SSH:/usr/share/empty.sshd:/sbin/nologin
+chrony:x:994:994::/var/lib/chrony:/sbin/nologin
+sailor:x:1000:1000:Watch Stander:/home/sailor:/bin/bash
+itadmin:x:1001:1001:IT Administrator:/home/itadmin:/bin/bash
+svc_backup:x:0:0:Backup Service:/root:/bin/bash

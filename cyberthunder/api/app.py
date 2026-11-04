@@ -1,0 +1,51 @@
+"""FastAPI application factory. Routers live in cyberthunder/api/routes/<name>.py and expose `router`.
+The built UI (cyberthunder/ui/dist) is served from the same process so the whole thing runs offline."""
+from __future__ import annotations
+
+import importlib
+import logging
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+
+from cyberthunder import PRODUCT, __version__
+from cyberthunder.context import AppContext
+
+log = logging.getLogger(__name__)
+
+API_PREFIX = "/api/v1"
+# Fixed list: a new feature area adds a module here and nowhere else.
+ROUTE_MODULES = ("status", "targets", "scans", "findings", "proposals", "audit", "kill", "policy",
+                 "ingest", "reports", "demo", "discovery")
+
+
+def create_app(ctx: AppContext | None = None) -> FastAPI:
+    app = FastAPI(title=PRODUCT, version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
+    app.state.ctx = ctx or AppContext()
+
+    for name in ROUTE_MODULES:
+        try:
+            mod = importlib.import_module(f"cyberthunder.api.routes.{name}")
+        except ModuleNotFoundError as e:
+            if e.name and e.name.endswith(name):
+                log.debug("route module not present: %s", name)
+                continue
+            raise
+        app.include_router(mod.router, prefix=API_PREFIX)
+
+    dist = Path(app.state.ctx.settings.ui_dist)
+    if (dist / "index.html").exists():
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/", StaticFiles(directory=str(dist), html=True), name="ui")
+    else:
+        @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+        def _placeholder():
+            return f"<h1>{PRODUCT} {__version__}</h1><p>UI not built. API docs at <a href='/api/docs'>/api/docs</a>.</p>"
+    return app
+
+
+def serve(host: str | None = None, port: int | None = None, ctx: AppContext | None = None) -> None:
+    import uvicorn
+    ctx = ctx or AppContext()
+    uvicorn.run(create_app(ctx), host=host or ctx.settings.host, port=port or ctx.settings.port, log_level="info")

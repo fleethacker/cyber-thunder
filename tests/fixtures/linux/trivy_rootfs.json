@@ -1,0 +1,56 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "/",
+  "ArtifactType": "filesystem",
+  "Results": [
+    {
+      "Target": "rootfs (redhat 9.4)",
+      "Class": "os-pkgs",
+      "Type": "redhat",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2024-6387",
+          "PkgName": "openssh-server",
+          "InstalledVersion": "8.7p1-38.el9",
+          "FixedVersion": "8.7p1-38.el9_4.1",
+          "Status": "fixed",
+          "Severity": "HIGH",
+          "Title": "OpenSSH: regreSSHion remote unauthenticated code execution",
+          "Description": "A signal handler race condition in OpenSSH server (sshd) allows unauthenticated remote code execution as root.",
+          "CweIDs": ["CWE-364"]
+        },
+        {
+          "VulnerabilityID": "CVE-2024-3094",
+          "PkgName": "xz-libs",
+          "InstalledVersion": "5.2.5-8.el9",
+          "FixedVersion": "5.2.5-8.el9_4.1",
+          "Status": "fixed",
+          "Severity": "CRITICAL",
+          "Title": "xz: malicious code in distributed source",
+          "Description": "Malicious code was discovered in the upstream tarballs of xz, introducing a backdoor via liblzma affecting sshd.",
+          "CweIDs": ["CWE-506"]
+        },
+        {
+          "VulnerabilityID": "CVE-2023-38545",
+          "PkgName": "libcurl",
+          "InstalledVersion": "7.76.1-31.el9",
+          "FixedVersion": "",
+          "Severity": "MEDIUM",
+          "Title": "curl: heap buffer overflow in the SOCKS5 proxy handshake",
+          "Description": "curl SOCKS5 heap buffer overflow when the hostname is longer than 255 bytes."
+        },
+        {
+          "VulnerabilityID": "CVE-2021-3999",
+          "PkgName": "glibc",
+          "InstalledVersion": "2.34-100.el9",
+          "FixedVersion": "2.34-100.el9_4.2",
+          "Status": "fixed",
+          "Severity": "LOW",
+          "Title": "glibc: off-by-one buffer overflow in getcwd",
+          "Description": "An off-by-one buffer overflow and underflow in getcwd may lead to memory corruption.",
+          "CweIDs": ["CWE-193", "CWE-787"]
+        }
+      ]
+    }
+  ]
+}

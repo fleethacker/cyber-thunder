@@ -1,0 +1,14 @@
+{
+  "target": "sim-docker-01",
+  "seeded_by": "cyberthunder/adapters/containers/simulated.py (simulated) and range/containers/seed.sh (podman/docker on the range VM)",
+  "purpose": "Score detection rate (measure of success #1). Do not show to the model.",
+  "match": "a finding on the target whose rule_version equals 'rule' and whose container tag equals 'container'",
+  "items": [
+    {"id": "M1", "kind": "misconfig", "detector": "check.privileged", "rule": "CIS-Docker-5.4", "container": "ops-agent", "what": "ops-agent runs with --privileged", "citations": ["CIS-Docker-5.4", "CCI-000366"], "fix_ref": "containers:runbook:recreate-privileged"},
+    {"id": "M2", "kind": "misconfig", "detector": "check.engine_socket", "rule": "CIS-Docker-5.31", "container": "ops-dashboard", "what": "ops-dashboard mounts /var/run/docker.sock", "citations": ["CIS-Docker-5.31", "CCI-000366"], "fix_ref": "containers:runbook:recreate-engine-socket"},
+    {"id": "M3", "kind": "misconfig", "detector": "check.host_network", "rule": "CIS-Docker-5.9", "container": "metrics-relay", "what": "metrics-relay uses --network host", "citations": ["CIS-Docker-5.9", "CCI-000366"], "fix_ref": "containers:runbook:recreate-host-network"},
+    {"id": "I1", "kind": "intrusion", "detector": "hunt.miner", "rule": "containers:hunt:miner", "container": "systemd-update", "what": "xmrig miner to stratum+tcp://10.10.10.10:3333 named like a system service, restart=always", "citations": ["T1496", "T1525"], "fix_ref": "containers:fix:stop-and-disable"},
+    {"id": "I2", "kind": "intrusion", "detector": "hunt.escape", "rule": "containers:hunt:host-escape", "container": "backup-agent", "what": "backup-agent mounts the host / read-write at /host", "citations": ["T1611"], "fix_ref": "containers:fix:stop-and-disable"},
+    {"id": "I3", "kind": "intrusion", "detector": "hunt.unexpected", "rule": "containers:hunt:unexpected-container", "container": "cache-sync", "what": "cache-sync started 2 h ago, not on the expected list, image from 203.0.113.50:5000", "citations": ["T1610", "T1525"], "fix_ref": "containers:fix:stop-and-disable"}
+  ]
+}

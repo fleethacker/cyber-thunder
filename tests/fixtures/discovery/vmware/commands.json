@@ -1,0 +1,3 @@
+[
+  {"match": "vmrun list", "stdout": {"file": "vmrun_list.txt"}, "exit": 0}
+]

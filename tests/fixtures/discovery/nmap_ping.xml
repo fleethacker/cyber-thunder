@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sn -T3 --max-rate 50 -n -oX - 192.168.56.0/24" start="1730699900" version="7.95" xmloutputversion="1.05">
+<host><status state="up" reason="arp-response" reason_ttl="0"/><address addr="192.168.56.2" addrtype="ipv4"/><address addr="70:10:5C:AA:BB:01" addrtype="mac" vendor="Cisco Systems"/></host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/><address addr="192.168.56.10" addrtype="ipv4"/><address addr="52:54:00:12:34:10" addrtype="mac"/></host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/><address addr="192.168.56.11" addrtype="ipv4"/><address addr="00:15:5D:38:0A:11" addrtype="mac"/></host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/><address addr="192.168.56.20" addrtype="ipv4"/></host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/><address addr="192.168.56.30" addrtype="ipv4"/></host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/><address addr="192.168.56.40" addrtype="ipv4"/></host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/><address addr="192.168.56.50" addrtype="ipv4"/></host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/><address addr="192.168.56.66" addrtype="ipv4"/></host>
+<runstats><finished time="1730699910" elapsed="10.00" exit="success"/><hosts up="8" down="248" total="256"/></runstats>
+</nmaprun>

@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sV --top-ports 200 -T3 --max-rate 50 --script smb-os-discovery -O -n -oX - 192.168.56.2 192.168.56.10 192.168.56.11 192.168.56.20 192.168.56.30 192.168.56.40 192.168.56.50 192.168.56.66 192.168.56.77" start="1730700000" startstr="Mon Nov  4 08:00:00 2026" version="7.95" xmloutputversion="1.05">
+<host starttime="1730700000" endtime="1730700100"><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="192.168.56.2" addrtype="ipv4"/>
+<address addr="70:10:5C:AA:BB:01" addrtype="mac" vendor="Cisco Systems"/>
+<hostnames><hostname name="sw-core-01" type="PTR"/></hostnames>
+<ports>
+<port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="255"/><service name="ssh" product="Cisco SSH" version="1.25" extrainfo="protocol 2.0" ostype="IOS" method="probed" conf="10"><cpe>cpe:/o:cisco:ios</cpe></service></port>
+<port protocol="tcp" portid="23"><state state="open" reason="syn-ack" reason_ttl="255"/><service name="telnet" product="Cisco router telnetd" ostype="IOS" method="probed" conf="10"/></port>
+</ports>
+<os><osmatch name="Cisco IOS XE 17.X" accuracy="93" line="1"><osclass type="switch" vendor="Cisco" osfamily="IOS XE" osgen="17.X" accuracy="93"/></osmatch></os>
+</host>
+<host starttime="1730700000" endtime="1730700100"><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="192.168.56.10" addrtype="ipv4"/>
+<address addr="52:54:00:12:34:10" addrtype="mac" vendor="QEMU virtual NIC"/>
+<hostnames><hostname name="rocky9-app01" type="PTR"/></hostnames>
+<ports>
+<port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="ssh" product="OpenSSH" version="8.7" extrainfo="protocol 2.0" method="probed" conf="10"><cpe>cpe:/a:openbsd:openssh:8.7</cpe></service></port>
+<port protocol="tcp" portid="9090"><state state="closed" reason="reset" reason_ttl="64"/></port>
+</ports>
+<os><osmatch name="Linux 5.0 - 5.14" accuracy="95" line="1"><osclass type="general purpose" vendor="Linux" osfamily="Linux" osgen="5.X" accuracy="95"><cpe>cpe:/o:linux:linux_kernel:5</cpe></osclass></osmatch>
+<osmatch name="Linux 4.15 - 5.8" accuracy="90" line="2"><osclass type="general purpose" vendor="Linux" osfamily="Linux" osgen="4.X" accuracy="90"/></osmatch></os>
+<uptime seconds="86400" lastboot="Sun Nov  3 08:00:00 2026"/>
+</host>
+<host starttime="1730700000" endtime="1730700100"><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="192.168.56.11" addrtype="ipv4"/>
+<address addr="00:15:5D:38:0A:11" addrtype="mac" vendor="Microsoft"/>
+<hostnames/>
+<ports>
+<port protocol="tcp" portid="135"><state state="open" reason="syn-ack" reason_ttl="128"/><service name="msrpc" product="Microsoft Windows RPC" ostype="Windows" method="probed" conf="10"><cpe>cpe:/o:microsoft:windows</cpe></service></port>
+<port protocol="tcp" portid="445"><state state="open" reason="syn-ack" reason_ttl="128"/><service name="microsoft-ds" method="table" conf="3"/></port>
+<port protocol="tcp" portid="3389"><state state="open" reason="syn-ack" reason_ttl="128"/><service name="ms-wbt-server" product="Microsoft Terminal Services" ostype="Windows" method="probed" conf="10"/></port>
+<port protocol="tcp" portid="5985"><state state="open" reason="syn-ack" reason_ttl="128"/><service name="http" product="Microsoft HTTPAPI httpd" version="2.0" extrainfo="SSDP/UPnP" ostype="Windows" method="probed" conf="10"/></port>
+</ports>
+<os><osmatch name="Microsoft Windows 10 1709 - 21H2" accuracy="96" line="1"><osclass type="general purpose" vendor="Microsoft" osfamily="Windows" osgen="10" accuracy="96"/></osmatch></os>
+<hostscript><script id="nbstat" output="NetBIOS name: WIN11-WS01, NetBIOS user: &lt;unknown&gt;, NetBIOS MAC: 00:15:5d:38:0a:11 (Microsoft)"/></hostscript>
+</host>
+<host starttime="1730700000" endtime="1730700100"><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="192.168.56.20" addrtype="ipv4"/>
+<address addr="00:0C:29:AB:CD:20" addrtype="mac" vendor="VMware"/>
+<hostnames/>
+<ports>
+<port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="ssh" product="OpenSSH" version="8.9p1 Ubuntu 3ubuntu0.10" extrainfo="Ubuntu Linux; protocol 2.0" ostype="Linux" method="probed" conf="10"/></port>
+<port protocol="tcp" portid="6443"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="http" product="Golang net/http server" tunnel="ssl" method="probed" conf="10"/></port>
+<port protocol="tcp" portid="10250"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="http" product="Golang net/http server" tunnel="ssl" method="probed" conf="10"/></port>
+</ports>
+</host>
+<host starttime="1730700000" endtime="1730700100"><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="192.168.56.30" addrtype="ipv4"/>
+<address addr="08:00:27:00:00:30" addrtype="mac" vendor="Oracle VirtualBox virtual NIC"/>
+<hostnames/>
+<ports>
+<port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="ssh" product="OpenSSH" version="8.7" extrainfo="protocol 2.0" method="probed" conf="10"/></port>
+<port protocol="tcp" portid="2375"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="docker" product="Docker" version="24.0.7" method="probed" conf="10"/></port>
+</ports>
+</host>
+<host starttime="1730700000" endtime="1730700100"><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="192.168.56.40" addrtype="ipv4"/>
+<address addr="00:15:5D:38:0A:40" addrtype="mac" vendor="Microsoft"/>
+<hostnames/>
+<ports>
+<port protocol="tcp" portid="135"><state state="open" reason="syn-ack" reason_ttl="128"/><service name="msrpc" product="Microsoft Windows RPC" ostype="Windows" method="probed" conf="10"/></port>
+<port protocol="tcp" portid="445"><state state="open" reason="syn-ack" reason_ttl="128"/><service name="microsoft-ds" product="Microsoft Windows Server 2008 R2 - 2012 microsoft-ds" ostype="Windows" method="probed" conf="10"/></port>
+</ports>
+<os><osmatch name="Microsoft Windows Server 2016 - 2019" accuracy="92" line="1"><osclass type="general purpose" vendor="Microsoft" osfamily="Windows" osgen="2016" accuracy="92"/></osmatch></os>
+<hostscript><script id="smb-os-discovery" output="&#xa;  OS: Windows Server 2019 Standard 17763 (Windows Server 2019 Standard 6.3)&#xa;  Computer name: DC01&#xa;  NetBIOS computer name: DC01\x00&#xa;  Domain name: fleet.lab&#xa;  Forest name: fleet.lab&#xa;  FQDN: DC01.fleet.lab&#xa;  System time: 2026-11-04T08:00:10-05:00&#xa;"><elem key="os">Windows Server 2019 Standard 17763</elem>
+<elem key="lanmanager">Windows Server 2019 Standard 6.3</elem>
+<elem key="server">DC01\x00</elem>
+<elem key="date">2026-11-04T08:00:10-05:00</elem>
+<elem key="fqdn">DC01.fleet.lab</elem>
+<elem key="domain_dns">fleet.lab</elem>
+<elem key="forest_dns">fleet.lab</elem>
+<elem key="workgroup">FLEET\x00</elem>
+</script></hostscript>
+</host>
+<host starttime="1730700000" endtime="1730700100"><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="192.168.56.50" addrtype="ipv4"/>
+<address addr="3C:D9:2B:00:00:50" addrtype="mac" vendor="Hewlett Packard"/>
+<hostnames/>
+<ports>
+<port protocol="tcp" portid="80"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="http" product="HP LaserJet printer http config" method="probed" conf="10"/></port>
+<port protocol="tcp" portid="9100"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="jetdirect" method="table" conf="3"/></port>
+</ports>
+</host>
+<host starttime="1730700000" endtime="1730700100"><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="192.168.56.66" addrtype="ipv4"/>
+<address addr="B8:27:EB:5A:66:01" addrtype="mac" vendor="Raspberry Pi Foundation"/>
+<hostnames/>
+<ports>
+<port protocol="tcp" portid="23"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="telnet" product="Linux telnetd" ostype="Linux" method="probed" conf="10"/></port>
+<port protocol="tcp" portid="80"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="http" product="lighttpd" version="1.4.59" method="probed" conf="10"/></port>
+</ports>
+</host>
+<host starttime="1730700000" endtime="1730700100"><status state="down" reason="no-response" reason_ttl="0"/>
+<address addr="192.168.56.77" addrtype="ipv4"/>
+</host>
+<runstats><finished time="1730700100" timestr="Mon Nov  4 08:01:40 2026" elapsed="100.00" summary="Nmap done: 9 IP addresses (8 hosts up) scanned in 100.00 seconds" exit="success"/><hosts up="8" down="1" total="9"/></runstats>
+</nmaprun>

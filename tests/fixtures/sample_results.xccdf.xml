@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2" xmlns:dc="http://purl.org/dc/elements/1.1/" id="xccdf_org.ssgproject.content_benchmark_RHEL-9" resolved="1" xml:lang="en-US">
+  <status date="2026-01-15">draft</status>
+  <title>Guide to the Secure Configuration of Red Hat Enterprise Linux 9</title>
+  <version>0.1.76</version>
+  <Profile id="xccdf_org.ssgproject.content_profile_stig">
+    <title>DISA STIG for Red Hat Enterprise Linux 9</title>
+    <select idref="xccdf_org.ssgproject.content_rule_sshd_disable_root_login" selected="true"/>
+  </Profile>
+  <Group id="xccdf_org.ssgproject.content_group_ssh">
+    <title>SSH Server</title>
+    <Rule id="xccdf_org.ssgproject.content_rule_sshd_disable_root_login" severity="medium" selected="false">
+      <title>Disable SSH Root Login</title>
+      <description>The root user should never be allowed to login to a system directly over a network. To disable root login via SSH, add or correct the following line in <html:code xmlns:html="http://www.w3.org/1999/xhtml">/etc/ssh/sshd_config</html:code>: PermitRootLogin no</description>
+      <reference href="https://public.cyber.mil/stigs/downloads/?_dl_facet_stigs=operating-systems%2Cunix-linux">RHEL-09-255045</reference>
+      <reference href="https://public.cyber.mil/stigs/downloads/?_dl_facet_stigs=operating-systems%2Cunix-linux">SV-257985r925942_rule</reference>
+      <ident system="https://ncp.nist.gov/cce">CCE-90592-1</ident>
+      <ident system="http://cyber.mil/cci">CCI-000366</ident>
+      <fixtext>Edit /etc/ssh/sshd_config and set PermitRootLogin no, then restart sshd.</fixtext>
+      <fix system="urn:xccdf:fix:script:sh" id="xccdf_org.ssgproject.content_rule_sshd_disable_root_login" complexity="low" disruption="low" reboot="false" strategy="restrict">
+# Remediation is applicable only in certain platforms
+if [ ! -f /.dockerenv ] &amp;&amp; [ ! -f /run/.containerenv ]; then
+  if grep -qE '^\s*PermitRootLogin' /etc/ssh/sshd_config; then
+    sed -i 's/^\s*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+  else
+    echo 'PermitRootLogin no' &gt;&gt; /etc/ssh/sshd_config
+  fi
+  systemctl restart sshd
+fi
+      </fix>
+      <fix system="urn:xccdf:fix:script:ansible" id="xccdf_org.ssgproject.content_rule_sshd_disable_root_login">
+- name: Disable SSH Root Login
+  lineinfile: {path: /etc/ssh/sshd_config, regexp: '^PermitRootLogin', line: 'PermitRootLogin no'}
+      </fix>
+      <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+        <check-content-ref href="ssg-rhel9-oval.xml" name="oval:ssg-sshd_disable_root_login:def:1"/>
+      </check>
+    </Rule>
+    <Rule id="xccdf_org.ssgproject.content_rule_sshd_set_idle_timeout" severity="medium">
+      <title>Set SSH Client Alive Interval</title>
+      <description>SSH allows administrators to set a network responsiveness timeout interval.</description>
+      <reference href="https://public.cyber.mil/stigs/downloads/?_dl_facet_stigs=operating-systems%2Cunix-linux">RHEL-09-255100</reference>
+      <ident system="http://cyber.mil/cci">CCI-001133</ident>
+      <fixtext>Set ClientAliveInterval 600 in /etc/ssh/sshd_config.</fixtext>
+    </Rule>
+  </Group>
+  <Group id="V-257777">
+    <title>SRG-OS-000480-GPOS-00227</title>
+    <description>&lt;GroupDescription&gt;&lt;/GroupDescription&gt;</description>
+    <Rule id="SV-257777r925318_rule" severity="high" weight="10.0">
+      <version>RHEL-09-211010</version>
+      <title>RHEL 9 must be a vendor-supported release.</title>
+      <description>&lt;VulnDiscussion&gt;An operating system release is considered "supported" if the vendor continues to provide security patches for the product.&lt;/VulnDiscussion&gt;&lt;FalsePositives&gt;&lt;/FalsePositives&gt;&lt;FalseNegatives&gt;&lt;/FalseNegatives&gt;</description>
+      <reference><dc:title>DPMS Target Red Hat Enterprise Linux 9</dc:title><dc:publisher>DISA</dc:publisher><dc:identifier>5612</dc:identifier></reference>
+      <ident system="http://cyber.mil/cci">CCI-000366</ident>
+      <fixtext fixref="F-61442r925317_fix">Upgrade to a supported version of RHEL 9.</fixtext>
+      <check system="C-61518r925318_chk">
+        <check-content-ref href="Red_Hat_Enterprise_Linux_9_STIG.xml" name="M"/>
+        <check-content>Verify that the version of RHEL 9 is vendor supported with the following command: $ cat /etc/redhat-release</check-content>
+      </check>
+    </Rule>
+  </Group>
+  <Group id="xccdf_org.ssgproject.content_group_na">
+    <title>NA group</title>
+    <Rule id="xccdf_org.ssgproject.content_rule_na_thing" severity="low"><title>NA thing</title></Rule>
+  </Group>
+  <TestResult id="xccdf_org.open-scap_testresult_xccdf_org.ssgproject.content_profile_stig" start-time="2026-11-04T14:01:02+00:00" end-time="2026-11-04T14:03:40+00:00" version="0.1.76" test-system="cpe:/a:redhat:openscap:1.3.10">
+    <benchmark href="/usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml" id="xccdf_org.ssgproject.content_benchmark_RHEL-9"/>
+    <title>OSCAP Scan Result</title>
+    <identity authenticated="false" privileged="true">root</identity>
+    <profile idref="xccdf_org.ssgproject.content_profile_stig"/>
+    <target>acd-target-01.range.local</target>
+    <target-address>192.168.56.10</target-address>
+    <rule-result idref="xccdf_org.ssgproject.content_rule_sshd_disable_root_login" role="full" time="2026-11-04T14:02:10+00:00" severity="medium" weight="1.000000">
+      <result>fail</result>
+      <ident system="https://ncp.nist.gov/cce">CCE-90592-1</ident>
+      <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5"><check-content-ref name="oval:ssg-sshd_disable_root_login:def:1" href="ssg-rhel9-oval.xml"/></check>
+    </rule-result>
+    <rule-result idref="xccdf_org.ssgproject.content_rule_sshd_set_idle_timeout" role="full" time="2026-11-04T14:02:11+00:00" severity="medium" weight="1.000000">
+      <result>pass</result>
+    </rule-result>
+    <rule-result idref="SV-257777r925318_rule" role="full" time="2026-11-04T14:02:12+00:00" severity="high" weight="10.000000">
+      <result>fail</result>
+      <message severity="info">Found release: Red Hat Enterprise Linux release 9.0 (Plow)</message>
+    </rule-result>
+    <rule-result idref="xccdf_org.ssgproject.content_rule_na_thing" role="full" time="2026-11-04T14:02:13+00:00" severity="low" weight="1.000000">
+      <result>notapplicable</result>
+    </rule-result>
+    <rule-result idref="xccdf_org.ssgproject.content_rule_unselected" role="full" time="2026-11-04T14:02:14+00:00" severity="low" weight="1.000000">
+      <result>notselected</result>
+    </rule-result>
+    <rule-result idref="xccdf_org.ssgproject.content_rule_not_in_catalog" role="full" time="2026-11-04T14:02:15+00:00" severity="low" weight="1.000000">
+      <result>fail</result>
+    </rule-result>
+    <score system="urn:xccdf:scoring:default" maximum="100.000000">40.000000</score>
+  </TestResult>
+</Benchmark>
