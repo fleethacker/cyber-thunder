@@ -39,9 +39,19 @@
 <p>None found by the hunt checks in this scan.</p>
 {% endif %}
 
+{% if r.discovery %}
+<h2>Unknown devices and changes on the enclave</h2>
+<table>
+<tr><th>Host or address</th><th>Item</th><th>Severity</th></tr>
+{% for d in r.discovery %}
+<tr><td>{{ d.host }}</td><td>{{ d.title }}</td><td>{{ d.severity }}</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+
 <h2>Decisions</h2>
 <p>Pending {{ r.decisions.proposed }} | Approved {{ r.decisions.approved }} | Applied {{ r.decisions.applied }} |
- Verified {{ r.decisions.verified }} | Rolled back {{ r.decisions.rolled_back }} | Denied {{ r.decisions.denied }}</p>
+ Verified {{ r.decisions.verified }} | Rolled back {{ r.decisions.rolled_back }} | Failed {{ r.decisions.failed }} | Denied {{ r.decisions.denied }}</p>
 {% if r.verified %}
 <table>
 <tr><th>Verified change</th><th>Host</th><th>Approved by</th><th>Verified at (UTC)</th></tr>
@@ -51,6 +61,14 @@
 </table>
 {% else %}
 <p>No verified changes yet.</p>
+{% endif %}
+{% if r.reverted %}
+<table>
+<tr><th>Reverted or failed change</th><th>Host</th><th>Approved by</th><th>When (UTC)</th><th>Why</th></tr>
+{% for x in r.reverted %}
+<tr><td>{{ x.title }}</td><td>{{ x.host }}</td><td>{{ x.decided_by or "-" }}</td><td>{{ x.at or "-" }}</td><td>{{ x.why }}</td></tr>
+{% endfor %}
+</table>
 {% endif %}
 
 <h2>Top risks</h2>

@@ -3,18 +3,29 @@
 Resolution order for a target:
   options.key_file                       -> private key path
   credential_ref that is an existing path -> private key path
-  env CT_CRED_<credential_ref>            -> password
-  env <credential_ref>                    -> password
+  env CT_CRED_<credential_ref>            -> password  (ref must match [A-Za-z0-9_.-]{1,64})
   otherwise agent/keyring and ~/.ssh keys
+A bare environment variable name is never read: a ref of PATH must not send $PATH to a host.
 """
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import time
 from pathlib import Path
 
 from .base import CommandResult, Transport, TransportError, sudo_wrap
+
+
+CRED_REF_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+
+
+def credential_from_env(ref: str) -> str | None:
+    """Password for credential_ref `ref`: only the CT_CRED_<ref> variable, never a bare variable name."""
+    if not CRED_REF_RE.fullmatch(ref):
+        raise TransportError(f"credential_ref {ref!r} is not a key file and not a valid name ([A-Za-z0-9_.-]{{1,64}})")
+    return os.environ.get(f"CT_CRED_{ref}")
 
 
 class SSHTransport(Transport):
@@ -39,7 +50,7 @@ class SSHTransport(Transport):
         elif ref and Path(ref).expanduser().exists():
             key = str(Path(ref).expanduser())
         elif ref:
-            password = os.environ.get(f"CT_CRED_{ref}") or os.environ.get(ref)
+            password = credential_from_env(ref)
         return cls(target.address, port=target.port or 22, username=target.username, password=password,
                    key_filename=key, sudo=target.sudo)
 

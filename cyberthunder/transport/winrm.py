@@ -91,7 +91,8 @@ class WinRMTransport(Transport):
         o = target.options or {}
         password = None
         if target.credential_ref:
-            password = os.environ.get(f"CT_CRED_{target.credential_ref}")
+            from cyberthunder.transport.ssh import credential_from_env
+            password = credential_from_env(target.credential_ref) if target.credential_ref else None
         auth = str(o.get("transport", "ntlm")).lower()
         if password is None and auth != "kerberos":
             raise TransportError(f"target {target.id}: set CT_CRED_{target.credential_ref or '<credential_ref>'} "

@@ -35,7 +35,7 @@ def cmd_report(a: argparse.Namespace) -> int:
         svc = _service(a)
         kind = a.kind
         if a.queue:
-            print(json.dumps(svc.queue(kind, a.scan_id), indent=2))
+            print(json.dumps(svc.queue(kind, a.scan_id, a.host), indent=2))
             return 0
         if kind == "commander":
             text = svc.commander(a.scan_id, a.format or "html")

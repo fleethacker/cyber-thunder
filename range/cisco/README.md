@@ -49,7 +49,7 @@ Approved fixes rewrite the file in place; take a copy first if the original must
     options:
       allow_push: false              # true lets approved fixes be typed into configure terminal
       archive: true                  # run 'archive config' before each change
-      archive_path: flash:ct-pre-change.cfg   # rollback uses 'configure replace <path> force'
+      archive_path: flash:ct-pre-change.cfg   # running-config copied here before each change; rollback replaces from it
       known_users: [admin]
       known_syslog: [10.1.1.5]
 ```

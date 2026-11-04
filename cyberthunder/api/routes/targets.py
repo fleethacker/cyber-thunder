@@ -3,6 +3,7 @@ is recorded as `scope.change` with the before and after values."""
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter, Body, HTTPException
 
@@ -15,6 +16,23 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["targets"], route_class=MappedRoute)
 
 READ_ONLY_FIELDS = {"id", "added_at", "last_scan"}
+# The id names files and directories (scan workdirs, snapshots), so it must be a plain name.
+TARGET_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+BOOL_FIELDS = ("in_scope", "sudo", "simulated")
+
+
+def _check_types(data: dict) -> None:
+    """JSON types the dataclass does not enforce. A string 'no' for in_scope would otherwise be truthy."""
+    for k in BOOL_FIELDS:
+        if k in data and not isinstance(data[k], bool):
+            raise ValueError(f"{k} must be true or false")
+    port = data.get("port")
+    if port is not None and (isinstance(port, bool) or not isinstance(port, int)):
+        raise ValueError("port must be an integer or null")
+    if "tags" in data and not (isinstance(data["tags"], list) and all(isinstance(t, str) for t in data["tags"])):
+        raise ValueError("tags must be a list of strings")
+    if "options" in data and not isinstance(data["options"], dict):
+        raise ValueError("options must be an object")
 
 
 def _build(data: dict) -> Target:
@@ -37,6 +55,10 @@ def add_target(data: dict = Body(...), ctx=CtxDep, actor: str = ActorDep) -> dic
     tid = str(data.get("id") or "").strip()
     if not tid:
         raise ValueError("id is required")
+    if not TARGET_ID.match(tid):
+        raise ValueError("id must start with a letter or digit and use only letters, digits, '.', '_' or '-' "
+                         "(64 characters at most)")
+    _check_types(data)
     if not data.get("name"):
         data = {**data, "name": tid}
     t = _build({**data, "id": tid})
@@ -55,6 +77,7 @@ def update_target(target_id: str, data: dict = Body(...), ctx=CtxDep, actor: str
     if "id" in data and data["id"] != target_id:
         raise ValueError("a target id cannot be changed; remove and add it instead")
     changes = {k: v for k, v in data.items() if k not in READ_ONLY_FIELDS}
+    _check_types(changes)
     before = current.to_dict()
     updated = _build({**before, **changes})
     changed = sorted(k for k in changes if before.get(k) != getattr(updated, k))

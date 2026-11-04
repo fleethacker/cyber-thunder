@@ -138,6 +138,9 @@ def test_cli_smoke(state_dir, bench_pair, capsys, monkeypatch):
     assert json.loads(capsys.readouterr().out)["deltas"]
 
     from cyberthunder.store import StateStore
+    assert _cli(state_dir, "targets", "add", "--id", "web01", "--type", "linux", "--transport", "fixture",
+                "--in-scope", "--reason", "range host for the bulletin test") == 0
+    capsys.readouterr()
     write_collected(StateStore(state_dir), "scan-x", "web01",
                     [{"name": "openssh", "epoch": None, "version": "8.7p1", "release": "34.el9", "arch": "x86_64"}])
     assert _cli(state_dir, "ingest", "bulletin", str(INGEST_FIXTURES / "iavm_openssh.json")) == 0
@@ -152,3 +155,14 @@ def test_cli_smoke(state_dir, bench_pair, capsys, monkeypatch):
     assert _cli(state_dir, "outbox", "list") == 0
     assert "pending: 0" in capsys.readouterr().out
     assert _cli(state_dir, "ingest", "stig") == 2
+
+
+def test_outbox_burst_with_same_name_keeps_every_entry(ctx):
+    ob = ctx.ingest.outbox
+    payloads = [f"row {i}".encode() for i in range(200)]
+    ids = [ob.enqueue("report", "poam.csv", p)["id"] for p in payloads]
+    assert len(set(ids)) == 200
+    pending = ob.list()["pending"]
+    assert len(pending) == 200
+    stored = sorted((ctx.store.outbox_dir / e["id"]).read_bytes() for e in pending)
+    assert stored == sorted(payloads)

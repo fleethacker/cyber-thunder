@@ -14,9 +14,9 @@ Built for the Department of the Navy hackathon in Norfolk (FLEETHACKER, 4-6 Nov 
 
 ## Status
 
-Status reflects the module build in progress. "As designed" means the behaviour is specified in
-[ARCHITECTURE](docs/ARCHITECTURE.md), [API](docs/API.md) and [UI](docs/UI.md) but has not been verified
-against the merged tree yet.
+Every module below is built and merged; the rehearsal in [DEMO](docs/DEMO.md) runs the pipeline end to end on
+the simulated range. Open items: the Assets page has a placeholder for discovery (use the CLI or the API, see
+[DISCOVERY](docs/DISCOVERY.md)), and the UI Diff view does not show every file a fix touches.
 
 | Module | Path | Status |
 |---|---|---|
@@ -24,17 +24,17 @@ against the merged tree yet.
 | Hash-chained audit log | `cyberthunder/audit/` | built |
 | Kill switch, approval gate, standing-approval policy | `cyberthunder/control/` | built |
 | Inventory and scope guardrail | `cyberthunder/inventory/` | built |
-| Transports (local, ssh, fixture; winrm) | `cyberthunder/transport/` | winrm in progress |
+| Transports (local, ssh, fixture, winrm) | `cyberthunder/transport/` | built |
 | Adapter contract and fix library | `cyberthunder/adapters/base.py`, `remediation/` | built |
-| Remediation engine (apply, verify, auto-rollback) | `cyberthunder/remediation/engine.py` | in progress |
-| Scan orchestration | `cyberthunder/scan.py` | in progress |
-| Linux, Cisco, Kubernetes, container, Windows adapters | `cyberthunder/adapters/<type>/` | in progress |
-| Local-model explanations with citation validation | `cyberthunder/explain/` | in progress |
-| STIG delta ingest, link emulation, outbox | `cyberthunder/ingest/` | in progress |
-| Reports (one-pager, POA&M, checklist, path to fleet) | `cyberthunder/report/` | in progress |
-| HTTP API | `cyberthunder/api/` | factory built, routes in progress |
-| Web UI | `cyberthunder/ui/` | in progress |
-| Local range and answer keys | `range/` | partial |
+| Remediation engine (apply, verify, auto-rollback) | `cyberthunder/remediation/engine.py` | built |
+| Scan orchestration | `cyberthunder/scan.py` | built |
+| Linux, Cisco, Kubernetes, container, Windows adapters | `cyberthunder/adapters/<type>/` | built |
+| Local-model explanations with citation validation | `cyberthunder/explain/` | built |
+| STIG delta ingest, link emulation, outbox | `cyberthunder/ingest/` | built |
+| Reports (one-pager, POA&M, checklist, path to fleet) | `cyberthunder/report/` | built |
+| HTTP API | `cyberthunder/api/` | built |
+| Web UI | `cyberthunder/ui/` | built |
+| Local range and answer keys | `range/` | built (six answer keys) |
 
 ## Quick start
 
@@ -82,10 +82,26 @@ python -m cyberthunder scan
 ```
 
 ```bash
-python -m cyberthunder scans
+python -m cyberthunder scans list
 ```
 
-Explain a finding and propose a fix (use an id from the findings list; `--help` on each command shows its flags):
+```bash
+python -m cyberthunder scans show <scan-id>
+```
+
+The scan creates a proposal for every finding that has a library fix. List them, and read one (it prints its
+`finding_id`; `--help` on each command shows its flags):
+
+```bash
+python -m cyberthunder proposals list
+```
+
+```bash
+python -m cyberthunder proposals show <proposal-id>
+```
+
+Explain a finding (needs the local model server, otherwise a template explains) and propose a fix by hand if
+a finding has no proposal yet:
 
 ```bash
 python -m cyberthunder explain <finding-id>
@@ -106,7 +122,7 @@ shows the step timeline: scope check, before-state captured, applied, verified.
 
 Force a failure and watch the rollback: in Settings turn on "force verification failure on next apply", then
 apply another approved fix. Verification fails, the engine rolls back automatically, and **Diff** shows
-before and after. From the CLI the same flow is `apply` (with the simulate-failure flag), `diff`, `rollback`.
+before and after. From the CLI the same flow is `proposals approve <id>`, `apply <id> [--simulate-verify-fail]`, `diff <id>`, `rollback <id>`; `apply` refuses a proposal that has not been approved.
 
 Verify the audit chain (also the green badge in the UI header):
 
@@ -114,9 +130,10 @@ Verify the audit chain (also the green badge in the UI header):
 python -m cyberthunder audit verify
 ```
 
-Other commands, as specified: `targets ...` (inventory), `discover ...` (read-only asset facts), `ingest stig|bulletin`
-(constrained-link updates), `link` (kbps, latency, connected), `outbox` (reports queued for sync),
-`report ...` (one-pager, POA&M, checklist, path to fleet), `demo reset|run`.
+Other commands: `targets ...` (inventory; `targets discover <id>` reads asset facts), `discover scopes|sweep|list|accept|ignore|findings|applicable`
+(network discovery, needs a saved scope first), `ingest stig|bulletin` (constrained-link updates), `link show|set`
+(kbps, latency, connected), `outbox list|sync` (reports queued for sync), `report ...` (one-pager, POA&M,
+checklist, path to fleet), `demo reset|run`.
 
 ## Documentation
 

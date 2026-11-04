@@ -1,4 +1,5 @@
-"""Proposals: the decision queue. Approve, deny, cancel, apply (background), roll back, diff, bulk.
+"""Proposals: the decision queue. Approve, deny, cancel, apply (background), roll back, verify a hand-made
+change, diff, bulk.
 
 Apply and rollback check the kill switch before starting work so the Sailor gets a 423 at once; the gate
 checks it again on the edge itself, so a kill engaged mid-flight still stops the change."""
@@ -9,7 +10,7 @@ import logging
 from fastapi import APIRouter
 
 from cyberthunder.api import util
-from cyberthunder.api.errors import MappedRoute, feature, status_for
+from cyberthunder.api.errors import MappedRoute, feature, status_for, unavailable
 from cyberthunder.api.schemas import ApplyBody, BulkBody, NoteBody
 from cyberthunder.api.util import ActorDep, CtxDep, proposal_plus
 from cyberthunder.control.approvals import IllegalTransition, ProposalState
@@ -112,12 +113,30 @@ def apply(pid: str, body: ApplyBody | None = None, ctx=CtxDep, actor: str = Acto
     # The demo toggle is consumed only when the request does not ask for a forced failure itself.
     simulate = True if body.simulate_verify_fail else _demo_forces_failure(ctx)
 
+    from_toggle = simulate and not body.simulate_verify_fail
+
     def work() -> None:
         with feature("remediation engine"):
             ctx.engine.execute(pid, actor=actor, simulate_verify_fail=simulate)
 
-    util.run_background(work, f"apply-{pid}")
+    try:
+        util.run_background(work, f"apply-{pid}")
+    except BaseException:
+        if from_toggle:
+            _rearm_demo_toggle(ctx)   # the apply never started, so the forced failure is still owed
+        raise
     return {"proposal_id": pid, "state": "applying", "simulate_verify_fail": simulate}
+
+
+def _rearm_demo_toggle(ctx) -> None:
+    demo = util.demo_module()
+    fn = getattr(demo, "set_simulate_verify_fail_next", None) if demo is not None else None
+    if fn is None:
+        return
+    try:
+        fn(ctx, True, "agent")
+    except Exception as e:  # noqa: BLE001  the original error is what the caller needs to see
+        log.warning("demo verify-fail toggle could not be re-armed: %s", e)
 
 
 @router.post("/proposals/{pid}/rollback", status_code=202)
@@ -134,6 +153,19 @@ def rollback(pid: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
 
     util.run_background(work, f"rollback-{pid}")
     return {"proposal_id": pid, "state": "rolling_back"}
+
+
+@router.post("/proposals/{pid}/verify")
+def verify(pid: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    """Record verification of a change the operator carried out by hand (a runbook proposal). The engine
+    owns the rescan and the state change; builds without engine.verify answer 501."""
+    util.get_proposal(ctx, pid)
+    fn = getattr(ctx.engine, "verify", None) if ctx.engine is not None else None
+    if not callable(fn):
+        raise unavailable("manual verification")
+    with feature("manual verification"):
+        p = fn(pid, actor=actor)
+    return proposal_plus(ctx, p if hasattr(p, "state") else util.get_proposal(ctx, pid))
 
 
 @router.get("/proposals/{pid}/diff")

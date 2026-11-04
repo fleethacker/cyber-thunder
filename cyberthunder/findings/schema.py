@@ -20,7 +20,7 @@ SCHEMA_VERSION = "1.0"
 # Identifier patterns shared by every parser (DISA / ComplianceAsCode / NVD conventions).
 RE_STIG_RULE = re.compile(r"\bSV-\d+r\d+_rule\b")
 RE_GROUP_ID = re.compile(r"\bV-\d{4,7}\b")
-RE_STIG_ID = re.compile(r"\b[A-Z][A-Z0-9]{1,15}-\d{2}-\d{6}\b")   # RHEL-09-211010, WN22-00-000010
+RE_STIG_ID = re.compile(r"\b[A-Z][A-Z0-9]{1,15}-[A-Z0-9]{2}-\d{6}\b")   # RHEL-09-211010, WN11-SO-000010, CISC-ND-000010, CNTR-K8-000360
 RE_CCI = re.compile(r"\bCCI-\d{6}\b")
 RE_CCE = re.compile(r"\bCCE-\d{4,6}-\d\b")
 RE_CVE = re.compile(r"\bCVE-\d{4}-\d{4,}\b")
@@ -216,4 +216,5 @@ def summarize(findings: Iterable[Finding]) -> dict:
         hosts.add(f.host)
         if f.is_open:
             by_sev[f.severity.value] += 1
-    return {"total": len(fl), "hosts": sorted(hosts), "open_by_severity": by_sev, "by_status": by_status}
+    return {"total": len(fl), "hosts": sorted(hosts), "open_by_severity": by_sev, "by_status": by_status,
+            "sources": sorted({f.source for f in fl})}

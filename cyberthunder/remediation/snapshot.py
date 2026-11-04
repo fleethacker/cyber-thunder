@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import difflib
 import json
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from cyberthunder.remediation.library import FixEntry
 from cyberthunder.remediation.models import BeforeState
 
 BEFORE_STATE = "before_state.json"
@@ -77,6 +78,18 @@ def save_result(snap_dir: str | Path, name: str, obj: Any) -> Path:
 
 def load_result(snap_dir: str | Path, name: str) -> Any:
     return _read(Path(snap_dir) / f"{name}.json")
+
+
+def load_fix(snap_dir: str | Path) -> FixEntry | None:
+    """The FixEntry saved at propose time (fix.json), or None when it is missing or unreadable."""
+    d = _read(Path(snap_dir) / "fix.json")
+    if not isinstance(d, dict):
+        return None
+    names = {f.name for f in fields(FixEntry)}
+    try:
+        return FixEntry(**{k: v for k, v in d.items() if k in names})
+    except (TypeError, ValueError):
+        return None
 
 
 def read_text(path: Path, limit: int = EXCERPT_CHARS) -> str | None:

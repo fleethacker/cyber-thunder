@@ -12,7 +12,7 @@ from cyberthunder.findings.schema import utcnow
 ASSET_TYPE_GUESSES = ("linux", "windows", "cisco_ios", "kubernetes", "containers", "unknown")
 ASSET_STATUSES = ("new", "known", "ignored", "missing")
 RUN_MODES = ("quick", "full", "simulated", "passive")
-RUN_STATUSES = ("running", "finished", "failed", "stopped")
+RUN_STATUSES = ("running", "finished", "partial", "failed", "stopped")
 
 
 def _known(cls, d: dict) -> dict:

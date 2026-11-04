@@ -38,7 +38,7 @@ An approval-gated defender for enclave networks:
 - **Audit** every action in a hash-chained log whose head hash is on every report.
 - **Report** a commander one-pager, POA&M, updated checklists and a path to fleet, queued until the link returns.
 
-Status of each module is in the [README](../README.md); behaviour is as designed in
+Status of each module is in the [README](../README.md); behaviour is specified in
 [ARCHITECTURE](ARCHITECTURE.md), [API](API.md) and [UI](UI.md).
 
 ## How it is measured
@@ -112,7 +112,7 @@ If `docs/friction.yaml` is not yet present on the branch, collect the entries fi
 
 | Requirement | Answer |
 |---|---|
-| Runs offline | Yes; the only model is local; the UI is served from the bundle with no external requests (as designed) |
+| Runs offline | Yes; the only model is local; the UI is served from the bundle with no external requests |
 | Humans keep authority | Approval gate on every change |
 | Cites sources | Every finding and explanation cites STIG, CCI, CVE, IAVM or ATT&CK identifiers |
 | Auditable actions | Hash-chained log |

@@ -41,7 +41,8 @@ REFERENCE_SHELLS = ("/usr/bin/bash", "/usr/bin/sh", "/usr/bin/dash", "/usr/bin/z
                     "/usr/bin/perl", "/usr/libexec/platform-python")
 SUSPICIOUS_CMD = re.compile(r"(/\.[^/\s]+|/tmp/|/var/tmp/|/dev/shm|\bcurl\b|\bwget\b|\bnc\b|\bncat\b|\bsocat\b|"
                             r"/dev/tcp/|/dev/udp/|base64\s+-d)")
-SUSPICIOUS_EXEC = re.compile(r"(\b(ba|z|da)?sh\b(\s+-c)?|\bnc\b|\bncat\b|\bsocat\b|python[0-9.]*\s+-m\s+http\.server|"
+# a shell must be a command word (bare or after a "/"), so a "start.sh" wrapper does not match
+SUSPICIOUS_EXEC = re.compile(r"((?:^|[\s/])(?:ba|z|da)?sh(?=\s|$)(\s+-c)?|\bnc\b|\bncat\b|\bsocat\b|python[0-9.]*\s+-m\s+http\.server|"
                              r"python[0-9.]*\s+-c|/\.[^/\s]+|/tmp/|/var/tmp/|/dev/shm)")
 FAILED_RX = re.compile(r"Failed password for (?:invalid user )?(\S+) from (\S+)")
 HIDDEN_DIR_ROOTS = ("/usr/local/lib/", "/var/tmp/", "/dev/shm/")
@@ -116,7 +117,8 @@ def unknown_authorized_key(target, c):
             k = P.authorized_key(line)
             if not k:
                 continue
-            if known & {line.strip(), k["blob"], k["comment"], k["fingerprint"]}:
+            # the comment is free text whoever adds the key writes, so it never identifies a known key
+            if known & {line.strip(), k["blob"], k["fingerprint"]}:
                 continue
             out.append(_finding(
                 target, c, "unknown_authorized_key", f"{path}:{k['fingerprint']}",
@@ -151,11 +153,26 @@ def cron_suspicious(target, c):
     return out
 
 
+EXEC_KEYS = ("ExecStart", "ExecStartPre", "ExecStartPost")
+
+
+def _unit_execs(content: str) -> list[str]:
+    """Exec lines of a unit file. systemd allows whitespace around '=' and the -@:+! prefixes before
+    the command, so both are stripped before the command is matched."""
+    out = []
+    for ln in content.splitlines():
+        key, sep, val = ln.partition("=")
+        if sep and key.strip() in EXEC_KEYS:
+            cmd = val.strip().lstrip("-@:+!").strip()
+            if cmd:
+                out.append(cmd)
+    return out
+
+
 def rogue_unit(target, c):
     out = []
     for path, content in P.dump(P.out(c, "etc_units") or "").items():
-        execs = [ln.split("=", 1)[1].strip() for ln in content.splitlines()
-                 if ln.strip().startswith(("ExecStart=", "ExecStartPre=", "ExecStartPost="))]
+        execs = _unit_execs(content)
         bad = [e for e in execs if SUSPICIOUS_EXEC.search(e)]
         if not bad:
             continue

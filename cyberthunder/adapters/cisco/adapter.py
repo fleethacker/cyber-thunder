@@ -9,11 +9,13 @@ Modes
              at the console and changes nothing.
 
 Before every change the full running-config is saved. Rollback writes it back (file, simulated, fixture)
-or, on a live device, runs 'configure replace <options.archive_path> force' when an archive is available
-and otherwise pushes the computed inverse lines.
+or, on a live device, runs 'configure replace <file> force' against the device copy taken for that change
+(options.archive_path written with 'copy running-config', or the file 'archive config' just created) and
+otherwise pushes the computed inverse lines. A replace whose result differs from the saved copy fails.
 
 Target options used here (all optional):
-  config_path, seed_config, allow_push, archive (run 'archive config' before a change), archive_path,
+  config_path, seed_config, allow_push, archive (run 'archive config' before a change), archive_path
+  (copy the running-config there before a change),
   known_users, known_syslog, known_tunnels, known_next_hops, known_applets, role (switch|router),
   stig_families, plus the organization-defined values listed in rules.resolve_options().
 """
@@ -46,6 +48,10 @@ ASSET_TYPE = "cisco_ios"
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 ARCHIVE_PATH_RE = re.compile(r"^[A-Za-z0-9_.\-:/]+$")
 CONFIG_ARTIFACT = "running_config"
+MOST_RECENT_RE = re.compile(r"^\s*\d+\s+(\S+)\s+<-\s*Most Recent", re.I | re.M)
+# Lines the device rewrites on every change; ignored when comparing a replaced config with the saved one.
+VOLATILE_RE = re.compile(r"^(! Last configuration change at|! NVRAM config last updated at|"
+                         r"Current configuration :|Building configuration)")
 
 # Lines that never belong in a configuration snippet. A FixEntry carrying one is refused outright.
 FORBIDDEN_PREFIXES = ("do ", "tclsh", "reload", "delete ", "erase ", "format ", "copy ", "write erase",
@@ -102,6 +108,26 @@ def validate_payload(payload: str) -> None:
             raise ValueError("snippet contains control characters")
         if any(line.startswith(p) for p in FORBIDDEN_PREFIXES):
             raise ValueError(f"snippet line is not a configuration command: {raw.strip()!r}")
+
+
+def _config_digest(text: str) -> str:
+    lines = [ln.rstrip() for ln in text.replace("\r\n", "\n").split("\n") if not VOLATILE_RE.match(ln)]
+    return _sha("\n".join(ln for ln in lines if ln).strip())
+
+
+def _copy_running_config(cli, path: str) -> tuple[bool, str]:
+    """copy running-config <path>, answering the filename and overwrite prompts with Enter."""
+    transcript = []
+    line = f"copy running-config {path}"
+    for _ in range(4):
+        out = cli.send(line, expect_prompt=False, timeout=60)
+        transcript.append(out)
+        if not out.rstrip().endswith(("?", "]")):  # back at the exec prompt, or an error
+            break
+        line = ""                                  # accept the default filename / [confirm]
+    text = "\n".join(transcript)
+    ok = "bytes copied" in text.lower() and not CLI_ERROR_RE.search(text)
+    return ok, text
 
 
 def _is_live(transport: Transport) -> bool:
@@ -308,7 +334,7 @@ class CiscoIOSAdapter(Adapter):
     @staticmethod
     def _rollback_steps(inverse: str) -> list[str]:
         steps = ["Offline (file/simulated): the saved pre-change running-config is written back unchanged.",
-                 "Live with options.archive_path: configure replace <archive_path> force.",
+                 "Live with an archive taken for this change: configure replace <that file> force.",
                  "Live without an archive: push the inverse lines below, then write memory."]
         return steps + ([f"  {x}" for x in inverse.split("\n")] if inverse else [])
 
@@ -426,13 +452,30 @@ class CiscoIOSAdapter(Adapter):
             fh.write(text)
         notes = []
         archive_out = None
-        if _is_live(transport) and target.options.get("archive"):
+        archive_file = None
+        archive_path = target.options.get("archive_path")
+        if _is_live(transport) and (target.options.get("archive") or archive_path):
             cli = open_cli(transport)
             try:
-                archive_out = cli.send("archive config")
+                if target.options.get("archive"):
+                    archive_out = cli.send("archive config")
+                    notes.append("archive config taken on the device")
+                    m = MOST_RECENT_RE.search(cli.send("show archive"))
+                    if m:
+                        archive_file = m.group(1)
+                if archive_path and target.options.get("allow_push"):
+                    if not ARCHIVE_PATH_RE.match(str(archive_path)) or ".." in str(archive_path):
+                        notes.append(f"archive_path {archive_path!r} is not a plain device path; not copied")
+                    else:
+                        copied, out = _copy_running_config(cli, str(archive_path))
+                        archive_out = ((archive_out or "") + "\n" + out).strip()
+                        if copied:
+                            archive_file = str(archive_path)
+                            notes.append(f"running-config copied to {archive_path}")
+                        else:
+                            notes.append(f"copy to {archive_path} failed; rollback uses the inverse lines")
             finally:
                 cli.close()
-            notes.append("archive config taken on the device")
         after = apply_snippet(text, fix.payload) if fix.payload else text
         inverse = inverse_snippet(text, after) if fix.payload else ""
         (dest / "rollback-snippet.txt").write_text(inverse + ("\n" if inverse else ""), encoding="utf-8")
@@ -441,7 +484,7 @@ class CiscoIOSAdapter(Adapter):
         return BeforeState(target_id=target.id, fix_ref=fix.fix_ref, dir=str(dest), files=["running-config"],
                            commands={"running_config": "running-config.txt"}, notes="; ".join(notes),
                            extra={"sha256": _sha(text), "mode": transport.kind, "rollback_snippet": inverse,
-                                  "archive_path": target.options.get("archive_path"),
+                                  "archive_path": archive_path, "archive_file": archive_file,
                                   "archive_output": archive_out, "planned_diff": planned})
 
     def _push(self, transport: Transport, payload: str) -> tuple[bool, str]:
@@ -574,7 +617,8 @@ class CiscoIOSAdapter(Adapter):
             steps = ["configure terminal", *snippet_lines(inverse), "end", "write memory"]
             return RollbackResult(ok=False, output="Push is not allowed; enter these lines at the console:\n"
                                   + "\n".join(steps), details={"mode": "runbook", "steps": steps})
-        archive = target.options.get("archive_path") or before.extra.get("archive_path")
+        # Only the device file written for this change is trusted; a configured path may hold a stale copy.
+        archive = before.extra.get("archive_file")
         if archive:
             if not ARCHIVE_PATH_RE.match(str(archive)) or ".." in str(archive):
                 return RollbackResult(ok=False, output=f"refused: archive path {archive!r} is not a plain device path",
@@ -585,7 +629,15 @@ class CiscoIOSAdapter(Adapter):
             finally:
                 cli.close()
             ok = not CLI_ERROR_RE.search(out) and "rollback done" in out.lower()
-            return RollbackResult(ok=bool(ok), output=out, details={"mode": "configure_replace", "archive": archive})
+            details = {"mode": "configure_replace", "archive": archive}
+            if ok:
+                now = self.read_config(target, transport)
+                matches = _config_digest(now) == _config_digest(data.decode("utf-8"))
+                details["matches_saved"] = matches
+                if not matches:
+                    ok = False
+                    out += f"\nreplaced config does not match the saved pre-change copy {saved}"
+            return RollbackResult(ok=bool(ok), output=out, details=details)
         inverse = before.extra.get("rollback_snippet") or ""
         if not inverse:
             return RollbackResult(ok=True, output="nothing to undo", details={"mode": "ssh"})

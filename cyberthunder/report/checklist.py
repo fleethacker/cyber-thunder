@@ -25,6 +25,15 @@ CKLB_STATUS = {
     Status.NOT_REVIEWED: "not_reviewed", Status.ERROR: "not_reviewed",
 }
 _NS = uuid.UUID("6f1c2e0a-5b0e-4c55-9a53-3d6f3c1a7b10")
+CKLB_SEVERITIES = ("high", "medium", "low")      # the only rule severities STIG Viewer 3 accepts
+
+
+def _cklb_severity(f: Finding) -> str:
+    """unknown reads as medium (assume it matters until reviewed); info and anything else as low."""
+    v = f.severity.value
+    if v in CKLB_SEVERITIES:
+        return v
+    return "medium" if v == "unknown" else "low"
 
 
 def _status_for(f: Finding, p: Proposal | None) -> tuple[str, str]:
@@ -89,19 +98,31 @@ def _synthesise(host: str, findings: list[Finding], props: dict[str, Proposal], 
     stigs = []
     for name, fl in sorted(groups.items()):
         rules = []
+        stig_uuid = str(uuid.uuid5(_NS, name))
+        stig_id = name.lower().replace(" ", "_")
+        release = next((f.benchmark_release for f in fl if f.benchmark_release), "") or ""
         for f in sorted(fl, key=lambda f: (f.rule_version or "", f.rule_id)):
             status, note = _status_for(f, props.get(f.id))
+            group_id = f.group_id or f.rule_version or f.id
             rules.append({
-                "group_id": f.group_id or f.rule_version or f.id, "group_title": f.title,
+                # the fields STIG Viewer 3 writes for every rule; stig_uuid links the rule to its STIG
+                "uuid": str(uuid.uuid5(_NS, f.id)), "stig_uuid": stig_uuid, "target_key": None, "stig_id": stig_id,
+                "group_id": group_id, "group_id_src": group_id, "group_title": f.title,
+                "group_tree": [{"id": group_id, "title": f.title, "description": "<GroupDescription></GroupDescription>"}],
                 "rule_id": f.rule_id, "rule_id_src": f.rule_id, "rule_version": f.rule_version or "",
-                "rule_title": f.title, "severity": f.severity.value if f.severity.value != "unknown" else "medium",
+                "rule_title": f.title, "weight": "10.0", "classification": "UNCLASSIFIED",
+                "severity": _cklb_severity(f),
                 "discussion": f.description, "check_content": f.check_text or "", "fix_text": f.fix_text or "",
-                "ccis": f.ref_ids("cci"), "status": status, "finding_details": _details(f, sid), "comments": note,
-                "overrides": {}, "uuid": str(uuid.uuid5(_NS, f.id)),
+                "check_content_ref": {"href": "", "name": "M"},
+                "false_positives": "", "false_negatives": "", "documentable": "false", "mitigations": "",
+                "potential_impacts": "", "third_party_tools": "", "mitigation_control": "", "responsibility": "",
+                "security_override_guidance": "", "ia_controls": "", "legacy_ids": [],
+                "ccis": f.ref_ids("cci"), "reference_identifier": "", "status": status,
+                "finding_details": _details(f, sid), "comments": note, "overrides": {},
             })
-        stigs.append({"stig_name": name, "display_name": name, "stig_id": name.lower().replace(" ", "_"),
-                      "release_info": next((f.benchmark_release for f in fl if f.benchmark_release), "") or "",
-                      "uuid": str(uuid.uuid5(_NS, name)), "size": len(rules), "rules": rules})
+        stigs.append({"stig_name": name, "display_name": name, "stig_id": stig_id, "version": "",
+                      "release_info": release, "uuid": stig_uuid, "reference_identifier": "",
+                      "size": len(rules), "rules": rules})
     return {
         "title": f"{host} checklist", "id": str(uuid.uuid5(_NS, f"{host}|{sid}")), "active": True, "mode": 2,
         "has_path": True, "cklb_version": "1.0",

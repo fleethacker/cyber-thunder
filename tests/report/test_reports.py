@@ -1,16 +1,25 @@
 import csv
 import io
 import json
+import os
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from cyberthunder.cli import main
-from cyberthunder.report.poam import COLUMNS
+from cyberthunder.config import Settings
+from cyberthunder.context import AppContext
+from cyberthunder.findings.schema import Finding
+from cyberthunder.report import onepager
+from cyberthunder.report.poam import COLUMNS, poam_rows
 from cyberthunder.report.render import ReportError
 from cyberthunder.report.service import ReportService
 
 from .conftest import FIX, SCAN
+
+ROOT = FIX.parents[2]
 
 
 def svc(node) -> ReportService:
@@ -24,6 +33,9 @@ def last_render(node, kind):
 
 # -- commander ----------------------------------------------------------------------------
 def test_commander_html_has_the_facts_and_the_head_hash(node):
+    e = node.findings["empty"]
+    node.store.save_explanation(e.id, {"finding_id": e.id, "risk": "Anyone with the root password can log in over the network.",
+                                       "impact": "i", "plan": "p", "citations": ["RHEL-09-255040"]})
     head = node.audit.head
     html = svc(node).commander(SCAN, "html")
     assert "USS Example" in html and SCAN in html and "stig_delta" in html
@@ -40,9 +52,75 @@ def test_commander_html_has_the_facts_and_the_head_hash(node):
 
 def test_commander_counts_by_host_and_cat(node):
     md = svc(node).commander(SCAN, "md")
-    assert "| rhel-01 | 4 | 2 | 0 | 6 | 2 |" in md
+    # the root-login finding has a verified fix: closed, as the POA&M and the checklist say
+    assert "| rhel-01 | 3 | 2 | 0 | 5 | 2 |" in md
     assert "| sw-01 | 0 | 0 | 1 | 1 | 0 |" in md
-    assert "7 open finding(s) on 2 host(s): 4 CAT I, 2 CAT II, 1 CAT III." in md
+    assert ("6 open finding(s) on 2 host(s): 3 CAT I, 2 CAT II, 1 CAT III "
+            "(1 closed since the scan by verified changes).") in md
+
+
+def test_commander_agrees_with_poam_and_checklist_on_a_verified_fix(node):
+    root = node.findings["root"]
+    data = onepager.build_commander(node, SCAN, "md")
+    assert data["by_host"][0]["host"] == "rhel-01" and data["by_host"][0]["high"] == 3
+    assert root.title not in [t["title"] for t in data["top"]]
+    row = next(r for r in poam_rows(node, SCAN) if r["Finding ID"] == root.id)
+    assert row["Status"] == "Completed"
+    rule = next(r for s in svc(node).checklist_cklb(SCAN, "rhel-01")["stigs"] for r in s["rules"]
+                if r["rule_id"] == root.rule_id)
+    assert rule["status"] == "not_a_finding"
+
+
+def test_commander_names_reverted_and_failed_changes(node):
+    gate = node.gate
+    f = node.findings["cve"]
+    p = gate.propose(finding_id=f.id, host=f.host, title="Upgrade openssl", fix_ref="pkg:openssl",
+                     fix_preview="dnf upgrade openssl", rollback_plan="downgrade", risk="r", citations=f.citations)
+    gate.approve(p.id, "sailor2")
+    gate.start_apply(p.id)
+    gate.failed(p.id, note="package mirror unreachable")
+    for fmt in ("md", "html"):
+        text = svc(node).commander(SCAN, fmt)
+        assert "World writable directory" in text                      # rolled back after a failed verify
+        assert "verification failed, rolled back automatically" in text
+        assert "Upgrade openssl" in text and "package mirror unreachable" in text
+        assert "Failed 1" in text and "Rolled back 1" in text
+    assert "1 failed" in onepager.build_commander(node, SCAN, "md")["bluf"][-1]
+
+
+def test_commander_reproduce_command_quotes_for_the_local_shell(node, monkeypatch):
+    monkeypatch.setattr(onepager, "os", SimpleNamespace(name="nt"))
+    assert onepager._quote("C:\\a b\\state") == '"C:\\a b\\state"'
+    assert "'" not in onepager.build_commander(node, SCAN, "md")["command"]
+    monkeypatch.setattr(onepager, "os", SimpleNamespace(name="posix"))
+    assert onepager._quote("/tmp/a b") == "'/tmp/a b'"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="runs the command through cmd.exe")
+def test_commander_reproduce_command_runs_in_cmd(tmp_path, monkeypatch):
+    state = tmp_path / "state dir"
+    state.mkdir()
+    monkeypatch.setenv("CT_STATE_DIR", str(state))
+    ctx = AppContext(Settings.from_env(state_dir=state))
+    ctx.store.save_scan_run({"id": SCAN, "targets": ["h"], "trigger": "manual", "status": "done"})
+    ctx.store.save_findings(SCAN, [Finding(host="h", source="t", rule_id="r1", title="t", severity="low", status="open")])
+    cmd = onepager.build_commander(ctx, SCAN, "md")["command"]
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    res = subprocess.run(cmd.replace("python", f'"{sys.executable}"', 1), shell=True, cwd=tmp_path, env=env,
+                         capture_output=True, text=True, timeout=120)
+    assert res.returncode == 0, res.stderr
+    assert "Commander one-pager" in res.stdout
+
+
+def test_commander_and_poam_show_discovery_findings(node):
+    node.discovery.sweep(mode="simulated", actor="it1.jones", background=False)
+    md = svc(node).commander(SCAN, "md")
+    assert "192.168.56.66" in md and "Unknown devices and changes on the enclave" in md
+    assert "Locate and identify unknown device(s)" in md
+    assert "192.168.56.66" in svc(node).commander(SCAN, "html")
+    rows = [r for r in poam_rows(node, SCAN) if r["Source"] == "discovery"]
+    assert any(r["Host"] == "discovered:192.168.56.66" for r in rows)
+    assert all(r["Comments"].startswith("Discovery sweep") for r in rows)
 
 
 def test_commander_md_has_head_and_sections(node):
@@ -59,6 +137,15 @@ def test_commander_default_is_latest_scan_and_errors_are_clear(node):
         svc(node).commander("nope", "md")
     with pytest.raises(ReportError, match="format"):
         svc(node).commander(SCAN, "pdf")
+
+
+def test_no_scan_hint_names_a_real_command(state_dir):
+    ctx = AppContext(Settings.from_env(state_dir=state_dir))
+    with pytest.raises(ReportError) as e:
+        ReportService(ctx).commander(None, "md")
+    assert "(cyberthunder scan)" in str(e.value)
+    with pytest.raises(SystemExit):        # `scan run` is not a command, so the hint must not say it
+        main(["--state-dir", str(state_dir), "scan", "run"])
 
 
 def test_commander_without_any_scan_says_what_to_do(state_dir):
@@ -143,6 +230,22 @@ def test_checklist_synthesised_statuses(node):
     assert rules["hunt:cron_beacon"]["status"] == "open"
     assert all(r["finding_details"] for r in rules.values())
     json.dumps(doc)
+
+
+def test_checklist_severities_and_stig_viewer_fields(node):
+    extra = Finding(host="sw-01", source="ios", rule_id="ios:banner_info", title="Banner note", severity="info",
+                    status="open")
+    node.store.save_findings(SCAN, [*node.findings.values(), extra])
+    doc = svc(node).checklist_cklb(SCAN, "sw-01")
+    rules = [r for s in doc["stigs"] for r in s["rules"]]
+    assert {r["severity"] for r in rules} <= {"high", "medium", "low"}
+    assert next(r for r in rules if r["rule_id"] == "ios:banner_info")["severity"] == "low"
+    for st in doc["stigs"]:
+        assert {"version", "release_info", "reference_identifier", "uuid"} <= set(st)
+        for r in st["rules"]:
+            assert r["stig_uuid"] == st["uuid"]
+            assert r["group_tree"][0]["id"] == r["group_id"]
+            assert r["weight"] == "10.0" and r["classification"] == "UNCLASSIFIED" and r["legacy_ids"] == []
 
 
 def test_checklist_needs_a_host_when_scan_has_several(node):
@@ -264,6 +367,21 @@ def test_queue_puts_the_render_in_the_outbox_and_audits(node):
     assert node.audit.verify().ok
     with pytest.raises(ReportError, match="unknown report kind"):
         svc(node).queue("nonsense", SCAN)
+
+
+def test_queue_checklist_for_one_host_of_a_multi_host_scan(node, tmp_path, capsys):
+    outbox = node.ingest.outbox                       # the real outbox of this node
+    before = len(outbox.list()["pending"])
+    res = svc(node).queue("checklist", None, "rhel-01")
+    assert res["filename"] == "checklist-rhel-01-latest.cklb"
+    pending = outbox.list()["pending"]
+    assert len(pending) == before + 1 and any(e["name"] == "checklist-rhel-01-latest.cklb" for e in pending)
+    with pytest.raises(ReportError, match="pass a host"):
+        svc(node).queue("checklist", SCAN)
+    base = ["--state-dir", str(node.store.root), "report"]
+    capsys.readouterr()
+    assert main([*base, "checklist", "--host", "sw-01", "--queue"]) == 0
+    assert json.loads(capsys.readouterr().out)["filename"] == "checklist-sw-01-latest.cklb"
 
 
 def test_cli_commands(node, key_dir, tmp_path, capsys):

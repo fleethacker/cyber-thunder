@@ -284,3 +284,59 @@ def test_live_configure_replace_rollback_and_rejected_line(adapter, tmp_path):
     saved = dev.saved
     r = adapter.apply(t, tr, bogus, f, before)
     assert not r.ok and "rejected" in r.output and dev.saved == saved     # no write memory after an error
+
+
+def _replace_setup(adapter, tmp_path, dev, **opts):
+    tr = FakeSSHTransport(dev)
+    t = _live_target(allow_push=True, **opts)
+    c, findings = scan(adapter, t, tr, tmp_path / "w")
+    f = next(x for x in findings if x.rule_version == "CISC-ND-000150")
+    fix = FixLibrary(adapter.fixes()).get(f.fix_ref)
+    return tr, t, f, fix
+
+
+def test_live_rollback_never_replaces_with_a_stale_file_at_archive_path(adapter, tmp_path):
+    dev = FakeIOSDevice(read(SEEDED_SWITCH))
+    dev.files["flash:ct-pre-change.cfg"] = "hostname old-day\n!\nend\n"      # left over from an earlier change
+    tr, t, f, fix = _replace_setup(adapter, tmp_path, dev, archive=True, archive_path="flash:ct-pre-change.cfg")
+    before = adapter.capture_before_state(t, tr, fix, f, tmp_path / "s")
+    assert before.extra["archive_file"] == "flash:ct-pre-change.cfg"
+    assert dev.files["flash:ct-pre-change.cfg"] == read(SEEDED_SWITCH)       # overwrite prompt confirmed
+    assert adapter.apply(t, tr, fix, f, before).ok and "login block-for" in dev.config
+    rb = adapter.rollback(t, tr, fix, before)
+    assert rb.ok and rb.details["mode"] == "configure_replace" and rb.details["matches_saved"]
+    assert dev.config == read(SEEDED_SWITCH)
+
+
+def test_live_rollback_uses_the_archive_file_taken_for_the_change(adapter, tmp_path):
+    dev = FakeIOSDevice(read(SEEDED_SWITCH))
+    dev.archives = ["flash:ct-archive-0"]
+    dev.files["flash:ct-archive-0"] = "hostname old-day\n!\nend\n"
+    tr, t, f, fix = _replace_setup(adapter, tmp_path, dev, archive=True)
+    before = adapter.capture_before_state(t, tr, fix, f, tmp_path / "s")
+    assert before.extra["archive_file"] == "flash:ct-archive-2"
+    assert adapter.apply(t, tr, fix, f, before).ok
+    rb = adapter.rollback(t, tr, fix, before)
+    assert rb.ok and rb.details["archive"] == "flash:ct-archive-2" and dev.config == read(SEEDED_SWITCH)
+
+
+def test_live_rollback_ignores_a_configured_path_it_never_wrote(adapter, tmp_path):
+    dev = FakeIOSDevice(read(SEEDED_SWITCH))
+    tr, t, f, fix = _replace_setup(adapter, tmp_path, dev)
+    before = adapter.capture_before_state(t, tr, fix, f, tmp_path / "s")
+    assert adapter.apply(t, tr, fix, f, before).ok
+    dev.files["flash:ct-pre-change.cfg"] = "hostname old-day\n!\nend\n"
+    t.options["archive_path"] = "flash:ct-pre-change.cfg"                    # set after the capture
+    rb = adapter.rollback(t, tr, fix, before)
+    assert rb.ok and rb.details["mode"] == "ssh_inverse"
+    assert not any(x.startswith("configure replace") for x in dev.typed)
+
+
+def test_live_replace_that_does_not_match_the_saved_copy_fails(adapter, tmp_path):
+    dev = FakeIOSDevice(read(SEEDED_SWITCH))
+    tr, t, f, fix = _replace_setup(adapter, tmp_path, dev, archive_path="flash:ct-pre-change.cfg")
+    before = adapter.capture_before_state(t, tr, fix, f, tmp_path / "s")
+    assert adapter.apply(t, tr, fix, f, before).ok
+    dev.files["flash:ct-pre-change.cfg"] = "hostname someone-else\n!\nend\n"  # file changed on the device
+    rb = adapter.rollback(t, tr, fix, before)
+    assert not rb.ok and rb.details["matches_saved"] is False and "does not match" in rb.output

@@ -27,7 +27,7 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 ## Targets (inventory = scope)
 | GET | `/targets` | → `{targets: [Target]}` |
 |---|---|---|
-| POST | `/targets` | Target fields → Target. Audit `inventory.add` |
+| POST | `/targets` | Target fields → Target, `201`. Audit `inventory.add` |
 | PUT | `/targets/{id}` | partial fields → Target. `in_scope` changes audited as `scope.change` with before/after |
 | DELETE | `/targets/{id}` | → `{ok: true}`. Audit `inventory.remove` |
 | POST | `/targets/{id}/discover` | → `AssetFacts` (read-only; opens transport, runs adapter.discover) |
@@ -39,7 +39,7 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/scans/{id}` | → ScanRun |
 
 ## Findings
-| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&q&limit=200&offset=0` → `{findings: [Finding+], total, scan_id, summary}`. Default = the current picture (latest full scan with newer bulletin and targeted-rescan runs overlaid). Filters accept comma-separated values. `q` matches title/rule_id/rule_version |
+| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&q&limit=200&offset=0` → `{findings: [Finding+], total, scan_id, summary, limit, offset}`. Default = the current picture (latest full scan with newer bulletin and targeted-rescan runs overlaid). Filters accept comma-separated values; `severity` also accepts `CAT I`/`CAT II`/`CAT III`; an unknown `status` or `severity` is `400`. `q` matches title/rule_id/rule_version |
 |---|---|---|
 | GET | `/findings/{id}` | → Finding+ |
 | POST | `/findings/{id}/propose` | → Proposal+ (`409` if a live proposal already exists, `404` if no library fix) |
@@ -47,7 +47,7 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/findings/explain` | `{ids?: [..]}` → `{queued: n}`; background precompute, default = all open findings of the latest scan |
 
 ## Proposals (the decision queue)
-| GET | `/proposals` | `?state&host&asset_type` → `{proposals: [Proposal+]}` oldest first |
+| GET | `/proposals` | `?state&host&asset_type` (each takes comma-separated values; an unknown `state` is `400`) → `{proposals: [Proposal+]}` oldest first |
 |---|---|---|
 | GET | `/proposals/{id}` | → Proposal+ |
 | POST | `/proposals/{id}/approve` | `{note?}` → Proposal+ |
@@ -56,14 +56,14 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/proposals/{id}/apply` | `{simulate_verify_fail?: bool}` → `202 {proposal_id, state: "applying"}`; engine.execute runs in background: before-state → apply → verify → verified, or failed → automatic rollback. `409` unless APPROVED, `423` if kill switch engaged |
 | POST | `/proposals/{id}/rollback` | → `202`; manual rollback of APPLIED, VERIFIED or FAILED |
 | POST | `/proposals/{id}/verify` | → Proposal+; re-checks an APPLIED proposal (used after an operator completes a runbook): VERIFIED or FAILED. `501` on a node whose engine lacks it |
-| GET | `/proposals/{id}/diff` | → `{before: {...}, after: {...}, verify: VerifyResult, apply: ApplyResult, files: [{path, before, after}]}` |
-| POST | `/proposals/bulk` | `{action: "approve"|"deny", ids: [..], note?}` → `{results: [{id, state} | {id, status, error}]}` (`status` is the HTTP code the single call would have returned) |
+| GET | `/proposals/{id}/diff` | → `{proposal, fix, before_state, before: {...}, after: {...}, verify: VerifyResult, apply: ApplyResult, rollback, files: [{path, before, after}]}` |
+| POST | `/proposals/bulk` | `{action: "approve"|"deny", ids: [..], note?}` → `{results: [{id, state} | {id, error, status}]}` (`status` is the HTTP code the single call would have returned) |
 
 ## Audit
 | GET | `/audit` | `?after_seq=0&limit=200&action&actor&subject` → `{records: [AuditRecord], head, count}`. An `action` value ending in `.` is a prefix filter (`proposal.`) |
 |---|---|---|
 | GET | `/audit/verify` | → `{ok, count, head, bad_seq, reason}` |
-| GET | `/audit/stream` | `?after_seq&max_seconds` → `text/event-stream`; event `audit`, data = AuditRecord JSON; replays records after `after_seq` (or the `Last-Event-ID` header on reconnect), then tails the file (poll ≤ 500 ms). Sends a `: keepalive` comment every 15 s; closes after `max_seconds` when given |
+| GET | `/audit/stream` | `?after_seq&max_seconds` → `text/event-stream`; event `audit`, data = AuditRecord JSON; each event carries `id: <seq>`, so a reconnecting client resumes from the `Last-Event-ID` header; replays records after `after_seq` (`max_seconds` is `0 < x <= 86400`), then tails the file (poll ≤ 500 ms). Sends a `: keepalive` comment every 15 s; closes after `max_seconds` when given |
 
 ## Kill switch
 | GET | `/kill` | → `{engaged, by, reason, at, via}` |
@@ -95,12 +95,16 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/reports/checklist.cklb` | `?scan_id&host` → CKLB JSON with statuses written back |
 | GET | `/reports/fleet` | `?format=html|md` → path-to-fleet one-pager |
 | GET | `/reports/friction` | `?format=html|md` → friction log |
-| GET | `/reports/score` | `?scan_id` → `{seeded, found, share, items: [{id, kind, what, found, finding_ids}]}` against `range/answer_key.json` |
+| GET | `/reports/score` | `?scan_id` → `{seeded, found, share, items: [{id, kind, what, found, finding_ids}]}` against `range/answer_key/<type>.json` |
 | POST | `/reports/queue` | `{kind: "commander"|"poam"|"checklist", scan_id?}` → outbox entry (queued for sync) |
 
 ## Demo
-| GET | `/demo` | → `{available, loaded, targets: [Target], simulate_verify_fail_next: bool}` |
+| GET | `/demo` | → `{available, loaded, targets: [id], simulate_verify_fail_next: bool}` (`targets` are the simulated target ids; read full records from `GET /targets`) |
 |---|---|---|
 | POST | `/demo/load` | → `{targets}`; adds one simulated target per adapter that supports it. Audit `demo.load` |
 | POST | `/demo/reset` | → `{ok}`; simulated hosts back to seeded state. Audit `demo.reset` |
-| PUT | `/demo` | `{simulate_verify_fail_next: bool}` → demo status; arms or disarms the forced verification failure for the next apply (demonstration control, audited) |
+| PUT | `/demo` | `{simulate_verify_fail_next: bool}` → demo status; arms or disarms the forced verification failure for the next apply (demonstration control, audited as `demo.simulate_verify_fail`) |
+
+## Discovery
+The `/discovery/*` routes (scopes, sweeps, discovered assets, discovery findings, applicable benchmarks) are
+documented in [DISCOVERY.md](DISCOVERY.md). They follow the same actor and error rules as above.

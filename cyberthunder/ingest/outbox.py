@@ -3,8 +3,8 @@
 Reports, POA&Ms, audit extracts and scan summaries for shore are queued here while the link is down and
 sent when it comes back. Each entry is two files in <state_dir>/outbox/:
 
-  <stamp>-<name>             the payload, exactly as it will be sent
-  <stamp>-<name>.meta.json   kind, name, size, sha256, when and by whom it was queued, caller metadata
+  <stamp>-<rand>-<name>      the payload, exactly as it will be sent
+  <stamp>-<rand>-<name>.meta.json   kind, name, size, sha256, when and by whom it was queued, caller metadata
 
 sync() moves both files to <state_dir>/synced/ and records the transfer time the emulated link implies.
 Nothing is deleted: synced/ is the record of what left the ship.
@@ -16,6 +16,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -56,12 +57,20 @@ class Outbox:
     def enqueue(self, kind: str, name: str, data: bytes, meta: dict | None = None, *, actor: str = "operator") -> dict:
         if isinstance(data, str):
             data = data.encode("utf-8")
-        stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime()) + f"{time.time_ns() % 1_000_000_000:09d}"
-        fname = f"{stamp}-{_safe(name)}"
         with self._lock:
             self.pending_dir.mkdir(parents=True, exist_ok=True)
-            path = self.pending_dir / fname
-            path.write_bytes(data)
+            # time_ns() can repeat between calls on Windows, so the id carries a random part and the payload
+            # is created exclusively: an existing entry is never overwritten.
+            while True:
+                stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime()) + f"{time.time_ns() % 1_000_000_000:09d}"
+                fname = f"{stamp}-{uuid.uuid4().hex[:8]}-{_safe(name)}"
+                path = self.pending_dir / fname
+                try:
+                    with open(path, "xb") as fh:
+                        fh.write(data)
+                    break
+                except FileExistsError:
+                    continue
             entry = {"id": fname, "kind": kind, "name": name, "bytes": len(data),
                      "sha256": hashlib.sha256(data).hexdigest(), "enqueued_at": utcnow(), "enqueued_by": actor,
                      "meta": meta or {}, "status": "pending"}

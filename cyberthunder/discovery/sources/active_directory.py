@@ -13,7 +13,8 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
-from datetime import datetime, timezone
+import logging
+from datetime import datetime, timedelta, timezone
 
 from ..models import DiscoveredAsset, asset_id_for
 
@@ -21,6 +22,9 @@ AD_COMMAND = ("Get-ADComputer -Filter * -Properties OperatingSystem,OperatingSys
               "LastLogonDate,Enabled,DNSHostName | Select-Object Name,DNSHostName,IPv4Address,OperatingSystem,"
               "OperatingSystemVersion,LastLogonDate,Enabled | ConvertTo-Json -Depth 3")
 
+log = logging.getLogger(__name__)
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _MS_DATE = re.compile(r"/Date\((-?\d+)(?:[+-]\d{4})?\)/")
 
 
@@ -39,7 +43,13 @@ def _date(value) -> str | None:
         value = value.get("value") or value.get("DateTime")
     m = _MS_DATE.search(str(value))
     if m:
-        return datetime.fromtimestamp(int(m.group(1)) / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # DateTime.MinValue (never logged on) is /Date(-62135596800000)/; fromtimestamp rejects negatives on
+        # Windows, so add the offset to the epoch instead, and treat anything up to 1601 as "not set"
+        try:
+            when = _EPOCH + timedelta(milliseconds=int(m.group(1)))
+        except (OverflowError, OSError, ValueError):
+            return None
+        return None if when.year <= 1601 else when.strftime("%Y-%m-%dT%H:%M:%SZ")
     return str(value)
 
 
@@ -63,27 +73,34 @@ def parse_ad_computers(text: str) -> list[DiscoveredAsset]:
     for r in rows:
         if not isinstance(r, dict) or not r.get("Name"):
             continue
-        name, dns = str(r["Name"]), r.get("DNSHostName") or None
-        os_name, os_ver = r.get("OperatingSystem") or None, r.get("OperatingSystemVersion") or None
-        enabled = r.get("Enabled")
-        enabled = True if enabled is None else bool(enabled)
-        role = role_from_os(os_name)
-        address = _ip(r.get("IPv4Address"))
-        a = DiscoveredAsset(address=address, hostname=dns or name, os_guess=os_name, sources=["active_directory"])
-        if not address:
-            a.id = asset_id_for(None, f"ad:{(dns or name).lower()}")
-        a.facts.update({k: v for k, v in {
-            "ad_name": name, "dns_hostname": dns, "os_name": os_name, "os_version": os_ver,
-            "last_logon": _date(r.get("LastLogonDate")), "ad_enabled": enabled, "windows_role": role,
-        }.items() if v is not None})
-        if os_name and "windows" in os_name.lower():
-            a.facts["platform_type"] = "windows"
-        a.evidence.append(f"active directory: computer {name} OperatingSystem '{os_name or '?'}'"
-                          f"{(' ' + os_ver) if os_ver else ''} ({role})")
-        notes = [role] if role != "unknown" else []
-        if not enabled:
-            a.evidence.append(f"active directory: computer account {name} is disabled")
-            notes.append("disabled computer account")
-        a.notes = "; ".join(notes)
-        out.append(a)
+        try:
+            out.append(_computer(r))
+        except (TypeError, ValueError, AttributeError, OverflowError, OSError) as e:  # one odd row only
+            log.warning("skipping AD computer %r: %s", r.get("Name"), e)
     return out
+
+
+def _computer(r: dict) -> DiscoveredAsset:
+    name, dns = str(r["Name"]), r.get("DNSHostName") or None
+    os_name, os_ver = r.get("OperatingSystem") or None, r.get("OperatingSystemVersion") or None
+    enabled = r.get("Enabled")
+    enabled = True if enabled is None else bool(enabled)
+    role = role_from_os(os_name)
+    address = _ip(r.get("IPv4Address"))
+    a = DiscoveredAsset(address=address, hostname=dns or name, os_guess=os_name, sources=["active_directory"])
+    if not address:
+        a.id = asset_id_for(None, f"ad:{(dns or name).lower()}")
+    a.facts.update({k: v for k, v in {
+        "ad_name": name, "dns_hostname": dns, "os_name": os_name, "os_version": os_ver,
+        "last_logon": _date(r.get("LastLogonDate")), "ad_enabled": enabled, "windows_role": role,
+    }.items() if v is not None})
+    if os_name and "windows" in os_name.lower():
+        a.facts["platform_type"] = "windows"
+    a.evidence.append(f"active directory: computer {name} OperatingSystem '{os_name or '?'}'"
+                      f"{(' ' + os_ver) if os_ver else ''} ({role})")
+    notes = [role] if role != "unknown" else []
+    if not enabled:
+        a.evidence.append(f"active directory: computer account {name} is disabled")
+        notes.append("disabled computer account")
+    a.notes = "; ".join(notes)
+    return a

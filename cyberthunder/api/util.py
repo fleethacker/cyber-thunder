@@ -7,6 +7,8 @@ import json
 import logging
 import re
 import threading
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
@@ -26,15 +28,21 @@ LIVE_STATES = {"proposed", "approved", "applying", "applied"}
 
 
 # -- identity ---------------------------------------------------------------------------
+# Prefixed machine identities ("agent:planner", "llm:explain") and the standing-policy identity ("policy:...")
+# are never a person, whatever follows the colon.
+MACHINE_PREFIXES = tuple(f"{a}:" for a in sorted(AGENT_ACTORS)) + ("policy:",)
+
+
 def require_actor(x_actor: str | None = Header(default=None)) -> str:
     """Mutating requests must name the human acting. Machine identities are refused here so they can never
     reach an approval, denial, kill switch or policy edge through the API."""
     if not (x_actor or "").strip():
         raise HTTPException(400, "X-Actor header is required: type your name in Settings before making changes")
-    actor = get_actor(x_actor)
-    low = actor.lower()
-    if low in AGENT_ACTORS or low.startswith("policy:"):
-        raise HTTPException(400, f"actor {actor!r} is reserved for the machine; a named person must act")
+    from cyberthunder.control.identity import require_human
+    try:
+        actor = require_human(get_actor(x_actor))
+    except PermissionError as e:
+        raise HTTPException(400, str(e)) from None
     if len(actor) > 128:
         raise HTTPException(400, "actor name too long")
     return actor
@@ -159,6 +167,57 @@ def proposal_for(ctx: "AppContext", finding_id: str) -> Proposal | None:
         return (live or ps or [None])[-1]
 
 
+def _parse_ts(v: str | None) -> datetime | None:
+    try:
+        t = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def _verified_at(p: Proposal | None) -> str | None:
+    if p is None or p.state.value != "verified":
+        return None
+    for h in reversed(p.history or []):
+        if h.get("state") == "verified":
+            return h.get("ts")
+    return p.decided_at or p.created_at
+
+
+def remediated_by(finding: Finding, p: Proposal | None) -> dict | None:
+    """An open finding whose current proposal was verified after the finding was collected has been fixed,
+    even though the scan that reported it still says open. A later scan that finds it open again wins."""
+    if not finding.is_open:
+        return None
+    vts = _verified_at(p)
+    if vts is None:
+        return None
+    v, c = _parse_ts(vts), _parse_ts(finding.collected_at)
+    if v is not None and c is not None and v < c:
+        return None
+    return {"proposal_id": p.id, "verified_at": vts, "scan_status": finding.status.value}
+
+
+def effective(finding: Finding, p: Proposal | None) -> Finding:
+    """The finding as it stands now: a verified fix makes an open result not_a_finding."""
+    return replace(finding, status=Status.NOT_A_FINDING) if remediated_by(finding, p) else finding
+
+
+def current_proposals(ctx: "AppContext") -> dict[str, Proposal]:
+    """finding id -> its current proposal (newest live one, else newest of any state), from one gate read."""
+    try:
+        props = list(ctx.gate.list())
+    except Exception as exc:  # noqa: BLE001  a missing gate leaves findings as scanned
+        log.debug("proposal listing failed: %s", exc)
+        return {}
+    out: dict[str, Proposal] = {}
+    for p in props:
+        cur = out.get(p.finding_id)
+        if cur is None or p.state.value not in TERMINAL_STATES or cur.state.value in TERMINAL_STATES:
+            out[p.finding_id] = p
+    return out
+
+
 def finding_plus(ctx: "AppContext", finding: Finding, with_proposal: bool = True) -> dict:
     d = finding.to_dict()
     d["cat"] = finding.severity.cat
@@ -168,6 +227,10 @@ def finding_plus(ctx: "AppContext", finding: Finding, with_proposal: bool = True
     if with_proposal:
         p = proposal_for(ctx, finding.id)
         d["proposal"] = {"id": p.id, "state": p.state.value} if p is not None else None
+        rem = remediated_by(finding, p)
+        d["remediated"] = rem
+        if rem is not None:
+            d["status"] = Status.NOT_A_FINDING.value
     return d
 
 
@@ -262,11 +325,15 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
         raise KeyError(f"unknown scan {scan_id!r}")
     sid = scan_id or ctx.store.latest_scan_id()
     all_f = ctx.store.load_findings(sid) if sid else []
-    sel = filter_findings(all_f, **filters)
+    # Filters and the summary count a verified fix as closed, so the open totals move when a fix lands.
+    props = current_proposals(ctx) if all_f else {}
+    scanned = {f.id: f for f in all_f}
+    now = [effective(f, props.get(f.id)) for f in all_f]
+    sel = filter_findings(now, **filters)
     sel.sort(key=lambda f: (-f.severity.rank, f.status != Status.OPEN, f.host, f.rule_version or f.rule_id))
     page = sel[offset: offset + limit]
-    return {"findings": [finding_plus(ctx, f) for f in page], "total": len(sel), "scan_id": sid,
-            "summary": summarize(all_f), "limit": limit, "offset": offset}
+    return {"findings": [finding_plus(ctx, scanned.get(f.id, f)) for f in page], "total": len(sel), "scan_id": sid,
+            "summary": summarize(now), "limit": limit, "offset": offset}
 
 
 # -- link / outbox fallbacks ----------------------------------------------------------------------
@@ -292,14 +359,21 @@ def outbox_pending(ctx: "AppContext") -> int:
     svc = getattr(ctx, "ingest", None)
     if svc is not None:
         try:
-            ob = call_first(svc, ("outbox", "outbox_state"))
-            return len((to_plain(ob) or {}).get("pending", []))
+            ob = getattr(svc, "outbox", None)
+            if ob is not None and callable(getattr(ob, "list", None)):
+                listing = ob.list()           # the service exposes its Outbox object
+            else:
+                listing = call_first(svc, ("outbox", "outbox_state"))
+            return len((to_plain(listing) or {}).get("pending", []))
         except Exception as e:  # noqa: BLE001
             log.debug("ingest outbox unavailable: %s", e)
     d = ctx.store.outbox_dir
     if not d.exists():
         return 0
-    return sum(1 for p in d.iterdir() if p.is_file() and not p.name.endswith(".tmp") and not p.name.startswith("."))
+    files = [p for p in d.iterdir() if p.is_file() and not p.name.endswith(".tmp") and not p.name.startswith(".")]
+    # Each queued entry is a payload plus its .meta.json; count entries, not files.
+    metas = [p for p in files if p.name.endswith(".meta.json")]
+    return len(metas) if metas else len(files)
 
 
 # -- multipart (stdlib; keeps the dependency list as it is) -----------------------------------------

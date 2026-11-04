@@ -19,6 +19,7 @@ from __future__ import annotations
 import inspect
 
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -170,8 +171,22 @@ def outbox(ctx=CtxDep) -> dict:
             raise NotImplementedError
         listing = ob.list() if callable(getattr(ob, "list", None)) else (ob() if callable(ob) else ob)
         out = to_plain(listing) or {}
+        for key in ("pending", "synced"):
+            out[key] = [_outbox_entry(e) for e in (out.get(key) or [])]
         out["connected"] = bool(util.link_state(ctx).get("connected", False))
         return out
+
+
+def _outbox_entry(e: Any) -> Any:
+    """The documented entry shape (created_at, seconds, id) alongside the outbox's own field names."""
+    if not isinstance(e, dict):
+        return e
+    e = dict(e)
+    e.setdefault("created_at", e.get("enqueued_at"))
+    e.setdefault("seconds", e.get("transfer_seconds"))
+    e.setdefault("synced_at", None)
+    e.setdefault("id", e.get("name"))
+    return e
 
 
 @router.post("/outbox/sync")

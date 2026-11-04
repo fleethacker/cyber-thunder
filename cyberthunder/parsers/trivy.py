@@ -27,6 +27,10 @@ def _trim(text: str | None, limit: int = 600) -> str:
 
 def parse_trivy(path: str | Path, *, target: "Target", source: str = "trivy") -> list[Finding]:
     doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(doc, list):                      # Trivy v1 / older schema: a bare list of results
+        doc = {"Results": doc}
+    if not isinstance(doc, dict):
+        raise ValueError("unsupported Trivy report shape")
     findings: list[Finding] = []
     seen: set[tuple[str, str]] = set()
     for res in doc.get("Results") or []:

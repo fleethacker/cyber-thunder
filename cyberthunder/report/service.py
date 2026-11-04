@@ -81,14 +81,16 @@ class ReportService:
         return res
 
     # -- sync on reconnect ------------------------------------------------------------
-    def render_kind(self, kind: str, scan_id: str | None = None) -> tuple[str, str]:
+    def render_kind(self, kind: str, scan_id: str | None = None, host: str | None = None) -> tuple[str, str]:
         """(filename, text) for a report in its portable form: html for pages, csv for the POA&M, json for data."""
         if kind == "commander":
             return f"commander-{scan_id or 'latest'}.html", self.commander(scan_id, "html")
         if kind == "poam":
             return f"poam-{scan_id or 'latest'}.csv", self.poam_csv(scan_id)
         if kind == "checklist":
-            return f"checklist-{scan_id or 'latest'}.cklb", json.dumps(self.checklist_cklb(scan_id), indent=2)
+            doc = self.checklist_cklb(scan_id, host)
+            name = doc["target_data"].get("host_name") or host or "host"
+            return f"checklist-{name}-{scan_id or 'latest'}.cklb", json.dumps(doc, indent=2)
         if kind == "fleet":
             return "path-to-fleet.html", self.fleet("html")
         if kind == "friction":
@@ -107,7 +109,7 @@ class ReportService:
         fn = next((getattr(outbox, n) for n in ("enqueue", "add", "put", "push") if callable(getattr(outbox, n, None))), None)
         if fn is None:
             raise ReportError("cannot queue: the ingest outbox has no enqueue method")
-        filename, text = self.render_kind(kind, scan_id)
+        filename, text = self.render_kind(kind, scan_id, host)
         kwargs, positional_free = {}, True
         for pname, param in inspect.signature(fn).parameters.items():
             if pname == "kind":
@@ -117,7 +119,7 @@ class ReportService:
             elif pname in _CONTENT_PARAMS:
                 kwargs[pname] = text
             elif pname in ("meta", "metadata"):
-                kwargs[pname] = {"report": kind, "scan_id": scan_id, "bytes": len(text.encode("utf-8"))}
+                kwargs[pname] = {"report": kind, "scan_id": scan_id, "host": host, "bytes": len(text.encode("utf-8"))}
             elif pname == "actor":
                 kwargs[pname] = actor
             elif param.default is inspect.Parameter.empty and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY):

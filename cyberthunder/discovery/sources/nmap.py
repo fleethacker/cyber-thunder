@@ -153,6 +153,14 @@ def live_hosts(text: str) -> list[str]:
     return out
 
 
+def _int(value: str | None) -> int | None:
+    """An nmap numeric attribute, or None when it is missing or not a number."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _port(p: ET.Element) -> tuple[OpenPort, dict] | None:
     st = p.find("state")
     if st is None or st.get("state") != "open":
@@ -165,14 +173,19 @@ def _port(p: ET.Element) -> tuple[OpenPort, dict] | None:
     scripts = {s.get("id", ""): (s.get("output") or "").strip() for s in p.findall("script")}
     cpes = [c.text.strip() for c in (svc.findall("cpe") if svc is not None else []) if c.text]
     banner = scripts.get("banner") or " ".join(x for x in (product, version, f"({extra})" if extra else "") if x)
-    op = OpenPort(port=int(p.get("portid", "0")), proto=p.get("protocol", "tcp"),
+    portid = _int(p.get("portid"))
+    if portid is None:
+        raise ValueError(f"port has no numeric portid ({p.get('portid')!r})")
+    op = OpenPort(port=portid, proto=p.get("protocol", "tcp"),
                   service=(f"{tunnel}/{name}" if tunnel and name else name), product=product, version=version,
                   banner=banner)
     meta = {"ostype": ostype, "extrainfo": extra, "scripts": scripts, "cpes": cpes}
     return op, meta
 
 
-def parse_xml(text: str) -> list[DiscoveredAsset]:
+def parse_xml(text: str, errors: list[str] | None = None) -> list[DiscoveredAsset]:
+    """Up hosts as DiscoveredAssets. A host whose XML cannot be read is skipped and described in
+    `errors` (when given) so one odd record does not cost the rest of the scope."""
     root = _root(text)
     scanned_at = utcnow()   # nmap's own timestr is locale-formatted; record when we read it instead
     assets: list[DiscoveredAsset] = []
@@ -180,63 +193,75 @@ def parse_xml(text: str) -> list[DiscoveredAsset]:
         st = h.find("status")
         if st is None or st.get("state") != "up":
             continue
-        address = mac = vendor = None
-        for a in h.findall("address"):
-            t = a.get("addrtype")
-            if t in ("ipv4", "ipv6") and not address:
-                address = a.get("addr")
-            elif t == "mac":
-                mac, vendor = a.get("addr"), a.get("vendor")
-        hostnames = [n.get("name") for n in h.findall("hostnames/hostname") if n.get("name")]
-        asset = DiscoveredAsset(address=address, mac=mac, vendor=vendor or vendor_for(mac),
-                                hostname=hostnames[0] if hostnames else None,
-                                first_seen=scanned_at, last_seen=scanned_at, sources=["nmap"])
-        if len(hostnames) > 1:
-            asset.facts["hostnames"] = hostnames
-        ostypes: list[str] = []
-        for p in h.findall("ports/port"):
-            got = _port(p)
-            if got is None:
-                continue
-            op, meta = got
-            asset.open_ports.append(op)
-            if meta["ostype"] and meta["ostype"] not in ostypes:
-                ostypes.append(meta["ostype"])
-            for c in meta["cpes"]:
-                asset.facts.setdefault("cpes", [])
-                if c not in asset.facts["cpes"]:
-                    asset.facts["cpes"].append(c)
-            if "snmp-sysdescr" in meta["scripts"]:
-                asset.facts["snmp_sysdescr"] = meta["scripts"]["snmp-sysdescr"]
-        asset.open_ports.sort(key=lambda o: (o.proto, o.port))
-        if ostypes:
-            asset.facts["service_ostypes"] = ostypes
-        matches = h.findall("os/osmatch")
-        if matches:
-            best = max(matches, key=lambda m: int(m.get("accuracy", "0") or 0))
-            asset.os_guess = best.get("name")
-            asset.os_accuracy = int(best.get("accuracy", "0") or 0)
-            asset.facts["osclass"] = [
-                {"vendor": c.get("vendor", ""), "family": c.get("osfamily", ""), "gen": c.get("osgen", ""),
-                 "type": c.get("type", ""), "accuracy": int(c.get("accuracy", "0") or 0)}
-                for c in best.findall("osclass")]
-        up = h.find("uptime")
-        if up is not None and up.get("seconds"):
-            asset.facts["uptime_s"] = int(up.get("seconds"))
-            if up.get("lastboot"):
-                asset.facts["lastboot"] = up.get("lastboot")
-        for s in h.findall("hostscript/script"):
-            out = (s.get("output") or "").strip()
-            if s.get("id") == "nbstat":
-                m = re.search(r"NetBIOS name:\s*([^\s,]+)", out)
-                if m:
-                    asset.facts["netbios_name"] = m.group(1)
-                    asset.hostname = asset.hostname or m.group(1)
-            elif s.get("id") == "smb-os-discovery":
-                _smb_os_discovery(asset, s, out)
-        tag_virtual(asset)
+        try:
+            asset = _host(h, scanned_at)
+        except (ValueError, TypeError, AttributeError) as e:
+            addr = next((a.get("addr") for a in h.findall("address") if a.get("addrtype") in ("ipv4", "ipv6")),
+                        None)
+            if errors is not None:
+                errors.append(f"skipped host {addr or '?'}: {e}")
+            continue
         assets.append(asset)
     return assets
+
+
+def _host(h: ET.Element, scanned_at: str) -> DiscoveredAsset:
+    address = mac = vendor = None
+    for a in h.findall("address"):
+        t = a.get("addrtype")
+        if t in ("ipv4", "ipv6") and not address:
+            address = a.get("addr")
+        elif t == "mac":
+            mac, vendor = a.get("addr"), a.get("vendor")
+    hostnames = [n.get("name") for n in h.findall("hostnames/hostname") if n.get("name")]
+    asset = DiscoveredAsset(address=address, mac=mac, vendor=vendor or vendor_for(mac),
+                            hostname=hostnames[0] if hostnames else None,
+                            first_seen=scanned_at, last_seen=scanned_at, sources=["nmap"])
+    if len(hostnames) > 1:
+        asset.facts["hostnames"] = hostnames
+    ostypes: list[str] = []
+    for p in h.findall("ports/port"):
+        got = _port(p)
+        if got is None:
+            continue
+        op, meta = got
+        asset.open_ports.append(op)
+        if meta["ostype"] and meta["ostype"] not in ostypes:
+            ostypes.append(meta["ostype"])
+        for c in meta["cpes"]:
+            asset.facts.setdefault("cpes", [])
+            if c not in asset.facts["cpes"]:
+                asset.facts["cpes"].append(c)
+        if "snmp-sysdescr" in meta["scripts"]:
+            asset.facts["snmp_sysdescr"] = meta["scripts"]["snmp-sysdescr"]
+    asset.open_ports.sort(key=lambda o: (o.proto, o.port))
+    if ostypes:
+        asset.facts["service_ostypes"] = ostypes
+    matches = h.findall("os/osmatch")
+    if matches:
+        best = max(matches, key=lambda m: _int(m.get("accuracy")) or 0)
+        asset.os_guess = best.get("name")
+        asset.os_accuracy = _int(best.get("accuracy")) or 0
+        asset.facts["osclass"] = [
+            {"vendor": c.get("vendor", ""), "family": c.get("osfamily", ""), "gen": c.get("osgen", ""),
+             "type": c.get("type", ""), "accuracy": _int(c.get("accuracy")) or 0}
+            for c in best.findall("osclass")]
+    up = h.find("uptime")
+    if up is not None and _int(up.get("seconds")) is not None:
+        asset.facts["uptime_s"] = _int(up.get("seconds"))
+        if up.get("lastboot"):
+            asset.facts["lastboot"] = up.get("lastboot")
+    for s in h.findall("hostscript/script"):
+        out = (s.get("output") or "").strip()
+        if s.get("id") == "nbstat":
+            m = re.search(r"NetBIOS name:\s*([^\s,]+)", out)
+            if m:
+                asset.facts["netbios_name"] = m.group(1)
+                asset.hostname = asset.hostname or m.group(1)
+        elif s.get("id") == "smb-os-discovery":
+            _smb_os_discovery(asset, s, out)
+    tag_virtual(asset)
+    return asset
 
 
 _SMB_LINES = {"os": r"^\s*OS:\s*(.+)$", "computer": r"^\s*Computer name:\s*(\S+)",

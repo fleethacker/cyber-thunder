@@ -81,8 +81,17 @@ src/pages/              Decisions, Findings, Assets, Scans, Audit, Reports, Sett
   `action.blocked`) with the proposal history as fallback for timestamps.
 - Keyboard on Decisions: `j`/`k` move, `a` approve, `d` deny (note modal), `enter` finding detail, `x` select.
 - Findings are paged 200 at a time server-side (limit/offset) instead of virtualizing.
-- Discovery: `docs/DISCOVERY.md` was not present when this was built, so Assets shows a placeholder card
-  that calls `GET /api/v1/discovery` and renders its JSON, or "not available" on 404.
+- Discovery (Assets page, `components/DiscoveryPanel.tsx`): scopes bar (`PUT /discovery/scopes` with a
+  reason), Run sweep with a mode select (polls `/discovery/runs/{id}`), a candidate table with
+  new/known/changed/missing badges and expandable evidence, Accept (name, type, transport, an explicit
+  in/out of scope choice with no default, required reason) and Ignore (required reason), and a Findings tab
+  from `/discovery/findings`. Assets from a simulated sweep can only be accepted with transport `simulated`.
+- Diff: proposals that are applied, verified, failed or rolled back show a Diff button (proposal card and the
+  finding drawer's proposal history) that renders `GET /proposals/{id}/diff`. Applied runbook proposals show
+  Verify (`POST /proposals/{id}/verify`).
+- Findings Source filter lists the sources present in the current scan, not a fixed list.
+- `tests/ui` checks that every import resolves to a tracked file, every client call names a server route,
+  and dist/index.html points at built assets. Rebuild dist with every source change.
 - Scope toggle: the API has no reason field on `PUT /targets/{id}`, so the required reason is appended to the
   target's `notes` in the same request; the change itself is audited as `scope.change`.
 - Audit download builds `audit.jsonl` client-side from paged `GET /audit` (there is no download route).

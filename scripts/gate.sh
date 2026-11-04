@@ -44,7 +44,12 @@ git grep -I -n -i -E "(password|passwd)[[:space:]]*[:=][[:space:]]*[\"'][^\"']{4
 step "secret scan" $BAD
 
 # 4. Whitespace errors in the latest commit (trailing spaces, stray conflict markers).
-git show --check --format= HEAD >/dev/null 2>&1
+# With uncommitted work, check the staged and unstaged changes; on a clean tree check the last commit.
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  git diff --check >/dev/null 2>&1 && git diff --cached --check >/dev/null 2>&1
+else
+  git show --check --format= HEAD >/dev/null 2>&1
+fi
 step "git diff --check" $?
 
 # 5. The handoff notes file must never be committed.

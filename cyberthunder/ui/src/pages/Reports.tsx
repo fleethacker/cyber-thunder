@@ -89,7 +89,7 @@ function OutboxCard() {
                 <Table.Thead><Table.Tr><Table.Th>Pending</Table.Th><Table.Th>Kind</Table.Th><Table.Th>Size</Table.Th><Table.Th>Queued</Table.Th></Table.Tr></Table.Thead>
                 <Table.Tbody>
                   {st.data.pending.map((o) => (
-                    <Table.Tr key={o.name}><Table.Td><Mono>{o.name}</Mono></Table.Td><Table.Td>{o.kind}</Table.Td><Table.Td>{fmtBytes(o.bytes)}</Table.Td><Table.Td>{fmtTime(o.created_at)}</Table.Td></Table.Tr>
+                    <Table.Tr key={o.id ?? o.name}><Table.Td><Mono>{o.name}</Mono></Table.Td><Table.Td>{o.kind}</Table.Td><Table.Td>{fmtBytes(o.bytes)}</Table.Td><Table.Td>{fmtTime(o.created_at)}</Table.Td></Table.Tr>
                   ))}
                 </Table.Tbody>
               </Table>
@@ -99,7 +99,7 @@ function OutboxCard() {
                 <Table.Thead><Table.Tr><Table.Th>Synced</Table.Th><Table.Th>Kind</Table.Th><Table.Th>Size</Table.Th><Table.Th>Took</Table.Th></Table.Tr></Table.Thead>
                 <Table.Tbody>
                   {st.data.synced.slice(-10).reverse().map((o) => (
-                    <Table.Tr key={`${o.name}-${o.synced_at}`}><Table.Td><Mono>{o.name}</Mono></Table.Td><Table.Td>{o.kind}</Table.Td><Table.Td>{fmtBytes(o.bytes)}</Table.Td><Table.Td>{fmtSeconds(o.seconds)}</Table.Td></Table.Tr>
+                    <Table.Tr key={o.id ?? `${o.name}-${o.synced_at}`}><Table.Td><Mono>{o.name}</Mono></Table.Td><Table.Td>{o.kind}</Table.Td><Table.Td>{fmtBytes(o.bytes)}</Table.Td><Table.Td>{fmtSeconds(o.seconds)}</Table.Td></Table.Tr>
                   ))}
                 </Table.Tbody>
               </Table>

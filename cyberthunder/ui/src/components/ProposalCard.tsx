@@ -1,12 +1,13 @@
 // One decision. Answers the five questions in plain words:
 // what is wrong, why it matters, what will change, could it break something, how to undo.
 import { Badge, Button, Card, Checkbox, Divider, Group, Stack, Text, Title, Tooltip } from '@mantine/core';
-import { IconArrowBackUp, IconCheck, IconPlayerPlay, IconX } from '@tabler/icons-react';
+import { IconArrowBackUp, IconCheck, IconChecklist, IconPlayerPlay, IconX } from '@tabler/icons-react';
 import type { ReactNode } from 'react';
 import type { ProposalPlus } from '../api/types';
 import { fmtAgo, label } from '../lib/format';
 import { ApplyTimeline } from './ApplyTimeline';
 import { CitationChips } from './CitationChips';
+import { DiffButton } from './ProposalDiff';
 import { RiskTagsForFix } from './FixPanel';
 import { AssetIcon, CodeBlock, Collapsible, Mono, SeverityBadge, SimulatedBadge, StateBadge } from './common';
 
@@ -15,6 +16,8 @@ export interface ProposalActions {
   deny: (p: ProposalPlus) => void;
   apply: (p: ProposalPlus) => void;
   rollback: (p: ProposalPlus) => void;
+  /** record that a runbook (manual) change was carried out; the server rescans and sets the state */
+  verify?: (p: ProposalPlus) => void;
   openFinding: (findingId: string) => void;
 }
 
@@ -154,6 +157,10 @@ export function ProposalCard({
           {(p.state === 'applied' || p.state === 'verified') && (
             <Button size="md" color="violet" variant="light" leftSection={<IconArrowBackUp size={18} />} loading={busy} onClick={() => actions.rollback(p)}>Rollback</Button>
           )}
+          {p.state === 'applied' && fix?.kind === 'runbook' && actions.verify && (
+            <Button size="md" color="teal" variant="light" leftSection={<IconChecklist size={18} />} loading={busy} onClick={() => actions.verify?.(p)}>Verify</Button>
+          )}
+          <DiffButton proposalId={p.id} state={p.state} />
           <Button size="md" variant="subtle" onClick={() => actions.openFinding(p.finding_id)}>Finding detail</Button>
         </Group>
       </Stack>

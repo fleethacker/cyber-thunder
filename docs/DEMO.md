@@ -1,8 +1,7 @@
 # Demo runbook (10 minutes)
 
-Commands and clicks follow [UI.md](UI.md) and [API.md](API.md). Anything marked *as designed* has not been
-verified against the merged build; run the rehearsal below and correct this file where it differs.
-Run `python -m cyberthunder <cmd> --help` for exact flags.
+Commands and clicks follow [UI.md](UI.md) and [API.md](API.md). The CLI commands below were run against the
+merged build from a clean state directory. Run `python -m cyberthunder <cmd> --help` for exact flags.
 
 ## Before you go on stage
 
@@ -25,8 +24,9 @@ python -m cyberthunder serve
 ```
 
 Open <http://127.0.0.1:8000>. Settings: actor = your name and rank (for example `IT1 Smith`). Confirm the header
-shows the green chain badge, the link indicator, and the model indicator. Have the STIG release file and the
-bulletin JSON for the demo in a folder you can reach from the file picker. Keep a second terminal open in the
+shows the green chain badge, the link indicator, and the model indicator. Have the STIG release file
+(`tests/fixtures/windows/w11_subset-xccdf.xml`) and the bulletin JSON (`tests/fixtures/ingest/iavm_openssh.json`)
+in a folder you can reach from the file picker. Keep a second terminal open in the
 repo for the CLI steps.
 
 ## Timing
@@ -49,6 +49,8 @@ repo for the CLI steps.
 
 ### 1. The link is throttled; a new STIG release arrives as a delta (1:00)
 
+Two release pairs work for this step. The repository ships `tests/fixtures/windows/w11_subset-xccdf.xml` (old) and `tests/fixtures/ingest/w11_subset_new-xccdf.xml` (new). If `range/downloads/` holds the real DISA pair `U_MS_Windows_11_V1R3_STIG_SCAP_1-2_Benchmark.zip` and `U_MS_Windows_11_V2R11_STIG_SCAP_1-3_Benchmark.zip`, use those: the delta is 15 rules added, 204 changed, 6 removed; the full download is 1.4 MB (200 s at 56 kbps) and the compressed delta 27 KB (4.4 s), 51 times smaller.
+
 Click: **Scans**, Link controls: set 56 kbps, 500 ms, connected. Drop the new STIG release into the Ingest panel.
 The delta summary shows rules added, removed and changed, and sizes: full download vs delta vs compressed, with
 transfer time at the current link speed for each. The **Rescan changed rules** button reruns only the changed
@@ -57,24 +59,38 @@ rules (you can press it here or fold it into step 3).
 CLI equivalent:
 
 ```bash
-python -m cyberthunder link --kbps 56 --latency 500
+python -m cyberthunder link set --kbps 56 --latency-ms 500 --connected true
 ```
 
 ```bash
-python -m cyberthunder ingest stig <release-file>
+python -m cyberthunder ingest stig tests/fixtures/windows/w11_subset-xccdf.xml
 ```
+
+On a fresh state the first release has nothing to compare with, so the summary shows only added rules. To show
+changed and removed rules, pass the previous release: `ingest stig <new.xml> --old <old.xml>`. The repository
+ships a single release file, so an old and new pair has to be prepared before the event.
 
 Say: "This is a 56 kilobit link. The full benchmark would take minutes; the compressed delta is a fraction of
 that and tells us exactly which rules changed, so we only recheck those."
 
 ### 2. Discovery finds the enclave's assets and a rogue device (0:45)
 
-Click: **Assets**. Inventory shows one asset per type, each with a simulated badge. Click **Discover** on the
-network entry; the facts panel lists a device that is not in inventory. Leave it out of scope (toggle stays off).
+Click: **Assets**. Inventory shows one asset per type, each with a simulated badge. In the **Discovery** card, Mode shows `simulated` (no scopes saved); click **Run sweep**. When the run shows `finished`, the Candidates table lists two `new` devices that are not in inventory: 192.168.56.66 (Raspberry Pi, `consumer/iot device`) and 192.168.56.3 (an unmanaged switch seen over CDP). The **Findings** tab shows `discovery:unknown_asset` (T1200, T1046), `discovery:consumer_device` and `discovery:new_listener` (tcp/4444). Optional: click **Accept** on 192.168.56.66, pick a type, choose **Out of scope**, give a reason, Accept. It joins the inventory but stays out of every scan.
 
 ```bash
-python -m cyberthunder discover
+python -m cyberthunder discover scopes --add 192.168.56.0/24 --reason "demo enclave"
 ```
+
+```bash
+python -m cyberthunder discover sweep --mode simulated --wait
+```
+
+```bash
+python -m cyberthunder discover list --status new
+```
+
+A sweep refuses to run until a scope is saved, hence the first command. The list shows two new devices, one of
+them a consumer/iot device.
 
 Say: "Discovery is read-only. The inventory is the scope; nothing outside it is ever touched. The unknown
 device is flagged for a human, not scanned."
@@ -88,6 +104,13 @@ Open **Findings**: Linux host, switch config, k3s cluster, container host, Windo
 ```bash
 python -m cyberthunder scan
 ```
+
+```bash
+python -m cyberthunder ingest bulletin tests/fixtures/ingest/iavm_openssh.json
+```
+
+Ingest the bulletin after the scan: it matches against the package inventory the scan collected, and before a
+scan it matches nothing. After a scan it reports the affected Linux host.
 
 Say: "Real checks, not guesses. Every finding carries a STIG id, CCI, CVE or ATT&CK technique."
 
@@ -115,8 +138,19 @@ something, how to undo). Keyboard: `j` to move, `a` approve, `d` deny. Approve t
 duplicate uid-0 account removal; deny one with a note ("needs change window").
 
 ```bash
-python -m cyberthunder propose <finding-id>
+python -m cyberthunder proposals list
 ```
+
+```bash
+python -m cyberthunder proposals approve <proposal-id>
+```
+
+```bash
+python -m cyberthunder proposals deny <proposal-id> --note "needs change window"
+```
+
+The scan already creates a proposal for every finding with a library fix. `proposals show <proposal-id>` prints
+the `finding_id` to use with `explain` and `propose`.
 
 Say: "Nothing happens without a named human. The machine can propose; it cannot approve."
 
@@ -125,6 +159,10 @@ Say: "Nothing happens without a named human. The machine can propose; it cannot 
 Click **Apply** on an approved card. The timeline fills in: scope check, before-state captured, applied,
 verified, each with a time and audit sequence number.
 
+```bash
+python -m cyberthunder apply <proposal-id>
+```
+
 Say: "Applied from the vetted library, then rescanned. Verified means the check now passes, not that the
 command exited zero."
 
@@ -132,7 +170,15 @@ command exited zero."
 
 Click: **Settings**, Demo controls, turn on "force verification failure on next apply" (a demonstration control,
 and say so). Back on **Decisions**, apply the second fix you approved in step 6. Timeline: applied, verification failed,
-rolled back. Click **Diff**: before and after match, so the host is back where it started.
+rolled back. Click **Diff** on the proposal card (also in the finding drawer's proposal history): before and after match, so the host is back where it started.
+
+```bash
+python -m cyberthunder apply <proposal-id> --simulate-verify-fail
+```
+
+```bash
+python -m cyberthunder diff <proposal-id>
+```
 
 Say: "I rigged verification to fail. The system put the host back by itself and logged why. The Sailor never
 has to trust the fix, only the rollback."
@@ -141,6 +187,14 @@ has to trust the fix, only the rollback."
 
 Approve one more proposal but do not apply it. Click the red **Kill switch**, enter a reason. The header turns
 red. Click **Apply** on the queued card: refused (423), nothing runs. Release the switch with a reason.
+
+```bash
+python -m cyberthunder kill engage --reason "demo"
+```
+
+```bash
+python -m cyberthunder kill release --reason "demo over"
+```
 
 ```bash
 python -m cyberthunder audit tail

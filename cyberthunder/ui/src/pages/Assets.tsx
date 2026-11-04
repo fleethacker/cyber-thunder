@@ -169,7 +169,7 @@ export default function Assets() {
       </AsyncView>
       {open.error && <ErrorBox error={`Open finding counts unavailable: ${open.error}`} />}
 
-      <DiscoveryPanel />
+      <DiscoveryPanel onInventoryChanged={() => void st.reload()} />
 
       <TargetForm opened={form.open} initial={form.target} onClose={() => setForm({ open: false, target: null })} onSaved={() => void st.reload()} />
       <ConfirmReasonModal

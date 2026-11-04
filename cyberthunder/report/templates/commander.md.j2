@@ -30,9 +30,19 @@ No open findings.
 None found by the hunt checks in this scan.
 {% endif %}
 
+{% if r.discovery %}
+## Unknown devices and changes on the enclave
+
+| Host or address | Item | Severity |
+|---|---|---|
+{% for d in r.discovery %}
+| {{ d.host }} | {{ d.title }} | {{ d.severity }} |
+{% endfor %}
+
+{% endif %}
 ## Decisions
 
-Pending {{ r.decisions.proposed }} | Approved {{ r.decisions.approved }} | Applied {{ r.decisions.applied }} | Verified {{ r.decisions.verified }} | Rolled back {{ r.decisions.rolled_back }} | Denied {{ r.decisions.denied }}
+Pending {{ r.decisions.proposed }} | Approved {{ r.decisions.approved }} | Applied {{ r.decisions.applied }} | Verified {{ r.decisions.verified }} | Rolled back {{ r.decisions.rolled_back }} | Failed {{ r.decisions.failed }} | Denied {{ r.decisions.denied }}
 
 {% if r.verified %}
 | Verified change | Host | Approved by | Verified at (UTC) |
@@ -42,6 +52,14 @@ Pending {{ r.decisions.proposed }} | Approved {{ r.decisions.approved }} | Appli
 {% endfor %}
 {% else %}
 No verified changes yet.
+{% endif %}
+{% if r.reverted %}
+
+| Reverted or failed change | Host | Approved by | When (UTC) | Why |
+|---|---|---|---|---|
+{% for x in r.reverted %}
+| {{ x.title }} | {{ x.host }} | {{ x.decided_by or "-" }} | {{ x.at or "-" }} | {{ x.why }} |
+{% endfor %}
 {% endif %}
 
 ## Top risks

@@ -108,6 +108,7 @@ export default function Decisions() {
     deny: (p) => { setDenyError(null); setDenyFor([p]); },
     apply: (p) => void run(p, () => api.apply(p.id), `Applying: ${p.title}`),
     rollback: (p) => void run(p, () => api.rollback(p.id), `Rollback started: ${p.title}`),
+    verify: (p) => void run(p, () => api.verify(p.id), `Verification recorded: ${p.title}`),
     openFinding: (id) => setDrawer(id),
   }), [run]);
 

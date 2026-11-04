@@ -19,7 +19,7 @@ from cyberthunder.remediation.library import FixEntry
 
 from .checks import CIS_RULES, LOCAL_RULES, stig
 from .hunt import HUNT_RULES
-from .kubectl import ObjRef
+from .kubectl import ObjRef, ref_from_finding
 
 ASSET = "kubernetes"
 GET_OBJECT = "kubectl get <kind> <name> -n <namespace> -o json"
@@ -242,6 +242,26 @@ def _runbooks() -> list[FixEntry]:
         ("k8s:runbook:host-listener", "Take the pod off the host network", ["k8s:hunt:host-listener"],
          ["Confirm with the system owner why the pod needs hostNetwork. If it does not, remove hostNetwork and expose "
           "it through a Service; if it is not authorized, delete the owning object."], HUNT_RULES["listener"].refs),
+        # the same changes for objects the deployment patches cannot touch (bare pods, CronJobs)
+        ("k8s:runbook:drop-privileged", "Run the container unprivileged (pod or CronJob manifest)", ["k8s:cis:5.2.2"],
+         ["Edit the manifest of the pod or CronJob and set securityContext.privileged: false and "
+          "allowPrivilegeEscalation: false on the container.",
+          "A bare pod cannot be changed in place: delete it and re-create it from the corrected manifest. A CronJob "
+          "picks up the change on its next run. Re-run the scan."], CIS_RULES["privileged"].refs),
+        ("k8s:runbook:no-escalation", "Set allowPrivilegeEscalation: false (pod or CronJob manifest)", ["k8s:cis:5.2.6"],
+         ["Edit the manifest of the pod or CronJob and set securityContext.allowPrivilegeEscalation: false on the container.",
+          "Re-create a bare pod from the corrected manifest; a CronJob uses it on its next run. Re-run the scan."],
+         CIS_RULES["escalation"].refs),
+        ("k8s:runbook:host-namespaces", "Stop sharing host PID/IPC/network namespaces (pod or CronJob manifest)",
+         ["k8s:cis:5.2.3", "k8s:cis:5.2.4", "k8s:cis:5.2.5"],
+         ["Edit the manifest of the pod or CronJob and remove hostPID, hostIPC and hostNetwork (or set them false).",
+          "Re-create a bare pod from the corrected manifest; a CronJob uses it on its next run. Re-run the scan."],
+         CIS_RULES["hostPID"].refs),
+        ("k8s:runbook:remove-rogue-workload", "Remove the controller that runs the rogue pod",
+         ["k8s:hunt:host-escape", "k8s:hunt:unexpected-system-pod", "k8s:hunt:masquerade"],
+         ["Save the owning object as evidence: 'kubectl get <kind> <name> -n <namespace> -o yaml'.",
+          "Delete the owning Deployment, DaemonSet or CronJob (deleting only its pods lets the controller recreate them).",
+          "Treat the nodes the pods ran on as compromised and re-run the scan."], HUNT_RULES["escape"].refs),
         ("k8s:runbook:remove-dashboard", "Remove the Kubernetes dashboard", ["CNTR-K8-000420"],
          ["Delete the dashboard deployment, service and service account "
           "('kubectl delete ns kubernetes-dashboard' if it was installed in its own namespace)."], stig("CNTR-K8-000420").refs),
@@ -253,3 +273,32 @@ def _runbooks() -> list[FixEntry]:
 
 def kubernetes_fixes() -> list[FixEntry]:
     return _manifest_fixes() + _runbooks()
+
+
+# When a manifest fix's template cannot be applied to the finding's object kind (a deployment patch for a bare
+# pod, a pod delete for a deployment), the finding points at this runbook instead, so the approver is never
+# offered a change that is bound to fail at execute.
+KIND_FALLBACK = {
+    "k8s:fix:deployment-drop-privileged": "k8s:runbook:drop-privileged",
+    "k8s:fix:deployment-no-escalation": "k8s:runbook:no-escalation",
+    "k8s:fix:deployment-host-namespaces": "k8s:runbook:host-namespaces",
+    "k8s:fix:delete-pod": "k8s:runbook:remove-rogue-workload",
+}
+
+
+def point_at_applicable_fix(findings: list) -> list:
+    """Set fix_ref to the runbook fallback on findings whose first manifest fix does not fit the object kind."""
+    manifests = [e for e in kubernetes_fixes() if e.fix_ref in META]
+    for f in findings:
+        if f.fix_ref or not f.rule_version:
+            continue
+        entry = next((e for e in manifests if f.rule_version in e.applies_to), None)
+        if entry is None:
+            continue
+        try:
+            ref = ref_from_finding(f)
+        except ValueError:
+            continue
+        if ref.kind not in META[entry.fix_ref].kinds:
+            f.fix_ref = KIND_FALLBACK.get(entry.fix_ref)
+    return findings

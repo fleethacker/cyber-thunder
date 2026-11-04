@@ -13,7 +13,6 @@ import { useAsync, useLocalPref } from '../lib/hooks';
 
 const PAGE = 200;
 const STATUSES = ['open', 'not_a_finding', 'not_applicable', 'not_reviewed', 'error'];
-const SOURCES = ['openscap', 'scc', 'evaluate-stig', 'powerstig', 'hunt', 'cve', 'iavm'];
 
 function Yes({ v, tip }: { v: boolean; tip: string }) {
   return (
@@ -41,6 +40,17 @@ export default function Findings() {
     asset_type: assetType.join(','), host: host.join(','), limit: PAGE, offset: (page - 1) * PAGE,
   }), key);
   const hosts = st.data?.summary?.hosts ?? [];
+  // Source options are the sources present in this scan, never a fixed list: the adapters name their own
+  // (native, windows-stig, cisco_ios, kubernetes, containers, hunt, discovery ...). Use the summary's list
+  // when the server sends one; otherwise read every finding of the scan once and collect them.
+  const scanId = st.data?.scan_id ?? null;
+  const summarySources = st.data?.summary?.sources;
+  const allSources = useAsync<string[]>(async () => {
+    if (summarySources || !scanId) return summarySources ?? [];
+    const all = await api.findings({ scan_id: scanId, limit: 5000 });
+    return Array.from(new Set(all.findings.map((f) => f.source).filter(Boolean))).sort();
+  }, [scanId, summarySources ? summarySources.join() : null]);
+  const sources = Array.from(new Set([...(summarySources ?? allSources.data ?? []), ...source])).sort();
 
   const explainAll = async () => {
     setExplaining(true);
@@ -79,7 +89,7 @@ export default function Findings() {
         <MultiSelect label="Severity" data={[{ value: 'high', label: 'CAT I' }, { value: 'medium', label: 'CAT II' }, { value: 'low', label: 'CAT III' }, { value: 'info', label: 'Info' }]} value={severity} onChange={reset(setSeverity)} clearable w={180} placeholder="All" />
         <MultiSelect label="Host" data={hosts} value={host} onChange={reset(setHost)} clearable searchable w={200} placeholder="All" />
         <MultiSelect label="Asset type" data={ASSET_TYPES} value={assetType} onChange={reset(setAssetType)} clearable w={180} placeholder="All" />
-        <MultiSelect label="Source" data={SOURCES} value={source} onChange={reset(setSource)} clearable w={180} placeholder="All" />
+        <MultiSelect label="Source" data={sources} value={source} onChange={reset(setSource)} clearable w={180} placeholder="All" />
       </Group>
 
       <AsyncView

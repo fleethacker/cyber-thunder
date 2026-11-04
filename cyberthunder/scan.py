@@ -2,6 +2,9 @@
 persist findings per scan run, audit everything, then (optionally) auto-propose fixes and precompute
 explanations in the background.
 
+Scans honour the kill switch: start() refuses while it is engaged, a running scan checks it before each target
+and marks the targets it has not reached 'stopped', and nothing is proposed after a stopped scan.
+
 ScanRun lives at store.scans/<id>/run.json; findings at findings.json; raw artifacts under raw/<target_id>/.
 """
 from __future__ import annotations
@@ -13,6 +16,7 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Iterable
 
 from cyberthunder.adapters.base import MODULES
+from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.findings.schema import Finding, summarize, utcnow
 from cyberthunder.inventory.targets import ScopeViolation
 
@@ -21,7 +25,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = logging.getLogger(__name__)
 
-STATUSES = ("pending", "running", "done", "error", "skipped", "cancelled")
+STATUSES = ("pending", "running", "done", "error", "skipped", "cancelled", "stopped")
 
 
 @dataclass
@@ -64,7 +68,7 @@ class ScanRun:
 
     @property
     def progress(self) -> dict:
-        done = sum(1 for r in self.results.values() if r.status in ("done", "error", "skipped"))
+        done = sum(1 for r in self.results.values() if r.status in ("done", "error", "skipped", "stopped"))
         return {"done": done, "total": len(self.targets)}
 
 
@@ -81,7 +85,9 @@ class Scanner:
     def start(self, target_ids: Iterable[str] | None = None, *, modules: Iterable[str] | None = None,
               rule_filter: list[str] | None = None, trigger: str = "manual", requested_by: str = "operator",
               background: bool = True) -> ScanRun:
-        """Create the run, persist it, and run it (in a daemon thread when background=True). Returns at once."""
+        """Create the run, persist it, and run it (in a daemon thread when background=True). Returns at once.
+        Raises KillSwitchEngaged (after auditing the block) when the kill switch is engaged."""
+        self.ctx.killswitch.guard("scan.start", requested_by)
         if target_ids is None:
             ids = [t.id for t in self.ctx.inventory.all() if t.in_scope]
         else:
@@ -154,7 +160,9 @@ class Scanner:
         all_findings: list[Finding] = []
         updated: list[str] = []
         try:
-            for tid in run.targets:
+            for i, tid in enumerate(run.targets):
+                if self._stopped(run, i):
+                    break
                 res = run.results.setdefault(tid, TargetScanResult(tid))
                 found = self._scan_target(run, res)
                 if found is not None:
@@ -166,10 +174,11 @@ class Scanner:
             run.summary = summarize(all_findings)
             run.findings_count = len(all_findings)
             ctx.store.save_findings(run.id, all_findings, meta=self._meta(run))
-            if run.results and all(r.status == "error" for r in run.results.values()):
-                run.status, run.error = "error", "every target failed; see per-target errors"
-            else:
-                run.status = "done"
+            if run.status != "stopped":
+                if run.results and all(r.status == "error" for r in run.results.values()):
+                    run.status, run.error = "error", "every target failed; see per-target errors"
+                else:
+                    run.status = "done"
         except Exception as e:  # noqa: BLE001
             log.exception("scan %s aborted", run.id)
             run.status, run.error = "error", str(e)
@@ -184,10 +193,30 @@ class Scanner:
         ctx.audit.append("scan.finish", actor, {"status": run.status, "summary": run.summary,
                                                 "findings": run.findings_count, "error": run.error,
                                                 "progress": run.progress}, subject=run.id,
-                         outcome="ok" if run.status == "done" else "error")
+                         outcome={"done": "ok", "stopped": "blocked"}.get(run.status, "error"))
         if run.trigger != "verify" and run.status == "done":
-            self._after_scan(run, all_findings)
+            try:
+                ctx.killswitch.guard(f"scan.after:{run.id}", actor)
+            except KillSwitchEngaged:
+                run.summary["after_scan"] = "skipped: kill switch engaged"
+                self._save(run)
+            else:
+                self._after_scan(run, all_findings)
         return run
+
+    def _stopped(self, run: ScanRun, index: int) -> bool:
+        """Check the kill switch before the next target. When engaged, mark this and every later target
+        'stopped' and the run 'stopped'; the guard has already audited the block."""
+        try:
+            self.ctx.killswitch.guard(f"scan.target:{run.id}:{run.targets[index]}", run.requested_by)
+            return False
+        except KillSwitchEngaged as e:
+            for tid in run.targets[index:]:
+                res = run.results.setdefault(tid, TargetScanResult(tid))
+                res.status, res.finished_at = "stopped", utcnow()
+                res.errors.append(str(e))
+            run.status, run.error = "stopped", str(e)
+            return True
 
     @staticmethod
     def _meta(run: ScanRun) -> dict:
@@ -195,6 +224,17 @@ class Scanner:
 
     def _after_scan(self, run: ScanRun, findings: list[Finding]) -> None:
         ctx = self.ctx
+        ingest = getattr(ctx, "ingest", None)
+        rematch = getattr(ingest, "rematch_all", None) if ingest is not None else None
+        if callable(rematch) and not run.rule_filter and run.trigger != "bulletin":
+            # bulletins stay in force until patched: match them again against this full scan's inventories
+            try:
+                r = rematch(run.id) or {}
+                run.summary["bulletins_rematched"] = {"scan_id": r.get("scan_id"), "bulletins": len(r.get("bulletins", [])),
+                                                      "findings": r.get("findings", 0)}
+            except Exception as e:  # noqa: BLE001
+                log.warning("bulletin re-match after scan %s failed: %s", run.id, e)
+                run.summary["bulletin_rematch_error"] = str(e)
         open_ = [f for f in findings if f.is_open]
         if ctx.settings.auto_propose and open_:
             try:

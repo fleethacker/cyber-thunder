@@ -75,7 +75,7 @@ def test_update_unknown_target_refused(run):
 
 
 def test_scope_change_is_audited_with_reason(run):
-    _add(run)
+    _add(run, "web1", "--in-scope", "--reason", "owner approved it for the exercise")
     rc, out, _ = run("targets", "scope", "web1", "out", "--reason", "owner pulled it from the exercise")
     assert rc == 0 and "in -> out" in out
     rec = [r for r in _audit(run.state_dir) if r["action"] == "scope.change"][-1]
@@ -136,4 +136,42 @@ def test_import_nessus_adds_hosts_out_of_scope(run, tmp_path, monkeypatch):
     listing = run("targets", "list")[1]
     assert "dc01" in listing and "windows" in listing and "OUT" in listing
     assert [r for r in _audit(run.state_dir) if r["action"] == "inventory.import"]
+    assert verify_file(run.state_dir / "audit.jsonl").ok
+
+
+def test_add_defaults_out_of_scope_and_in_scope_needs_reason(run):
+    rc, _, _ = run("targets", "add", "--id", "newbox", "--type", "linux", "--transport", "ssh", "--address", "10.9.9.9")
+    assert rc == 0
+    rc, out, _ = run("targets", "list")
+    row = next(line for line in out.splitlines() if line.startswith("newbox"))
+    assert "OUT" in row
+    rc, _, err = run("targets", "add", "--id", "box2", "--type", "linux", "--address", "10.9.9.8", "--in-scope")
+    assert rc == 2 and "--reason" in err
+    rc, _, _ = run("targets", "add", "--id", "box2", "--type", "linux", "--address", "10.9.9.8", "--in-scope",
+                   "--reason", "ticket 42")
+    assert rc == 0
+    recs = [r for r in _audit(run.state_dir) if r["action"] == "scope.change"]
+    assert len(recs) == 1 and recs[0]["details"]["target"] == "box2" and recs[0]["details"]["reason"] == "ticket 42"
+    assert verify_file(run.state_dir / "audit.jsonl").ok
+
+
+def test_repointing_in_scope_target_is_a_scope_change(run):
+    from cyberthunder.config import Settings
+    from cyberthunder.context import AppContext
+    from cyberthunder.inventory.targets import Target
+    ctx = AppContext(Settings.from_env(state_dir=run.state_dir))
+    ctx.inventory.add(Target(id="sim-switch-01", name="Switch", asset_type="cisco_ios", transport="simulated",
+                             simulated=True, in_scope=True))
+    ctx.save_inventory("sailor1", "demo.load", {"added": ["sim-switch-01"]})
+    rc, _, err = run("targets", "update", "sim-switch-01", "--transport", "ssh", "--address", "10.1.1.1")
+    assert rc == 2 and "--reason" in err
+    rc, _, _ = run("targets", "update", "sim-switch-01", "--transport", "ssh", "--address", "10.1.1.1",
+                   "--reason", "moved to the range")
+    assert rc == 0
+    fresh = AppContext(Settings.from_env(state_dir=run.state_dir)).inventory.get("sim-switch-01")
+    assert fresh.transport == "ssh" and fresh.simulated is False
+    recs = [r for r in _audit(run.state_dir) if r["action"] == "scope.change"]
+    assert len(recs) == 1 and recs[0]["details"]["after"] == {"address": "10.1.1.1", "transport": "ssh"}
+    # a name change on an in-scope target is not a scope change
+    assert run("targets", "update", "sim-switch-01", "--name", "Core switch")[0] == 0
     assert verify_file(run.state_dir / "audit.jsonl").ok

@@ -41,8 +41,9 @@ def make_ctx(state_dir, fake_adapter, monkeypatch):
         opts.update(overrides)
         ctx = AppContext(Settings.from_env(**opts))
         if not ctx.inventory.all():
+            # the fake host stands in for a real one (simulated=False) so scanner-content fixes are offered for it
             ctx.inventory.add(Target(id=HOST, name="RHEL 9 web", asset_type="linux", transport="simulated",
-                                     simulated=True))
+                                     simulated=False))
             ctx.inventory.add(Target(id=OUT_OF_SCOPE, name="RHEL 9 not ours", asset_type="linux",
                                      transport="simulated", simulated=True, in_scope=False))
             ctx.inventory.add(Target(id=NO_ADAPTER, name="Core switch", asset_type="cisco_ios",

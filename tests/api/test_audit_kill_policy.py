@@ -87,7 +87,7 @@ def test_kill_engage_release(client):
     assert st["engaged"] is False
     acts = [r["action"] for r in client.get(f"{API}/audit", params={"action": "killswitch."}).json()["records"]]
     assert acts == ["killswitch.engage", "killswitch.release"]
-    assert client.post(f"{API}/kill/engage", json={}).status_code == 400
+    assert client.post(f"{API}/kill/release", json={}).status_code == 400
 
 
 RULE = {"name": "low-risk ssh hardening", "asset_types": ["linux"], "max_disruption": "low",

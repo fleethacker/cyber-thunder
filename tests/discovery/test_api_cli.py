@@ -69,7 +69,8 @@ def test_api_flow(client, ctx):
     assert client.post(f"/discovery/assets/{pi['id']}/accept", json=body, headers=H).status_code == 400  # type unknown
     r = client.post(f"/discovery/assets/{linux['id']}/accept", json=dict(body, username="ctadmin"), headers=H)
     assert r.status_code == 200 and r.json()["id"] == "sim-linux-01" and r.json()["tags"] == ["discovered"]
-    assert r.json()["username"] == "ctadmin" and r.json()["transport"] == "ssh"
+    # a host from a simulated sweep exists only in the emulator: no live transport, no credentials
+    assert r.json()["username"] is None and r.json()["transport"] == "simulated" and r.json()["simulated"] is True
     assert ctx.inventory.get("sim-linux-01").in_scope
     assert client.post("/discovery/assets/zzz/accept", json=body, headers=H).status_code == 404
 
@@ -131,3 +132,18 @@ def test_cli_smoke(ctx, state_dir, capsys):
 def test_prefixed_machine_actor_refused_at_the_edge(client):
     body = {"scopes": [{"cidr": "192.168.56.0/24"}], "reason": "range plan"}
     assert client.put("/discovery/scopes", json=body, headers={"X-Actor": "agent:planner"}).status_code == 400
+
+
+def test_accept_refuses_live_transport_and_raw_env_credentials_from_a_simulated_sweep(client, ctx, monkeypatch):
+    monkeypatch.setenv("SOME_SECRET_TOKEN", "hunter2")
+    run_id = client.post("/discovery/sweep", json={"mode": "simulated"}, headers=H).json()["id"]
+    service_for(ctx).join(run_id, timeout=30)
+    sw = next(a for a in client.get("/discovery/assets", params={"status": "new"}).json()
+              if a["address"] == "192.168.56.3")
+    body = {"credential_ref": "SOME_SECRET_TOKEN", "transport": "ssh", "in_scope": True, "reason": "probe"}
+    r = client.post(f"/discovery/assets/{sw['id']}/accept", json=body, headers=H)
+    assert r.status_code == 400 and "simulated" in r.json()["detail"]
+    r = client.post(f"/discovery/assets/{sw['id']}/accept", json=dict(body, transport=None), headers=H)
+    assert r.status_code == 200
+    t = ctx.inventory.get(r.json()["id"])
+    assert t.transport == "simulated" and t.simulated and t.credential_ref is None

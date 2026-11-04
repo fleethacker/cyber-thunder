@@ -11,6 +11,7 @@ import { useAsync } from '../lib/hooks';
 import { CitationChips } from './CitationChips';
 import { CodeBlock, Collapsible, ErrorBox, Loading, Mono, SeverityBadge, StateBadge, StatusBadge } from './common';
 import { RiskTagsForFix } from './FixPanel';
+import { DiffButton } from './ProposalDiff';
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -169,7 +170,7 @@ function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: Propos
           <Text size="sm" c="dimmed">{history.loading ? 'Loading...' : 'No proposals for this finding yet.'}</Text>
         ) : (
           <Table striped withTableBorder>
-            <Table.Thead><Table.Tr><Table.Th>Proposal</Table.Th><Table.Th>State</Table.Th><Table.Th>Decided by</Table.Th><Table.Th>Created</Table.Th></Table.Tr></Table.Thead>
+            <Table.Thead><Table.Tr><Table.Th>Proposal</Table.Th><Table.Th>State</Table.Th><Table.Th>Decided by</Table.Th><Table.Th>Created</Table.Th><Table.Th>Diff</Table.Th></Table.Tr></Table.Thead>
             <Table.Tbody>
               {history.data.map((p) => (
                 <Table.Tr key={p.id}>
@@ -177,6 +178,7 @@ function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: Propos
                   <Table.Td><StateBadge state={p.state} /></Table.Td>
                   <Table.Td>{p.decided_by ?? '-'}{p.decision_note ? `: ${p.decision_note}` : ''}</Table.Td>
                   <Table.Td>{fmtTime(p.created_at)}</Table.Td>
+                  <Table.Td><DiffButton proposalId={p.id} state={p.state} size="xs" /></Table.Td>
                 </Table.Tr>
               ))}
             </Table.Tbody>

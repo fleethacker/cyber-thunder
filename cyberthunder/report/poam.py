@@ -1,4 +1,8 @@
-"""Plan of Action and Milestones as CSV, one row per open finding (plus findings whose fix is verified)."""
+"""Plan of Action and Milestones as CSV, one row per open finding (plus findings whose fix is verified).
+
+Open findings of the latest finished discovery sweep (an unknown device, a new listener) are rows too, with
+source `discovery`: they are not in any scan, but someone has to own and close them.
+"""
 from __future__ import annotations
 
 import csv
@@ -8,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from cyberthunder.control.approvals import ProposalState
 from cyberthunder.findings.schema import Severity
-from cyberthunder.report.onepager import latest_proposals, resolve_scan
+from cyberthunder.report.onepager import discovery_open, latest_proposals, resolve_scan
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -54,7 +58,8 @@ def poam_rows(ctx: "AppContext", scan_id: str | None = None) -> list[dict]:
     props = latest_proposals(ctx)
     today = date.today()
     rows = []
-    for f in sorted(findings, key=lambda f: (-f.severity.rank, f.host, f.rule_version or f.rule_id)):
+    disc = [f for f in discovery_open(ctx) if f.id not in {x.id for x in findings}]
+    for f in sorted([*findings, *disc], key=lambda f: (-f.severity.rank, f.host, f.rule_version or f.rule_id)):
         p = props.get(f.id)
         if not f.is_open and not (p and p.state == ProposalState.VERIFIED):
             continue
@@ -65,7 +70,7 @@ def poam_rows(ctx: "AppContext", scan_id: str | None = None) -> list[dict]:
             status, fix, pstate = _STATUS.get(p.state, "Open"), p.fix_ref, p.state.value
             milestone = _MILESTONE.get(p.state, "Apply and verify fix")
         due = "" if status == "Completed" else (today + timedelta(days=SCHEDULE_DAYS.get(f.severity, 180))).isoformat()
-        comments = f"Scan {sid}"
+        comments = "Discovery sweep" if f.source == "discovery" else f"Scan {sid}"
         if p and p.decided_by:
             comments += f"; {p.state.value} by {p.decided_by}"
         if not f.rule_version:

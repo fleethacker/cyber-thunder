@@ -91,6 +91,8 @@ export interface FindingsSummary {
   hosts: string[];
   open_by_severity: Partial<Record<Severity, number>>;
   by_status: Partial<Record<FindingStatus, number>>;
+  /** distinct finding sources in the scan, when the server reports them */
+  sources?: string[];
 }
 
 export interface FindingsPage {
@@ -145,12 +147,25 @@ export interface ProposalPlus extends Proposal {
   target: TargetBrief | null;
 }
 
+/** One file the fix touched: copies taken before apply and after it, and a unified diff of the two. */
+export interface DiffFile {
+  path: string;
+  before_excerpt: string | null;
+  after_excerpt: string | null;
+  diff: string | null;
+}
+
+/** GET /proposals/{id}/diff: the engine's record of what changed and how it was checked. */
 export interface ProposalDiff {
+  proposal?: Record<string, unknown>;
+  fix?: Record<string, unknown> | null;
+  before_state?: Record<string, unknown> | null;
   before: Record<string, unknown>;
   after: Record<string, unknown>;
-  verify: Record<string, unknown> | null;
   apply: Record<string, unknown> | null;
-  files: { path: string; before: string; after: string }[];
+  verify: Record<string, unknown> | null;
+  rollback?: Record<string, unknown> | null;
+  files: DiffFile[];
 }
 
 export type BulkItem = { id: string; state: ProposalState } | { id: string; error: string };
@@ -293,13 +308,86 @@ export interface BulletinResult { bulletin_id: string; hosts_affected: string[];
 
 export interface IngestHistory { deltas: DeltaReport[]; bulletins: Record<string, unknown>[] }
 
-export interface OutboxEntry { name: string; kind: string; bytes: number; created_at?: string; synced_at?: string; seconds?: number }
+export interface OutboxEntry { id?: string; name: string; kind: string; bytes: number; created_at?: string; synced_at?: string; seconds?: number }
 export interface Outbox { connected: boolean; pending: OutboxEntry[]; synced: OutboxEntry[] }
 export interface SyncResult { sent: number; bytes: number; seconds: number }
 
 export interface ScoreItem { id: string; kind: string; what: string; found: boolean; finding_ids: string[] }
 export interface Score { seeded: number; found: number; share: number; items: ScoreItem[] }
 
-export interface DemoStatus { available: boolean; loaded: boolean; targets: Target[]; simulate_verify_fail_next: boolean }
+export interface DemoStatus { available: boolean; loaded: boolean; targets: string[]; simulate_verify_fail_next: boolean }
 
 export interface ApiErrorBody { detail: string }
+
+// -- discovery (/api/v1/discovery, docs/DISCOVERY.md) --------------------------------------------
+export const DISCOVERY_MODES = ['quick', 'full', 'passive', 'simulated'] as const;
+export type DiscoveryMode = (typeof DISCOVERY_MODES)[number];
+export type DiscoveryStatus = 'new' | 'known' | 'ignored' | 'missing';
+
+export interface DiscoveryScope {
+  cidr: string;
+  allow_public: boolean;
+  added_by: string;
+  added_at: string;
+  reason: string;
+  scanner_target: string | null;
+}
+
+export interface DiscoveryRun {
+  id: string;
+  mode: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+  scopes: string[];
+  hosts_seen: number;
+  new: number;
+  known: number;
+  changed: number;
+  missing: number;
+  errors: string[];
+  requested_by: string;
+  asset_ids: string[];
+}
+
+export interface DiscoveryOverview {
+  scopes: DiscoveryScope[];
+  last_run: DiscoveryRun | null;
+  counts: Partial<Record<DiscoveryStatus, number>>;
+}
+
+export interface OpenPort { port: number; proto: string; service: string; product: string; version: string; banner: string }
+
+export interface DiscoveryChange { kind: string; detail?: string; [k: string]: unknown }
+
+export interface DiscoveredAsset {
+  id: string;
+  address: string | null;
+  hostname: string | null;
+  mac: string | null;
+  vendor: string | null;
+  open_ports: OpenPort[];
+  os_guess: string | null;
+  os_accuracy: number | null;
+  asset_type_guess: string;
+  confidence: number;
+  evidence: string[];
+  sources: string[];
+  first_seen: string;
+  last_seen: string;
+  status: DiscoveryStatus;
+  inventory_target_id: string | null;
+  notes: string;
+  facts: Record<string, unknown>;
+  changes: DiscoveryChange[];
+}
+
+export interface DiscoveryAccept {
+  name?: string;
+  asset_type?: string;
+  transport?: string;
+  username?: string;
+  credential_ref?: string;
+  in_scope: boolean;
+  reason: string;
+}

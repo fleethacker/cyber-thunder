@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, time as dtime
 from pathlib import Path
 
+from cyberthunder.control.identity import is_machine, is_policy_actor, require_human
 from cyberthunder.findings.schema import Finding, utcnow
 from cyberthunder.remediation.library import DISRUPTION_RANK, FixEntry
 
@@ -51,6 +52,7 @@ class AutomationPolicy:
         return cls(**d)
 
     def sign(self, actor: str, reason: str) -> None:
+        actor = require_human(actor)          # a standing approval is a person's signature, never the machine's
         self.enabled, self.signed_by, self.signed_at, self.reason = True, actor, utcnow(), reason
         self.version += 1
 
@@ -110,6 +112,8 @@ def evaluate(policy: AutomationPolicy, fix: FixEntry, finding: Finding, target, 
         return PolicyDecision(False, None, ["automation policy disabled; human approval required"])
     if not policy.signed_by:
         return PolicyDecision(False, None, ["policy has no signer"])
+    if is_machine(policy.signed_by) or is_policy_actor(policy.signed_by):
+        return PolicyDecision(False, None, [f"policy signer {policy.signed_by!r} is not a named person"])
     if not getattr(target, "in_scope", False):
         return PolicyDecision(False, None, ["target out of scope"])
     all_reasons: list[str] = []
@@ -126,6 +130,17 @@ def load_policy(path: str | Path) -> AutomationPolicy:
     if not p.exists():
         return AutomationPolicy()
     return AutomationPolicy.from_dict(json.loads(p.read_text(encoding="utf-8")))
+
+
+def signer_problem(policy: AutomationPolicy) -> str | None:
+    """Why an enabled policy cannot stand (machine or missing signer), or None."""
+    if not policy.enabled:
+        return None
+    try:
+        require_human(policy.signed_by)
+    except PermissionError as e:
+        return f"policy signer: {e}"
+    return None
 
 
 def save_policy(path: str | Path, policy: AutomationPolicy) -> None:

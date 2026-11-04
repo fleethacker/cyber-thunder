@@ -38,35 +38,22 @@ cyberthunder/transport/             base contract, local, ssh, fixture (replay/r
 cyberthunder/adapters/base.py       Adapter contract, registry, make_finding()
 cyberthunder/remediation/           library.py (FixEntry, FixLibrary), models.py; operator-initiated rollback
 cyberthunder/store.py, context.py, config.py, cli.py, api/ factory
-range/                              Rocky 9 notes, seed_misconfig.sh, answer_key/linux.json
+range/                              Rocky 9 notes, seed scripts per area, six answer keys in answer_key/
 scripts/setup_dev.ps1               idempotent dev setup (model server, models, pip, vendor wheels)
 ```
 
-Module build in progress (parallel worktrees, one commit each, merged by the integrator):
+Also merged since: adapters (linux, cisco, kubernetes, containers, windows), transport/winrm, remediation/engine.py,
+scan.py, explain, ingest, report, discovery, the HTTP routes and the React UI. Answer keys:
+`range/answer_key/{linux,cisco_ios,kubernetes,containers,windows,discovery}.json`.
 
-| Module | Scope |
-|---|---|
-| adapters/linux | OpenSCAP + native checks, hunt, image CVEs, SSG fix library, simulated host |
-| adapters/cisco | IOS config rules, config-snippet fixes, config-replace rollback |
-| adapters/kubernetes | cluster and workload checks, manifest fixes, simulated cluster |
-| adapters/containers | container inspect checks, image CVEs |
-| adapters/windows | checklist ingestion, PowerShell hunt, registry/policy fixes with export-based rollback |
-| transport/winrm | remote Windows transport |
-| remediation/engine, scan | propose / execute / rollback / diff; scan orchestration |
-| explain | local-model client, citation validator, template fallback, precompute |
-| ingest | STIG release delta, compression, link emulation, bulletin matching, outbox |
-| report | commander one-pager, POA&M, checklist write-back, path to fleet, friction log, score |
-| api/routes, ui | HTTP routes per area; React UI |
-| docs, range | this documentation set, multi-asset range notes, link emulation script |
-
-Not yet verified end to end: everything in the in-progress table, until the integrator merges and the
-rehearsal in [DEMO.md](DEMO.md) runs clean.
+Open: the discovery page in the UI is a placeholder, and the UI Diff view does not list every file a fix touches.
+The rehearsal in [DEMO.md](DEMO.md) is the end-to-end check.
 
 Run: `python -m pytest -q`, then follow the quick start in the README.
 
 ## 4. Schedule
 
-Status (Wed 4 Nov): kernel done; module build in progress as listed in section 3; integration, UI wiring and the first full rehearsal come next. The blocks below are the original plan and stay as the order of work.
+Status (Wed 4 Nov): kernel and modules merged and integrated; the full rehearsal is next. The blocks below are the original plan and stay as the order of work.
 
 ### Day 1 — Wed (after team formation, ~6 h)
 | Block | Deliverable | Owner |

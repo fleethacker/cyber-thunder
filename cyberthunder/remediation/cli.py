@@ -1,7 +1,8 @@
-"""Remediation commands: propose, apply, rollback, diff.
+"""Remediation commands: propose, apply, verify, rollback, diff.
 
 `apply` runs only an APPROVED proposal (approve it first with `cyberthunder proposals approve <id>`),
 and prints the step timeline from the audit log so the operator sees exactly what happened.
+A runbook proposal ends `apply` as APPLIED (steps issued, nothing changed); run `verify` once the steps are done.
 """
 from __future__ import annotations
 
@@ -59,6 +60,20 @@ def cmd_apply(a: argparse.Namespace) -> int:
         return 2
     _timeline(ctx, p.id, start)
     print(f"{p.id}: {p.state.value}")
+    return 0 if p.state.value in ("verified", "applied") else 1
+
+
+def cmd_verify(a: argparse.Namespace) -> int:
+    ctx = _ctx(a)
+    start = len(ctx.audit)
+    try:
+        p = ctx.engine.verify(a.proposal_id, actor=a.actor)
+    except REFUSALS as e:
+        print(f"refused: {e}", file=sys.stderr)
+        _timeline(ctx, a.proposal_id, start)
+        return 2
+    _timeline(ctx, p.id, start)
+    print(f"{p.id}: {p.state.value}")
     return 0 if p.state.value == "verified" else 1
 
 
@@ -107,6 +122,10 @@ def register_cli(subparsers) -> None:
     p.add_argument("--simulate-verify-fail", action="store_true",
                    help="demonstration only: force verification to fail so the automatic rollback runs (audited)")
     p.set_defaults(fn=cmd_apply)
+
+    p = subparsers.add_parser("verify", help="re-check an APPLIED proposal (a runbook after its steps are done)")
+    p.add_argument("proposal_id")
+    p.set_defaults(fn=cmd_verify)
 
     p = subparsers.add_parser("rollback", help="roll back an applied or verified change")
     p.add_argument("proposal_id")

@@ -11,12 +11,11 @@ keep it as the demo fallback. Never point Cyber Thunder at a live network.
 | `acd-sw-01` | cisco | an IOS-style running-config file (no device needed) |
 | `acd-win-01` | windows | optional Windows VM |
 
-Each area keeps its seed scripts under `range/<area>/` (`linux`, `kubernetes`, `containers`, `cisco`,
-`windows`) and its answer key at `range/answer_key/<type>.json`. The answer key lists every seeded item
-(misconfiguration or intrusion indicator), what should detect it, and the fix it maps to; it is used for the
-detection score on the Reports page and must never be shown to the model. The Linux seed script is
-`range/seed_misconfig.sh` and its key is `range/answer_key/linux.json`. The other areas add theirs as their
-adapters land; if a directory or key is missing, that area's adapter has not been merged yet.
+Seed scripts: `range/seed_misconfig.sh` (Linux), `range/k8s/seed.sh`, `range/containers/seed.sh`,
+`range/cisco/*.cfg`, `range/windows/seed_misconfig.ps1`. Answer keys:
+`range/answer_key/{linux,cisco_ios,kubernetes,containers,windows,discovery}.json`. The answer key lists every
+seeded item (misconfiguration or intrusion indicator), what should detect it, and the fix it maps to; it is
+used for the detection score on the Reports page and must never be shown to the model.
 
 ## Rocky 9 VM (one time, about 25 minutes)
 
@@ -51,7 +50,7 @@ sudo dnf install -y podman
 curl -sfL https://get.k3s.io | sudo sh -
 ```
 
-Then run the seed scripts for those areas from `range/kubernetes/` and `range/containers/` (see the comments at
+Then run the seed scripts for those areas from `range/k8s/` and `range/containers/` (see the comments at
 the top of each script for the exact invocation).
 
 ## Cisco config target
@@ -94,7 +93,7 @@ sudo bash range/link_emulate.sh off
 ```
 
 Arguments to `on` are rate in kbps and added latency in ms; defaults are 56 and 500. Set the same numbers in
-Cyber Thunder (`cyberthunder link` or Scans, Link controls) so the sizes and transfer times it reports match
+Cyber Thunder (`python -m cyberthunder link set --kbps 56 --latency-ms 500`, or Scans, Link controls) so the sizes and transfer times it reports match
 what the wire does. For the simulated mode there is no wire; the numbers in Cyber Thunder are the emulation.
 
 ## Scan by hand (what `cyberthunder scan` automates)

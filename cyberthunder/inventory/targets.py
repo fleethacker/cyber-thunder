@@ -4,10 +4,13 @@ here with in_scope=true. Credentials are never stored; `credential_ref` names an
 """
 from __future__ import annotations
 
+import contextlib
+import copy
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from cyberthunder.audit.chain import file_lock
 from cyberthunder.findings.schema import utcnow
 
 ASSET_TYPES = ("linux", "windows", "cisco_ios", "kubernetes", "containers")
@@ -58,54 +61,108 @@ class Target:
 
 
 class Inventory:
+    """Targets file shared by every process (API server, CLI, scans). Reads notice when another process has
+    changed the file (a cheap stat) and merge its changes in; save() merges under a cross-process lock
+    before writing, so a stale copy never overwrites a newer file. Merge rule per field: a value changed
+    on disk since this copy last synced wins (scope flags included); otherwise the local value stays."""
+
     def __init__(self, path: str | Path | None = None, targets: list[Target] | None = None):
         self.path = Path(path) if path else None
         self._targets: dict[str, Target] = {t.id: t for t in (targets or [])}
+        self._base: dict[str, dict] = {}            # target dicts as last read from / written to the file
+        self._sig: tuple[int, int] | None = None
 
     # -- persistence (YAML preferred, JSON accepted) ------------------------------
     @classmethod
     def load(cls, path: str | Path) -> "Inventory":
-        p = Path(path)
-        inv = cls(p)
-        if not p.exists():
-            return inv
+        inv = cls(Path(path))
+        inv._merge_from_disk()
+        return inv
+
+    @staticmethod
+    def _read(p: Path) -> dict[str, dict]:
         text = p.read_text(encoding="utf-8")
         if p.suffix in (".yaml", ".yml"):
             import yaml  # pyyaml, in requirements
             data = yaml.safe_load(text) or {}
         else:
             data = json.loads(text or "{}")
-        for d in data.get("targets", []):
-            t = Target.from_dict(d)
-            inv._targets[t.id] = t
-        return inv
+        return {d["id"]: d for d in data.get("targets", [])}
+
+    def _file_sig(self) -> tuple[int, int] | None:
+        try:
+            st = self.path.stat()
+        except (FileNotFoundError, AttributeError, TypeError):
+            return None
+        return st.st_mtime_ns, st.st_size
+
+    def _merge_from_disk(self) -> None:
+        sig = self._file_sig()
+        if sig is None:
+            return
+        disk = self._read(self.path)
+        for tid, d in disk.items():
+            cur, base = self._targets.get(tid), self._base.get(tid)
+            if cur is None:
+                if base is None:                     # added elsewhere
+                    self._targets[tid] = Target.from_dict(copy.deepcopy(d))
+                continue                             # else removed here and not yet saved
+            if base is None:                         # same id added on both sides: the file decides scope
+                if "in_scope" in d:
+                    cur.in_scope = bool(d["in_scope"])
+                continue
+            for k, v in d.items():
+                if hasattr(cur, k) and v != base.get(k):
+                    setattr(cur, k, copy.deepcopy(v))
+        for tid in [t for t in self._targets if t not in disk and t in self._base]:
+            del self._targets[tid]                   # removed elsewhere
+        self._base, self._sig = copy.deepcopy(disk), sig
+
+    def _refresh(self) -> None:
+        if self.path is not None and self._file_sig() != self._sig:
+            self._merge_from_disk()
 
     def save(self, path: str | Path | None = None) -> None:
         p = Path(path) if path else self.path
         if p is None:
             raise ValueError("no inventory path")
         p.parent.mkdir(parents=True, exist_ok=True)
-        data = {"targets": [t.to_dict() for t in self._targets.values()]}
-        if p.suffix in (".yaml", ".yml"):
-            import yaml
-            p.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
-        else:
-            p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        own = self.path is not None and p.resolve() == self.path.resolve()
+        lock = file_lock(p.with_name(p.name + ".lock")) if own else contextlib.nullcontext()
+        with lock:
+            if own:
+                self._merge_from_disk()
+            data = {"targets": [t.to_dict() for t in self._targets.values()]}
+            if p.suffix in (".yaml", ".yml"):
+                import yaml
+                text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+            else:
+                text = json.dumps(data, indent=2)
+            tmp = p.with_name(p.name + ".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            tmp.replace(p)
+            if own:
+                self._base = {d["id"]: copy.deepcopy(d) for d in data["targets"]}
+                self._sig = self._file_sig()
 
     # -- access --------------------------------------------------------------------
     def all(self) -> list[Target]:
+        self._refresh()
         return list(self._targets.values())
 
     def get(self, target_id: str) -> Target:
+        self._refresh()
         try:
             return self._targets[target_id]
         except KeyError:
             raise KeyError(f"unknown target {target_id!r}") from None
 
     def by_type(self, asset_type: str) -> list[Target]:
+        self._refresh()
         return [t for t in self._targets.values() if t.asset_type == asset_type]
 
     def add(self, target: Target) -> Target:
+        self._refresh()
         self._targets[target.id] = target
         return target
 
@@ -118,15 +175,19 @@ class Inventory:
         return t
 
     def remove(self, target_id: str) -> None:
+        self._refresh()
         self._targets.pop(target_id, None)
 
     # -- scope guardrail -----------------------------------------------------------
     def in_scope(self, target_id: str) -> bool:
+        self._refresh()
         t = self._targets.get(target_id)
         return bool(t and t.in_scope)
 
     def assert_in_scope(self, target_id: str) -> Target:
-        """Raise ScopeViolation unless the target exists and is in scope. Call before any collect or apply."""
+        """Raise ScopeViolation unless the target exists and is in scope. Call before any collect or apply.
+        Reads the file first if another process changed it, so a scope-out made elsewhere holds here."""
+        self._refresh()
         t = self._targets.get(target_id)
         if t is None:
             raise ScopeViolation(f"target {target_id!r} is not in the inventory")

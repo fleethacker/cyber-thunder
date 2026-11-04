@@ -5,7 +5,9 @@ written by a model; model text appears only as the quoted `explanation.risk` of 
 """
 from __future__ import annotations
 
+import os
 import shlex
+import subprocess
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -33,7 +35,7 @@ def resolve_scan(ctx: "AppContext", scan_id: str | None) -> tuple[str, dict, lis
     """Return (scan_id, run dict, findings). Raises ReportError with an instruction when nothing was scanned."""
     sid = scan_id or ctx.store.latest_scan_id()
     if not sid:
-        raise ReportError("no scan runs on this node; run a scan first (cyberthunder scan run)")
+        raise ReportError("no scan runs on this node; run a scan first (cyberthunder scan)")
     run = ctx.store.load_scan_run(sid) or {}
     findings = ctx.store.load_findings(sid)
     if not run and not findings:
@@ -103,13 +105,49 @@ def _link_line(ctx: "AppContext") -> str | None:
         return f"Link and outbox status unavailable: {e}"
 
 
+def _quote(arg: str) -> str:
+    """Quote one argument for the shell an operator on this node will paste the command into."""
+    return subprocess.list2cmdline([arg]) if os.name == "nt" else shlex.quote(arg)
+
+
+def discovery_open(ctx: "AppContext") -> list[Finding]:
+    """Open findings of the latest finished discovery sweep (unknown devices, new listeners)."""
+    svc = getattr(ctx, "discovery", None)
+    if svc is None:
+        return []
+    try:
+        return [f for f in svc.findings() if f.is_open]
+    except Exception:  # noqa: BLE001  - a broken discovery store must not stop the report
+        return []
+
+
+def _reverted(p: Proposal) -> dict:
+    last = next((h for h in reversed(p.history) if h.get("state") == p.state.value), {})
+    failed = any(h.get("state") == ProposalState.FAILED.value for h in p.history)
+    if p.state == ProposalState.FAILED:
+        why = "apply or verification failed"
+    elif failed:
+        why = "verification failed, rolled back automatically"
+    else:
+        why = f"rolled back by {last.get('actor') or 'operator'}"
+    note = (last.get("note") or "").strip()
+    return {"title": p.title, "host": p.host, "state": p.state.value, "decided_by": p.decided_by,
+            "at": last.get("ts"), "why": why + (f": {note}" if note else "")}
+
+
 # -- the report ---------------------------------------------------------------------------
 def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     sid, run, findings = resolve_scan(ctx, scan_id)
     v = ctx.audit.verify()
-    open_f = [f for f in findings if f.is_open]
+    latest = latest_proposals(ctx)
+    # a finding whose fix is verified is closed, as the POA&M and the checklist written from this state say
+    closed = [f for f in findings
+              if f.is_open and f.id in latest and latest[f.id].state == ProposalState.VERIFIED]
+    closed_ids = {f.id for f in closed}
+    open_f = [f for f in findings if f.is_open and f.id not in closed_ids]
     hunt = [f for f in open_f if is_hunt(f)]
     props = ctx.gate.list()
+    disc = discovery_open(ctx)
 
     # open findings by host and CAT
     hosts: dict[str, dict] = {}
@@ -130,6 +168,8 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
                  "verified_at": state_time(p, ProposalState.VERIFIED)}
                 for p in props if p.state == ProposalState.VERIFIED]
     verified.sort(key=lambda r: r["verified_at"] or "")
+    reverted = sorted((_reverted(p) for p in props if p.state in (ProposalState.ROLLED_BACK, ProposalState.FAILED)),
+                      key=lambda r: r["at"] or "")
 
     # top risks
     ranked = sorted(open_f, key=lambda f: (-f.severity.rank, not is_hunt(f), f.host, f.title))[:TOP_RISKS]
@@ -143,7 +183,8 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     # BLUF: three sentences computed from the data
     scanned = len({f.host for f in findings}) or len(run.get("targets", []))
     s1 = (f"{len(open_f)} open finding(s) on {scanned} host(s): {cat_totals['high']} CAT I, "
-          f"{cat_totals['medium']} CAT II, {cat_totals['low']} CAT III.")
+          f"{cat_totals['medium']} CAT II, {cat_totals['low']} CAT III"
+          f"{f' ({len(closed)} closed since the scan by verified changes)' if closed else ''}.")
     if hunt:
         tech = sorted({a for f in hunt for a in attack_ids(f)})
         s2 = (f"{len(hunt)} intrusion indicator(s) on {', '.join(sorted({f.host for f in hunt}))}"
@@ -152,7 +193,14 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
         s2 = "No intrusion indicators were found by the hunt checks."
     chain = "intact" if v.ok else "BROKEN"
     s3 = (f"{counts['verified']} change(s) verified, {counts['proposed']} awaiting approval, "
-          f"{counts['rolled_back']} rolled back; audit chain {chain} over {v.count} records.")
+          f"{counts['rolled_back']} rolled back, {counts['failed']} failed; "
+          f"audit chain {chain} over {v.count} records.")
+    bluf = [s1, s2]
+    unknown = sorted({f.host.removeprefix("discovered:") for f in disc if f.rule_id == "discovery:unknown_asset"})
+    if disc:
+        bluf.append(f"Discovery found {len(disc)} open item(s) on the enclave"
+                    f"{', including unknown device(s) ' + ', '.join(unknown) if unknown else ''}.")
+    bluf.append(s3)
 
     nxt = []
     if not v.ok:
@@ -162,6 +210,9 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     if hunt:
         nxt.append("Review intrusion indicators on " + ", ".join(sorted({f.host for f in hunt}))
                    + " with the system owner before any remediation that could destroy evidence.")
+    if unknown:
+        nxt.append("Locate and identify unknown device(s) " + ", ".join(unknown)
+                   + ": accept them into the inventory or remove them from the network.")
     if counts["proposed"]:
         nxt.append(f"Approve or deny {counts['proposed']} pending proposal(s) in the approval queue.")
     proposed_ids = {p.finding_id for p in props if p.state not in (ProposalState.DENIED, ProposalState.CANCELLED)}
@@ -172,16 +223,18 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
         nxt.append(f"Review {counts['rolled_back'] + counts['failed']} rolled back or failed change(s) before re-proposing.")
     nxt.append("Rescan after approved changes to confirm closure, then regenerate this report.")
 
-    cmd = " ".join(["python -m cyberthunder", "--state-dir", shlex.quote(str(ctx.store.root)),
+    cmd = " ".join(["python -m cyberthunder", "--state-dir", _quote(str(ctx.store.root)),
                     "report commander", "--scan-id", sid, "--format", fmt])
     return {
         "node": ctx.settings.node, "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "scan_id": sid, "trigger": run.get("trigger", "unknown"),
         "audit": {"ok": v.ok, "count": v.count, "head": v.head, "detail": str(v)},
-        "bluf": [s1, s2, s3], "by_host": by_host,
+        "bluf": bluf, "by_host": by_host,
         "hunt": [{"host": f.host, "title": f.title, "attack": attack_ids(f)}
                  for f in sorted(hunt, key=lambda f: (f.host, f.title))],
-        "decisions": counts, "verified": verified, "top": top,
+        "decisions": counts, "verified": verified, "reverted": reverted, "top": top,
+        "discovery": [{"host": f.host.removeprefix("discovered:"), "title": f.title, "severity": f.severity.value,
+                       "check": f.rule_id} for f in sorted(disc, key=lambda f: (-f.severity.rank, f.host, f.rule_id))],
         "link": _link_line(ctx), "next_actions": nxt, "command": cmd,
     }
 

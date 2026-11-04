@@ -2,7 +2,8 @@
 // Errors come back as ApiError with the server's {detail} verbatim.
 import type {
   AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, DeltaReport,
-  DemoStatus, Explanation, FindingPlus, FindingsPage, IngestHistory, KillStatus, LinkState, Outbox,
+  DemoStatus, DiscoveredAsset, DiscoveryAccept, Finding, DiscoveryMode, DiscoveryOverview, DiscoveryRun, DiscoveryScope,
+  DiscoveryStatus, Explanation, FindingPlus, FindingsPage, IngestHistory, KillStatus, LinkState, Outbox,
   PolicyDecision, ProposalDiff, ProposalPlus, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
 } from './types';
 
@@ -108,7 +109,19 @@ export const api = {
   updateTarget: (id: string, t: Partial<Target> & { reason?: string }) => put<Target>(`/targets/${enc(id)}`, t),
   removeTarget: (id: string) => del<{ ok: boolean }>(`/targets/${enc(id)}`),
   discover: (id: string) => post<AssetFacts>(`/targets/${enc(id)}/discover`),
-  discovery: () => get<unknown>('/discovery'),
+
+  discovery: () => get<DiscoveryOverview>('/discovery'),
+  putDiscoveryScopes: (scopes: { cidr: string; allow_public?: boolean; scanner_target?: string | null }[], reason: string) =>
+    put<{ scopes: DiscoveryScope[] }>('/discovery/scopes', { scopes, reason }),
+  sweep: (mode: DiscoveryMode, scopes?: string[]) =>
+    post<DiscoveryRun>('/discovery/sweep', scopes && scopes.length ? { mode, scopes } : { mode }),
+  discoveryRuns: () => get<DiscoveryRun[]>('/discovery/runs'),
+  discoveryRun: (id: string) => get<DiscoveryRun & { assets: DiscoveredAsset[] }>(`/discovery/runs/${enc(id)}`),
+  discoveredAssets: (status?: DiscoveryStatus) => get<DiscoveredAsset[]>('/discovery/assets', { status }),
+  discoveredAsset: (id: string) => get<DiscoveredAsset>(`/discovery/assets/${enc(id)}`),
+  acceptAsset: (id: string, body: DiscoveryAccept) => post<Target>(`/discovery/assets/${enc(id)}/accept`, body),
+  ignoreAsset: (id: string, reason: string) => post<DiscoveredAsset>(`/discovery/assets/${enc(id)}/ignore`, { reason }),
+  discoveryFindings: (run_id?: string) => get<Finding[]>('/discovery/findings', { run_id }),
 
   startScan: (req: ScanRequest) => post<ScanRun>('/scans', req),
   scans: () => get<{ scans: ScanRun[] }>('/scans'),
@@ -129,6 +142,7 @@ export const api = {
     post<{ proposal_id: string; state: string }>(`/proposals/${enc(id)}/apply`, simulate_verify_fail ? { simulate_verify_fail } : {}),
   rollback: (id: string) => post<unknown>(`/proposals/${enc(id)}/rollback`),
   diff: (id: string) => get<ProposalDiff>(`/proposals/${enc(id)}/diff`),
+  verify: (id: string) => post<ProposalPlus>(`/proposals/${enc(id)}/verify`),
   bulk: (action: 'approve' | 'deny', ids: string[], note?: string) => post<BulkResult>('/proposals/bulk', { action, ids, note }),
 
   audit: (q?: Query) => get<AuditPage>('/audit', q),

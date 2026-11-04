@@ -37,15 +37,17 @@ def cmd_scopes(a: argparse.Namespace) -> int:
 
 def cmd_sweep(a: argparse.Namespace) -> int:
     svc = _svc(a)
-    run = svc.sweep(scopes=a.scope or None, mode=a.mode, actor=a.actor, background=not a.wait)
-    if a.wait:
-        print(f"run {run.id} {run.status}: " + " ".join(f"{k}={v}" for k, v in run.counts().items()))
-        for e in run.errors:
-            print(f"  error: {e}", file=sys.stderr)
-    else:
-        # a CLI process exits when this returns, so a background run is joined here with a bounded wait
-        run = svc.join(run.id, timeout=170)
-        print(f"run {run.id} {run.status}: " + " ".join(f"{k}={v}" for k, v in run.counts().items()))
+    # always in the foreground: a background thread would die with this process and leave the run open
+    try:
+        run = svc.sweep(scopes=a.scope or None, mode=a.mode, actor=a.actor, background=False)
+    except (ValueError, KeyError, PermissionError, KillSwitchEngaged):
+        raise
+    except Exception as e:  # noqa: BLE001 - the run is already recorded as failed and audited
+        print(f"sweep failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+    print(f"run {run.id} {run.status}: " + " ".join(f"{k}={v}" for k, v in run.counts().items()))
+    for e in run.errors:
+        print(f"  error: {e}", file=sys.stderr)
     return 0 if run.status == "finished" else 1
 
 
@@ -105,7 +107,7 @@ def register_cli(subparsers) -> None:
     q = sp.add_parser("sweep", help="run a discovery sweep over the saved scopes")
     q.add_argument("--mode", choices=["quick", "full", "passive", "simulated"], default="quick")
     q.add_argument("--scope", action="append", metavar="CIDR", help="sweep only this part of a saved scope")
-    q.add_argument("--wait", action="store_true", help="run in the foreground")
+    q.add_argument("--wait", action="store_true", help="accepted for compatibility; the CLI always waits")
     q.set_defaults(fn=_guarded(cmd_sweep))
 
     q = sp.add_parser("list", help="discovered assets")

@@ -43,7 +43,7 @@ class BulkBody(BaseModel):
 
 
 class PolicyBody(BaseModel):
-    enabled: bool = False
+    enabled: bool | None = None          # omitted: keep the current value
     reason: str | None = Field(default=None, max_length=2000)
     rules: list[dict] | None = None      # PolicyRule fields; validated against the dataclass
 

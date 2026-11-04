@@ -66,6 +66,9 @@ class FakeTransport(Transport):
 
     def run(self, command: str, *, timeout: int = 120, sudo: bool = False) -> CommandResult:
         self.calls.append(command)
+        lines = [ln for ln in command.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+        if len(lines) == 1:
+            command = lines[0]                   # a script whose other lines are comments runs its one command
         files = self.state["files"]
         if command == "fake-dump":
             return CommandResult(command, 0, json.dumps(self.state))
@@ -148,7 +151,7 @@ class FakeLinuxAdapter(Adapter):
             target=target, source="openscap", rule_id=RULE_PASS_MAX, title="Set password maximum age",
             severity="medium", status="not_a_finding" if ok else "open", evidence=f"PASS_MAX_DAYS {max_days}",
             description="Cited by CCI only in this test fixture.", references=["CCI-000199"])
-        f.fix_script = CMD_PASS_MAX
+        f.fix_script = f"# set PASS_MAX_DAYS in {LOGIN_DEFS}\n{CMD_PASS_MAX}"
         out.append(f)
         return out
 
