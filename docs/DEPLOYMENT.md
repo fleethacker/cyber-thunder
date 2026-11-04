@@ -171,7 +171,7 @@ when it has happened.
 1. Enable WSL2 once from an elevated PowerShell, then restart Windows:
 
    ```powershell
-   wsl --install -d Ubuntu-24.04 --no-launch
+   wsl --install -d Ubuntu --no-launch
    ```
 
    VMware Workstation keeps working next to WSL2 (it switches to the Windows hypervisor platform; nested
@@ -187,7 +187,7 @@ when it has happened.
    swap=8GB
    ```
 
-3. Open Ubuntu from the Start menu, create the Linux user, and run the bootstrap. It installs Docker Engine,
+3. Open Ubuntu from the Start menu (the distribution name offered by the built-in WSL is plain `Ubuntu`, the current LTS), create the Linux user, and run the bootstrap. It installs Docker Engine,
    k3d v5.9.0 and UDS CLI v0.39.0, and clones this repository into the Linux file system:
 
    ```sh
