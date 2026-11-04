@@ -1,4 +1,4 @@
-# ACD build plan — Day 1 (Wed 4 Nov 2026)
+# Cyber Thunder build plan — Day 1 (Wed 4 Nov 2026)
 
 Companion to [CONTEXT.md](CONTEXT.md). That file is the *what*; this is the *how, on this hardware, in 20 hours*.
 
@@ -10,7 +10,7 @@ Companion to [CONTEXT.md](CONTEXT.md). That file is the *what*; this is the *how
 | GPU | NVIDIA Quadro M1200, 4 GB (CUDA 5.0) | `qwen2.5:3b` fits fully on GPU; 7B gets partial offload |
 | Hypervisor | VMware Workstation 17.5.2 (no VMs yet) | Local range = VMware VMs. No Docker, no WSL distro |
 | Python | 3.12 (also 3.13/3.14) | Core is stdlib-only; extras vendored as wheels for offline install |
-| Local LLM | Ollama installed 4 Nov (per-user) serving open-weights models | **Default `gemma3:4b`** (Google open weights, 9.6 tok/s), fallback `qwen2.5:3b` (11.4 tok/s); set via `ACD_LLM_MODEL`. Bench table in section 9 |
+| Local LLM | Ollama installed 4 Nov (per-user) serving open-weights models | **Default `gemma3:4b`** (Google open weights, 9.6 tok/s), fallback `qwen2.5:3b` (11.4 tok/s); set via `CT_LLM_MODEL`. Bench table in section 9 |
 | Admin | local admin, UAC prompt needed | WSL/Hyper-V possible but not required |
 | Network | internet OK (pre-venue) | Pull everything now; assume nothing at the venue |
 | Repo | `C:\Users\joshu\OneDrive\Desktop\FleetHacker` (git init done, branch `main`) | OneDrive + git is flaky: pause sync on this folder or move to `C:\dev\FleetHacker` |
@@ -27,19 +27,19 @@ Companion to [CONTEXT.md](CONTEXT.md). That file is the *what*; this is the *how
 ## 3. What exists now
 
 ```
-acd/findings/schema.py     Finding, Severity, Status, references, dump/load, summarize
-acd/parsers/xccdf.py       DISA XCCDF, SSG datastream, oscap results, ARF (namespace-agnostic)
-acd/parsers/cklb.py        STIG Viewer 3 / Evaluate-STIG CKLB
-acd/audit/chain.py         hash-chained JSONL + verify
-acd/control/killswitch.py  file / env / sentinel kill switch, guard() before every state change
-acd/control/approvals.py   PROPOSED→APPROVED→APPLYING→APPLIED→VERIFIED (+DENIED/FAILED/ROLLED_BACK)
-acd/cli.py                 acd parse | audit verify/tail | kill | proposals
+cyberthunder/findings/schema.py     Finding, Severity, Status, references, dump/load, summarize
+cyberthunder/parsers/xccdf.py       DISA XCCDF, SSG datastream, oscap results, ARF (namespace-agnostic)
+cyberthunder/parsers/cklb.py        STIG Viewer 3 / Evaluate-STIG CKLB
+cyberthunder/audit/chain.py         hash-chained JSONL + verify
+cyberthunder/control/killswitch.py  file / env / sentinel kill switch, guard() before every state change
+cyberthunder/control/approvals.py   PROPOSED→APPROVED→APPLYING→APPLIED→VERIFIED (+DENIED/FAILED/ROLLED_BACK)
+cyberthunder/cli.py                 cyberthunder parse | audit verify/tail | kill | proposals
 tests/                     27 unit tests, fixtures for both formats
 range/                     Rocky 9 build notes, seed_misconfig.sh, answer_key.json
 scripts/setup_dev.ps1      idempotent dev setup (Ollama, models, pip, vendor wheels)
 ```
 
-Run: `python -m unittest discover -s tests` and `python -m acd parse tests/fixtures/*`.
+Run: `python -m unittest discover -s tests` and `python -m cyberthunder parse tests/fixtures/*`.
 
 ## 4. Schedule
 
@@ -48,7 +48,7 @@ Run: `python -m unittest discover -s tests` and `python -m acd parse tests/fixtu
 |---|---|---|
 | 0 | Core kernel + tests (done) | Joshua |
 | 1 | Rocky 9 VM up, snapshot `clean`, seeded, snapshot `seeded`; first real `oscap` results parsed end-to-end | Joshua |
-| 2 | `acd scan --target acd-target-01`: SSH → run oscap → fetch results → parse → `findings.json` → audit | Joshua |
+| 2 | `cyberthunder scan --target acd-target-01`: SSH → run oscap → fetch results → parse → `findings.json` → audit | Joshua |
 | 3 | Approval UI (FastAPI + Jinja, no JS framework): findings list, detail with citations, Approve/Deny, audit tail with head hash, kill switch button | teammate A |
 | 4 | Explain layer: Ollama client, prompt, JSON output, citation validator, background precompute | teammate B or Joshua |
 | EOD | Demo path 1 works: scan → findings → explanation → approve (no apply yet) | all |
@@ -68,7 +68,7 @@ Polish, submission fields (mission owner, technical owner, next experiment, reso
 
 ## 5. Demo script (10 min)
 1. Link is "down" (netem 56 kbit, 500 ms). New STIG release arrives as a 40 KB delta instead of a 3 MB download; show transfer time both ways.
-2. `acd scan` runs OpenSCAP on the target; findings appear with CAT levels and cited rule IDs.
+2. `cyberthunder scan` runs OpenSCAP on the target; findings appear with CAT levels and cited rule IDs.
 3. Hunt panel: rogue uid-0 account, `kworkerd.service` listener on 4444, timestomped script in `/usr/local/lib/.cache`.
 4. Explanation panel: commander-level risk, every sentence carries a STIG/CCI/CVE citation that links back to the finding.
 5. IT Sailor approves "Disable SSH root login" and "Remove rogue uid-0 user"; denies one.
@@ -83,7 +83,7 @@ Polish, submission fields (mission owner, technical owner, next experiment, reso
 - **Repo location:** pause OneDrive sync for this folder (right-click → Free up space / Settings → Sync and backup → Manage backup) or move the repo to `C:\dev\FleetHacker`. Then make the first commit (command in README).
 - **Range questions for the organizers:** OS mix and count; SSH/WinRM credentials; emulated link speed; is Evaluate-STIG/SCC present; is "Cyber Thunder" your team.
 - **IT Sailor:** recruit as approver. Ask two numbers: hours per STIG release per network today, and days from vuln bulletin to verified fix. Those become the 30% rubric slide.
-- **Home GPU (RX 7900 XT):** useful for *development* only (prompt tuning, bigger model comparison). If you want it, install Tailscale on both machines (software VPN, not wireless gear) and run Ollama at home with `OLLAMA_HOST=0.0.0.0`; point `ACD_LLM_URL` at it. Test from the venue network early; expect it may be blocked. The judged demo runs on the laptop regardless.
+- **Home GPU (RX 7900 XT):** useful for *development* only (prompt tuning, bigger model comparison). If you want it, install Tailscale on both machines (software VPN, not wireless gear) and run Ollama at home with `OLLAMA_HOST=0.0.0.0`; point `CT_LLM_URL` at it. Test from the venue network early; expect it may be blocked. The judged demo runs on the laptop regardless.
 - **Attribution:** repo hook `.githooks/commit-msg` strips any AI co-author/generated-with trailers; `core.hooksPath` is set. Commits carry only `Joshua Ott <Joshua.ott@outlook.com>`.
 
 ## 7. Risks
@@ -107,8 +107,8 @@ Polish, submission fields (mission owner, technical owner, next experiment, reso
 | Gemini Notebook | research + presentation prep | Friday pitch deck | same team link |
 | Cursor + Grok (SpaceXSI) | coding assistant | any teammate who prefers it | redeem QR in PDF |
 | Codex (OpenAI) | coding assistant | any teammate who prefers it | key in private file |
-| Codename: Ark (Defense Unicorns) | plain-language -> web app; UDS packaging | Day 2: "App packaging" of ACD as a UDS package = concrete Speed-to-Fleet artifact | create account + email Events for approval (do today) |
-| Ollama + Gemma 3 / Qwen2.5 | local open-weights inference | **the only AI inside ACD at runtime** (offline, on the enclave) | installed on the hack laptop |
+| Codename: Ark (Defense Unicorns) | plain-language -> web app; UDS packaging | Day 2: "App packaging" of Cyber Thunder as a UDS package = concrete Speed-to-Fleet artifact | create account + email Events for approval (do today) |
+| Ollama + Gemma 3 / Qwen2.5 | local open-weights inference | **the only AI inside Cyber Thunder at runtime** (offline, on the enclave) | installed on the hack laptop |
 
 Rule: the judged system never calls a cloud model. Everything above the last row is for building it.
 
@@ -137,4 +137,4 @@ Facts from the SDK README:
 What that means for us:
 - Hack laptop (4 GB VRAM) cannot meet the 24 GB guidance. Joshua's home RX 7900 XT has 20 GB; with shared memory it may run, unverified (and AMD support for LiteRT-LM is unconfirmed).
 - Architecturally both paths are "a local Gemma behind a thin explain() interface". Day 1 ships on Ollama + `gemma3:4b` (measured). The Antigravity SDK path is a **Day 2 stretch** for one teammate: if it runs on any box we own, the pitch gains "same Google SDK the Navy is being trained on, running offline". If not, nothing else changes.
-- Do not let the stretch path block the demo. The interface is `acd/explain/llm.py: explain(finding) -> {risk, impact, plan, citations}`; the backend is a config value.
+- Do not let the stretch path block the demo. The interface is `cyberthunder/explain/llm.py: explain(finding) -> {risk, impact, plan, citations}`; the backend is a config value.

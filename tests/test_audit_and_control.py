@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from acd.audit.chain import AuditLog, verify_file
-from acd.control.approvals import ApprovalGate, IllegalTransition, ProposalState
-from acd.control.killswitch import KillSwitch, KillSwitchEngaged
+from cyberthunder.audit.chain import AuditLog, verify_file
+from cyberthunder.control.approvals import ApprovalGate, IllegalTransition, ProposalState
+from cyberthunder.control.killswitch import KillSwitch, KillSwitchEngaged
 
 
 class TestAuditChain(unittest.TestCase):
@@ -79,10 +79,10 @@ class TestKillSwitch(unittest.TestCase):
         self.td = tempfile.TemporaryDirectory()
         self.audit = AuditLog(Path(self.td.name) / "audit.jsonl", node="test")
         self.ks = KillSwitch(Path(self.td.name) / "state", self.audit)
-        os.environ.pop("ACD_KILL", None)
+        os.environ.pop("CT_KILL", None)
 
     def tearDown(self):
-        os.environ.pop("ACD_KILL", None)
+        os.environ.pop("CT_KILL", None)
         self.td.cleanup()
 
     def test_default_clear(self):
@@ -105,8 +105,8 @@ class TestKillSwitch(unittest.TestCase):
         self.assertEqual(self.ks.status()["via"][:8], "sentinel")
         self.ks.release("sailor1")
         self.assertFalse(self.ks.sentinel.exists())
-        os.environ["ACD_KILL"] = "1"
-        self.assertEqual(self.ks.status()["via"], "env:ACD_KILL")
+        os.environ["CT_KILL"] = "1"
+        self.assertEqual(self.ks.status()["via"], "env:CT_KILL")
 
     def test_corrupt_state_file_fails_closed(self):
         self.ks.state_file.write_text("{not json", encoding="utf-8")
@@ -121,7 +121,7 @@ class TestApprovalGate(unittest.TestCase):
         self.ks = KillSwitch(root / "state", self.audit)
         self.store = root / "proposals.json"
         self.gate = ApprovalGate(self.store, self.audit, self.ks)
-        os.environ.pop("ACD_KILL", None)
+        os.environ.pop("CT_KILL", None)
 
     def tearDown(self):
         self.td.cleanup()

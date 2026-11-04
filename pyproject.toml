@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cyberthunder"
+version = "0.2.0"
+description = "Cyber Thunder: find, explain and fix misconfigurations and vulnerabilities on isolated networks, with a human approving every change."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "jinja2>=3.1",
+  "paramiko>=3.4",
+  "pywinrm>=0.4",
+  "requests>=2.31",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+cyberthunder = "cyberthunder.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cyberthunder*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

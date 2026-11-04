@@ -3,10 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from acd.findings.schema import (Finding, Severity, Status, dump_findings,
+from cyberthunder.findings.schema import (Finding, Severity, Status, dump_findings,
                                  extract_references, load_findings, summarize)
-from acd.parsers.cklb import parse_cklb
-from acd.parsers.xccdf import parse_xccdf
+from cyberthunder.parsers.cklb import parse_cklb
+from cyberthunder.parsers.xccdf import parse_xccdf
 
 FIX = Path(__file__).parent / "fixtures"
 

@@ -1,4 +1,4 @@
-# Cyber Thunder — Autonomous Cyber Defender (ACD)
+# Cyber Thunder — Autonomous Cyber Defender
 
 FLEETHACKER Norfolk, Nov 4–6 2026. Use case: *find, explain and fix misconfigurations and vulnerabilities in
 isolated, low-bandwidth networks with a human approving every change.*
@@ -16,26 +16,26 @@ python -m unittest discover -s tests
 ```
 
 ```bash
-python -m acd parse tests/fixtures/sample_results.xccdf.xml tests/fixtures/sample.cklb --out state/findings.json
+python -m cyberthunder parse tests/fixtures/sample_results.xccdf.xml tests/fixtures/sample.cklb --out state/findings.json
 ```
 
 ```bash
-python -m acd --actor sailor1 kill engage --reason "demo"
+python -m cyberthunder --actor sailor1 kill engage --reason "demo"
 ```
 
 ```bash
-python -m acd audit verify state/audit.jsonl
+python -m cyberthunder audit verify state/audit.jsonl
 ```
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `acd/findings/` | unified `Finding` schema every detector normalizes into |
-| `acd/parsers/` | XCCDF (DISA / SSG / oscap / ARF) and CKLB (Evaluate-STIG, STIG Viewer 3) |
-| `acd/audit/` | append-only hash-chained audit log + verifier |
-| `acd/control/` | kill switch and approval-gated state machine (agent may propose, never approve) |
-| `acd/cli.py` | `python -m acd ...` |
+| `cyberthunder/findings/` | unified `Finding` schema every detector normalizes into |
+| `cyberthunder/parsers/` | XCCDF (DISA / SSG / oscap / ARF) and CKLB (Evaluate-STIG, STIG Viewer 3) |
+| `cyberthunder/audit/` | append-only hash-chained audit log + verifier |
+| `cyberthunder/control/` | kill switch and approval-gated state machine (agent may propose, never approve) |
+| `cyberthunder/cli.py` | `python -m cyberthunder ...` |
 | `range/` | VM build notes, seed script, answer key for detection-rate scoring |
 | `vendor/` | wheels for `pip install --no-index --find-links vendor -r requirements.txt` |
 
@@ -60,36 +60,14 @@ git config core.hooksPath .githooks
 
 Each teammate works on their own branch (`<name>/<topic>`) under their own git identity and opens a PR.
 
-Local work before the team repo exists lives on `joshua/acd-kernel`. First commit:
+When the team repo already has content, rebase onto it and push your branch for a PR:
 
 ```bash
-git add -A && git commit -m "ACD kernel: findings schema, XCCDF/CKLB parsers, hash-chained audit, kill switch, approval gate"
-```
-
-When the team lead posts the GitHub repo:
-
-```bash
-git remote add origin <TEAM_REPO_URL>
+git fetch origin && git rebase origin/main
 ```
 
 ```bash
-git fetch origin
+git push -u origin <name>/<topic>
 ```
 
-If `origin/main` already has content, rebase onto it and push the branch for a PR:
-
-```bash
-git rebase origin/main
-```
-
-```bash
-git push -u origin joshua/acd-kernel
-```
-
-If the team repo is empty, push this branch as `main` instead:
-
-```bash
-git push -u origin joshua/acd-kernel:main
-```
-
-Prefer a fresh clone into `C:\dev\FleetHacker` after the push; git inside OneDrive is unreliable.
+Clone outside OneDrive (for example `C:\dev\cyber-thunder`); git inside a synced folder is unreliable.

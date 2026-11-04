@@ -38,3 +38,13 @@ Thumbs.db
 U_*_STIG*/
 U_*_STIG*.zip
 *.zip
+
+# large downloads (STIG zips, SSG content, model files) stay out of git
+range/downloads/
+*.litertlm
+ssg-*-ds.xml
+
+# ui toolchain
+node_modules/
+cyberthunder/ui/.vite/
+cyberthunder/ui/*.local

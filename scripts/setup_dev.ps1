@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Idempotent dev-machine setup for ACD. Safe to re-run. No admin required.
+  Idempotent dev-machine setup for Cyber Thunder. Safe to re-run. No admin required.
   - Ollama (per-user) + models
   - Python requirements + vendored wheels for offline install
   - Runs the unit tests

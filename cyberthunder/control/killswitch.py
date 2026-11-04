@@ -1,8 +1,8 @@
 """Kill switch: halts the agent and blocks every pending state-changing action.
 
 Three independent ways to stop it, any one wins:
-  1. state file  <state_dir>/killswitch.json {"engaged": true}   (UI button / `acd kill engage`)
-  2. env var     ACD_KILL=1                                        (operator shell)
+  1. state file  <state_dir>/killswitch.json {"engaged": true}   (UI button / `cyberthunder kill engage`)
+  2. env var     CT_KILL=1                                        (operator shell)
   3. sentinel    <state_dir>/KILL                                  (touch a file, no tooling needed)
 Every state-changing code path must call `guard()` immediately before acting.
 """
@@ -12,8 +12,8 @@ import json
 import os
 from pathlib import Path
 
-from acd.audit.chain import AuditLog
-from acd.findings.schema import utcnow
+from cyberthunder.audit.chain import AuditLog
+from cyberthunder.findings.schema import utcnow
 
 
 class KillSwitchEngaged(RuntimeError):
@@ -30,8 +30,8 @@ class KillSwitch:
 
     def status(self) -> dict:
         st: dict = {"engaged": False, "by": None, "reason": None, "at": None, "via": None}
-        if os.environ.get("ACD_KILL", "").strip().lower() in {"1", "true", "yes", "on"}:
-            st.update(engaged=True, via="env:ACD_KILL")
+        if os.environ.get("CT_KILL", "").strip().lower() in {"1", "true", "yes", "on"}:
+            st.update(engaged=True, via="env:CT_KILL")
             return st
         if self.sentinel.exists():
             st.update(engaged=True, via=f"sentinel:{self.sentinel}")

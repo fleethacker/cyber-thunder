@@ -34,7 +34,7 @@ scp range/seed_misconfig.sh acd@<vm-ip>:/tmp/ && ssh -t acd@<vm-ip> 'sudo bash /
 Then VMware → Snapshot → **`seeded`**. Reset to `seeded` before every rehearsal.
 What was seeded, and what should catch it, is in `answer_key.json` (detection-rate scoring).
 
-## Scan by hand (what `acd scan` automates)
+## Scan by hand (what `cyberthunder scan` automates)
 
 ```bash
 oscap info /usr/share/xml/scap/ssg/content/ssg-rl9-ds.xml | grep -A1 -i 'profile'
@@ -49,7 +49,7 @@ sudo oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_stig \
 (`oscap` exits 2 when any rule fails; that is normal.) Pull and parse:
 
 ```bash
-scp acd@<vm-ip>:/tmp/acd-results.xml state/raw/ && python -m acd parse state/raw/acd-results.xml --out state/findings.json
+scp acd@<vm-ip>:/tmp/acd-results.xml state/raw/ && python -m cyberthunder parse state/raw/acd-results.xml --out state/findings.json
 ```
 
 If the `stig` profile is missing from the Rocky content, use `xccdf_org.ssgproject.content_profile_cis` for Day 1 and
@@ -57,6 +57,6 @@ drop the upstream `ssg-rhel9-ds.xml` (ComplianceAsCode release zip) into `/usr/s
 
 ## Fix library source
 
-Every rule in the SSG datastream carries `<fix system="urn:xccdf:fix:script:sh">`; `acd parse` already lifts it into
+Every rule in the SSG datastream carries `<fix system="urn:xccdf:fix:script:sh">`; `cyberthunder parse` already lifts it into
 `Finding.fix_script`. That is the vetted remediation library. Rollback = restore the before-state tarball the apply step
 captures, then rescan.
