@@ -1,0 +1,169 @@
+"""Ingest over the constrained link (STIG release deltas, IAVM/CVE bulletins), link emulation and the
+sync-on-reconnect outbox. The work is done by ctx.ingest; these routes validate input and shape output.
+
+Uploads are read with a small standard-library multipart reader (no extra dependency) and saved under
+<state_dir>/ingest/uploads/ before the service sees them.
+
+Service methods used (first name found wins):
+  link_state()                         -> {kbps, latency_ms, connected}
+  set_link(changes, actor=)            -> link state (audits link.change, flushes the outbox on reconnect)
+  ingest_stig(path, actor=)            -> DeltaReport
+  get_delta(delta_id)                  -> DeltaReport            (falls back to history()['deltas'])
+  ingest_bulletin(bulletin, actor=)    -> {bulletin_id, hosts_affected, findings, scan_id}
+  history()                            -> {deltas, bulletins}
+  outbox()                             -> {connected, pending, synced}
+  sync(actor=)                         -> {sent, bytes, seconds}
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Request
+
+from cyberthunder.api import util
+from cyberthunder.api.errors import MappedRoute, feature, requires
+from cyberthunder.api.routes.scans import start_scan
+from cyberthunder.api.schemas import LinkBody
+from cyberthunder.api.util import ActorDep, CtxDep, call_first, finding_plus, to_plain
+from cyberthunder.findings.schema import Finding
+
+router = APIRouter(tags=["ingest"], route_class=MappedRoute)
+
+
+def _svc(ctx, what: str = "ingest"):
+    return requires(getattr(ctx, "ingest", None), what)
+
+
+async def _read_upload(request: Request, ctx, *, json_ok: bool) -> tuple[Path | None, object | None]:
+    """Return (saved upload path, None) for multipart, or (None, parsed JSON body) otherwise."""
+    ctype = request.headers.get("content-type", "")
+    length = int(request.headers.get("content-length") or 0)
+    if length > util.MAX_UPLOAD:
+        raise HTTPException(413, f"upload larger than {util.MAX_UPLOAD // (1024 * 1024)} MB")
+    body = await request.body()
+    if len(body) > util.MAX_UPLOAD:
+        raise HTTPException(413, f"upload larger than {util.MAX_UPLOAD // (1024 * 1024)} MB")
+    if ctype.lower().startswith("multipart/form-data"):
+        parts = util.parse_multipart(body, ctype)
+        part = parts.get("file")
+        if part is None or not part["data"]:
+            raise ValueError("multipart upload needs a non-empty 'file' field")
+        if json_ok and not part.get("filename"):
+            return None, util.parse_json_bytes(part["data"])
+        up = ctx.store.ingest_dir / "uploads" / ctx.store.new_id()
+        up.mkdir(parents=True, exist_ok=True)
+        dest = up / util.safe_filename(part.get("filename"))
+        dest.write_bytes(part["data"])
+        return dest, None
+    if not body:
+        raise ValueError("send a multipart 'file' or a JSON body")
+    return None, util.parse_json_bytes(body)
+
+
+# -- link -------------------------------------------------------------------------------------
+@router.get("/ingest/link")
+def get_link(ctx=CtxDep) -> dict:
+    svc = _svc(ctx, "link emulation")
+    with feature("link emulation"):
+        return to_plain(call_first(svc, ("link_state", "get_link", "link")))
+
+
+@router.put("/ingest/link")
+def put_link(body: LinkBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    svc = _svc(ctx, "link emulation")
+    changes = body.model_dump(exclude_none=True)
+    if not changes:
+        raise ValueError("nothing to change: send kbps, latency_ms or connected")
+    with feature("link emulation"):
+        return to_plain(call_first(svc, ("set_link", "update_link"), changes, actor=actor))
+
+
+# -- STIG release deltas ---------------------------------------------------------------------------
+@router.post("/ingest/stig")
+async def ingest_stig(request: Request, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    svc = _svc(ctx, "STIG ingest")
+    path, data = await _read_upload(request, ctx, json_ok=False)
+    if path is None:
+        if not isinstance(data, dict) or not data.get("path"):
+            raise ValueError("JSON body must be {\"path\": \"<file on this node>\"}")
+        path = Path(str(data["path"])).expanduser()
+        if not path.is_file():
+            raise ValueError(f"no such file on this node: {path}")
+    with feature("STIG ingest"):
+        return to_plain(call_first(svc, ("ingest_stig", "stig_delta", "ingest_stig_release"), path, actor=actor))
+
+
+def _find_delta(svc, delta_id: str) -> dict:
+    try:
+        d = call_first(svc, ("get_delta", "delta"), delta_id)
+    except NotImplementedError:
+        hist = to_plain(call_first(svc, ("history",))) or {}
+        d = next((x for x in hist.get("deltas", []) if x.get("id") == delta_id), None)
+    d = to_plain(d)
+    if not d:
+        raise KeyError(f"unknown STIG delta {delta_id!r}")
+    return d
+
+
+@router.post("/ingest/stig/{delta_id}/rescan", status_code=202)
+def rescan_delta(delta_id: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    svc = _svc(ctx, "STIG ingest")
+    with feature("STIG ingest"):
+        delta = _find_delta(svc, delta_id)
+    rules = list(delta.get("rescan_rule_ids") or [])
+    if not rules:
+        raise ValueError(f"delta {delta_id} changes no rules that need a rescan")
+    return start_scan(ctx, actor, rule_filter=rules, trigger="stig_delta")
+
+
+# -- bulletins -----------------------------------------------------------------------------------
+def _finding_out(ctx, f) -> dict:
+    if isinstance(f, Finding):
+        return finding_plus(ctx, f)
+    if isinstance(f, dict) and "severity" in f and "host" in f:
+        return finding_plus(ctx, Finding.from_dict(f))
+    return to_plain(f)
+
+
+@router.post("/ingest/bulletin")
+async def ingest_bulletin(request: Request, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    svc = _svc(ctx, "bulletin ingest")
+    path, data = await _read_upload(request, ctx, json_ok=True)
+    if path is not None:
+        data = util.parse_json_bytes(path.read_bytes())
+    if not isinstance(data, dict) or not data.get("id"):
+        raise ValueError("bulletin must be a JSON object with at least an 'id'")
+    if not isinstance(data.get("cves", []), list) or not isinstance(data.get("affected", []), list):
+        raise ValueError("bulletin 'cves' and 'affected' must be lists")
+    with feature("bulletin ingest"):
+        res = to_plain(call_first(svc, ("ingest_bulletin", "bulletin", "match_bulletin"), data, actor=actor)) or {}
+    if isinstance(res, dict) and "findings" in res:
+        res["findings"] = [_finding_out(ctx, f) for f in (res.get("findings") or [])]
+    return res
+
+
+@router.get("/ingest/history")
+def history(ctx=CtxDep) -> dict:
+    svc = _svc(ctx)
+    with feature("ingest"):
+        h = to_plain(call_first(svc, ("history",))) or {}
+    h.setdefault("deltas", [])
+    h.setdefault("bulletins", [])
+    return h
+
+
+# -- outbox ------------------------------------------------------------------------------------
+@router.get("/outbox")
+def outbox(ctx=CtxDep) -> dict:
+    svc = _svc(ctx, "outbox")
+    with feature("outbox"):
+        return to_plain(call_first(svc, ("outbox", "outbox_state")))
+
+
+@router.post("/outbox/sync")
+def outbox_sync(ctx=CtxDep, actor: str = ActorDep) -> dict:
+    svc = _svc(ctx, "outbox")
+    if not util.link_state(ctx).get("connected", False):
+        raise HTTPException(409, "link is disconnected; the outbox syncs automatically on reconnect")
+    with feature("outbox"):
+        return to_plain(call_first(svc, ("sync", "sync_outbox", "flush"), actor=actor))

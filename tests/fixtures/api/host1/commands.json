@@ -1,0 +1,4 @@
+[
+  {"match": "hostname", "stdout": "rocky9-web01\n", "exit": 0},
+  {"match": "uname -r", "stdout": "5.14.0-427.el9.x86_64\n", "exit": 0}
+]

@@ -1,0 +1,4 @@
+/* Nothing animates except progress (docs/UI.md). */
+*, *::before, *::after { transition: none !important; animation-duration: 0s !important; }
+.mantine-Progress-section, .mantine-Loader-root, .mantine-Loader-root * { animation-duration: revert !important; }
+[data-mantine-color-scheme='dark'] body { background: var(--mantine-color-dark-8); }
