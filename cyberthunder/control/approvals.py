@@ -2,7 +2,7 @@
 
 State machine (every edge is audit-logged; apply/rollback edges are kill-switch guarded):
 
-  PROPOSED --approve--> APPROVED --apply--> APPLYING --applied--> APPLIED --verify--> VERIFIED
+  PROPOSED --approve--> APPROVED --apply--> APPLYING --applied--> APPLIED --verify--> VERIFIED --rollback--> ROLLED_BACK
       |                     |                  |                      |
     deny                 cancel              fail                 verify-fail
       v                     v                  v                      v
@@ -41,7 +41,7 @@ TRANSITIONS: dict[ProposalState, set[ProposalState]] = {
     ProposalState.APPLYING: {ProposalState.APPLIED, ProposalState.FAILED},
     ProposalState.APPLIED: {ProposalState.VERIFIED, ProposalState.FAILED, ProposalState.ROLLED_BACK},
     ProposalState.FAILED: {ProposalState.ROLLED_BACK},
-    ProposalState.VERIFIED: set(),
+    ProposalState.VERIFIED: {ProposalState.ROLLED_BACK},     # operator may undo a verified change later
     ProposalState.DENIED: set(),
     ProposalState.CANCELLED: set(),
     ProposalState.ROLLED_BACK: set(),
