@@ -92,6 +92,11 @@ stream the UI tails.
 | Everything logged | gate edges, kill switch, scans, explanations, policy, inventory, link and outbox events |
 | Kill switch | `KillSwitch.guard()` in gate `APPLYING`/`ROLLED_BACK` edges; file, env `CT_KILL`, or sentinel `KILL` |
 
+Content pulls (`cyberthunder/ingest/content/`) are the node's only outbound network path: read-only HTTPS to
+`www.cyber.mil` and `dl.dod.cyber.mil` on port 443, no credentials, size caps on the index and every file, zip and
+XML integrity checks before anything enters the catalog, refused while the kill switch is engaged or the link is
+marked down, and every check, fetch, quarantine and import is an audit record.
+
 ## 5. Modes
 
 | Mode | Transport | Use |

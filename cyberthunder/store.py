@@ -12,6 +12,7 @@ Layout under <state_dir>:
   snapshots/<proposal_id>/...     before-state captured prior to apply
   outbox/ , synced/               sync-on-reconnect queue
   ingest/catalog/ , ingest/deltas/ , ingest/bulletins/
+  content/files/ , content/scap/ , content/quarantine/ , content/jobs/ , content/index.json , content/last_check.json
 """
 from __future__ import annotations
 

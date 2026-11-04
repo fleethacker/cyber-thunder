@@ -66,6 +66,11 @@ Commander one-pager rendered inline (iframe of the HTML) with download HTML/MD; 
 range answer key is present. "Queue for sync" puts a report in the outbox; outbox list with sync button.
 
 ### Settings (`/settings`)
+
+Content updates card: held DISA content per product with version and date; **Check** (disabled, with the reason,
+while the link is down; shows the index transfer time at the link rate); the updates table with checkboxes and **Pull
+selected** with per-file progress; **Rescan changed rules** once a pull produced a delta; **Download manifest** and
+**Import folder** for the disconnected round trip (`docs/CONTENT.md`).
 Actor name. Model status and backend. Standing approval policy editor: enable requires signer (= actor) and
 reason; rules with asset types, max disruption, allow reboot / patch / service restart, allowlists, time window;
 "Evaluate against current queue" preview. Link emulation. Demo controls: load simulated range, reset, "force
