@@ -62,6 +62,9 @@ def seed_state() -> dict:
             C.LANMAN: {"SMB1": _dw(1)},                                   # M1 SMBv1 server enabled
             C.MRXSMB10: {"Start": _dw(4)},
             C.POL_SYSTEM: {"EnableLUA": _dw(1)},
+            r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion": {
+                "EditionID": {"type": "String", "value": "Enterprise"},
+                "CurrentBuild": {"type": "String", "value": "22631"}},
             C.RDP_TCP: {"UserAuthentication": _dw(1)},
             C.POL_EXPLORER: {"NoDriveTypeAutoRun": _dw(255)},
             C.LSA: {"NoLMHash": _dw(1), "LmCompatibilityLevel": _dw(2)},  # M4 LM auth level 2
@@ -75,7 +78,7 @@ def seed_state() -> dict:
                    "LockoutBadCount": "3", "ResetLockoutCount": "15", "LockoutDuration": "15",
                    "EnableGuestAccount": "1",                            # M2 Guest enabled
                    "EnableAdminAccount": "0", "NewAdministratorName": '"ws01adm"', "NewGuestName": '"Guest"',
-                   "LSAAnonymousNameLookup": "0", "PasswordComplexity": "1"},
+                   "LSAAnonymousNameLookup": "0", "PasswordComplexity": "1", "ClearTextPassword": "0"},
         "smb": {"server_smb1": True},
         "firewall": {"Domain": True, "Private": True, "Public": True},
         "defender": {"realtime": True, "exclusions": {"paths": [], "processes": [], "extensions": []}},
@@ -126,6 +129,29 @@ def seed_state() -> dict:
         "rdp": {"enabled": True, "key_last_write": _iso(now - timedelta(days=200))},
         "files": {},
         "applied": [],
+        # Read only by the SCAP benchmark evaluation (scap_sim.py). Everything here is compliant; the
+        # benchmark's failures on this host are the same six answer-key misconfigurations.
+        "rights": {
+            "SeNetworkLogonRight": ["*S-1-5-32-544", "*S-1-5-32-555"],
+            "SeInteractiveLogonRight": ["*S-1-5-32-544", "*S-1-5-32-545"],
+            "SeBackupPrivilege": ["*S-1-5-32-544"],
+            "SeDebugPrivilege": ["*S-1-5-32-544"],
+            "SeDenyNetworkLogonRight": ["*S-1-5-32-546"],
+            "SeDenyInteractiveLogonRight": ["*S-1-5-32-546"],
+        },
+        "auditpol": {"Credential Validation": "Success and Failure", "Security Group Management": "Success",
+                     "User Account Management": "Success and Failure", "Process Creation": "Success",
+                     "Account Lockout": "Failure", "Special Logon": "Success", "Logoff": "Success",
+                     "Sensitive Privilege Use": "Success and Failure", "Audit Policy Change": "Success and Failure",
+                     "System Integrity": "Success and Failure"},
+        "wmi_results": {
+            r"root\cimv2|select domainrole from win32_computersystem": [{"DomainRole": 0}],
+            r"root\cimv2|select installstate from win32_optionalfeature where name = 'smb1protocol'": [{"InstallState": 1}],
+            r"root\cimv2\security\microsofttpm|select isenabled_initialvalue from win32_tpm": [{"IsEnabled_InitialValue": True}],
+            r"root\cimv2\security\microsofttpm|select isactivated_initialvalue from win32_tpm": [{"IsActivated_InitialValue": True}],
+            r"root\cimv2\security\microsofttpm|select isowned_initialvalue from win32_tpm": [{"IsOwned_InitialValue": True}],
+        },
+        "scap_files": {},
     }
 
 
@@ -185,7 +211,7 @@ class SimulatedWindowsHost(Transport):
             state = self.load()
             try:
                 if kind == "script":
-                    fn = getattr(self, f"_s_{name}", None)
+                    fn = getattr(self, f"_s_{name.replace('-', '_')}", None)
                     if fn is None:
                         return CommandResult(command, 1, "", f"simulated host: script {name} not available", time.time() - t0, t0)
                     out = fn(state, data)
@@ -302,6 +328,10 @@ class SimulatedWindowsHost(Transport):
 
     def _s_cleanup(self, state: dict, data: dict) -> str:
         return ""
+
+    def _s_scap_collect(self, state: dict, data: dict) -> dict:
+        from .scap_sim import answer
+        return answer(state, data.get("CtParams") or {})
 
     def _s_snapshot(self, state: dict, data: dict) -> dict:
         spec = data.get("CtSpec") or {}

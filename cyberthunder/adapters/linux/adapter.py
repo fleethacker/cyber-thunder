@@ -128,18 +128,34 @@ class LinuxAdapter(Adapter):
         return parse.sha256sums(r.stdout) if r.stdout else {}
 
     def _maybe_oscap(self, target, transport, workdir, collected, rule_filter) -> None:
+        """Run OpenSCAP on the host. options.benchmark_path names a datastream already on the host (for
+        example the DISA RHEL 9 SCAP benchmark copied over); otherwise the SSG content the scap-security-guide
+        package installs is found automatically. options.profile picks the XCCDF profile; without it the
+        profile is chosen from `oscap info` output (see _oscap_profile)."""
         if not transport.run("command -v oscap").ok:
             return
-        ds = self._oscap_datastream(transport)
-        if not ds:
-            collected.errors.append("oscap present but no SSG datastream under /usr/share/xml/scap/ssg/content/")
+        opts = target.options or {}
+        bench = str(opts.get("benchmark_path") or "").strip()
+        if bench:
+            if not transport.run(f"test -r {shlex.quote(bench)}").ok:
+                collected.errors.append(f"oscap: benchmark_path {bench} is not readable on the host")
+                return
+            ds = bench
+        else:
+            ds = self._oscap_datastream(transport)
+            if not ds:
+                collected.errors.append("oscap present but no SSG datastream under /usr/share/xml/scap/ssg/content/")
+                return
+        profile = str(opts.get("profile") or "").strip() or self._oscap_profile(transport, ds)
+        if not profile:
+            collected.errors.append(f"oscap: no XCCDF profile found in {ds}; set options.profile")
             return
-        profile = self._oscap_profile(transport, ds)
         remote = f"{REMOTE_TMP}/ct-oscap-results.xml"
         rules = [f"--rule {shlex.quote(r)}" for r in (rule_filter or []) if r.startswith("xccdf_")]
         cmd = (f"oscap xccdf eval --profile {shlex.quote(profile)} {' '.join(rules)} "
                f"--results {remote} {shlex.quote(ds)}")
         transport.run(cmd, sudo=True, timeout=600)
+        collected.raw["oscap"] = {"datastream": ds, "profile": profile, "source": "benchmark_path" if bench else "ssg"}
         local = workdir / "oscap_results.xml"
         try:
             transport.fetch(remote, str(local))
@@ -155,13 +171,28 @@ class LinuxAdapter(Adapter):
                 return f
         return files[0] if files else None
 
+    # DISA benchmarks name their profiles by mission assurance category and confidentiality level. MAC-1
+    # Classified selects every rule, so it is the default when no profile is configured.
+    DISA_PROFILE_ORDER = ("MAC-1_Classified", "MAC-1_Sensitive", "MAC-1_Public", "MAC-2_Classified",
+                          "MAC-2_Sensitive", "MAC-2_Public", "MAC-3_Classified", "MAC-3_Sensitive", "MAC-3_Public")
+
     def _oscap_profile(self, transport, datastream: str) -> str:
         r = transport.run(f"oscap info {shlex.quote(datastream)}")
+        disa = re.findall(r"(xccdf_mil\.disa\.stig_profile_\S+)", r.stdout)
+        if disa:
+            for want in self.DISA_PROFILE_ORDER:
+                for p in disa:
+                    if p.endswith("_profile_" + want):
+                        return p
+            return disa[0]
         profiles = re.findall(r"(xccdf_org\.ssgproject\.content_profile_\S+)", r.stdout)
         for p in profiles:
             if "stig" in p.lower() and "gui" not in p.lower():
                 return p
-        return profiles[0] if profiles else "xccdf_org.ssgproject.content_profile_stig"
+        if profiles:
+            return profiles[0]
+        other = re.findall(r"(xccdf_\S+_profile_\S+)", r.stdout)
+        return other[0] if other else "xccdf_org.ssgproject.content_profile_stig"
 
     def _maybe_trivy(self, transport, workdir, collected) -> None:
         if not transport.run("command -v trivy").ok:

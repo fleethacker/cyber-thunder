@@ -1,5 +1,10 @@
 """Windows host adapter: STIG checks, intrusion hunt, CKLB ingestion and reversible PowerShell fixes.
 
+With target.options.scap_datastream naming a DISA SCAP datastream on the operator machine (and optionally
+options.scap_profile), the adapter also runs that benchmark: one collection script gathers what the selected
+rules' OVAL definitions need, cyberthunder.scap evaluates them, and the results are merged with the native
+checks by STIG id with the benchmark winning (scap_merge.py). See docs/SCAP.md.
+
 All host interaction goes through the adapter's own scripts under ps/ and the payloads in fixes.py, sent as
 'powershell -NoProfile -NonInteractive -EncodedCommand <base64>' over whatever transport the target uses
 (winrm, local, fixture, simulated). Detection is pure Python over the collected JSON.
@@ -21,7 +26,7 @@ from cyberthunder.remediation.models import (ApplyResult, BeforeState, HealthChe
 from cyberthunder.transport.base import CommandResult, Transport, TransportError
 
 from . import checks as checks_mod
-from . import cklb_merge, fixes as fixes_mod, hunt as hunt_mod
+from . import cklb_merge, fixes as fixes_mod, hunt as hunt_mod, scap_merge
 from .scripts import MAX_INLINE, command_for, encode, load, parse_json_output, safe_values, with_data
 from .simhost import SimulatedWindowsHost, state_path
 
@@ -94,8 +99,80 @@ class WindowsAdapter(Adapter):
             except (TransportError, ValueError) as e:
                 col.errors.append(f"{script}: {e}")
         if "check" in mods:
+            self._collect_scap(target, transport, workdir, col)
             self._collect_cklb(target, transport, workdir, col)
         return col
+
+    # -- SCAP benchmark -----------------------------------------------------------------------------------
+    @staticmethod
+    def _scap_options(target: Target) -> tuple[str | None, str | None]:
+        o = target.options or {}
+        return (str(o["scap_datastream"]) if o.get("scap_datastream") else None,
+                str(o["scap_profile"]) if o.get("scap_profile") else None)
+
+    @staticmethod
+    def _scap_rules(path: str, profile: str | None, rule_filter: list[str] | None):
+        from cyberthunder.scap.datastream import load_cached, rules_for
+        ds = load_cached(path)
+        return ds, rules_for(ds, profile, rule_filter)
+
+    @staticmethod
+    def _scap_gather(transport: Transport, ds, rules) -> tuple[dict, list[dict]]:
+        from cyberthunder.scap.windows_plan import collect_benchmark, script_for, supported_rules
+        return collect_benchmark(ds, supported_rules(ds, rules),
+                                 lambda params: run_json(transport, script_for(params), timeout=900))
+
+    def _collect_scap(self, target: Target, transport: Transport, workdir: Path, col: Collected) -> None:
+        path, profile = self._scap_options(target)
+        if not path:
+            return
+        try:
+            ds, rules = self._scap_rules(path, profile, col.rule_filter)
+        except (OSError, ValueError, KeyError, SyntaxError) as e:   # ParseError is a SyntaxError
+            col.errors.append(f"scap datastream {path}: {e}")
+            return
+        if not rules:
+            return
+        try:
+            data, rounds = self._scap_gather(transport, ds, rules)
+        except (TransportError, ValueError) as e:
+            col.errors.append(f"scap collect: {e}")
+            return
+        p = workdir / "scap_collect.json"
+        p.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        col.artifacts["scap_collect"] = str(p)
+        col.raw["scap"] = data
+        col.raw["scap_source"] = {"datastream": path, "profile": profile, "rounds": rounds}
+        for e in data.get("errors") or []:
+            col.errors.append(f"scap collect: {e}")
+
+    def _scap_findings(self, target: Target, collected: Collected) -> list[Finding]:
+        from cyberthunder.scap.benchmark import evaluate, to_findings
+        src = collected.raw.get("scap_source") or {}
+        ds, rules = self._scap_rules(src.get("datastream") or self._scap_options(target)[0],
+                                     src.get("profile"), collected.rule_filter)
+        results = evaluate(ds, rules, collected.raw["scap"])
+        return to_findings(target, ds, results, collected_at=collected.collected_at,
+                           raw_ref=collected.artifacts.get("scap_collect"))
+
+    def _scap_recheck(self, target: Target, transport: Transport, finding: Finding) -> tuple[bool, str] | None:
+        """Re-evaluate one rule from the benchmark. None when the benchmark lacks the rule or cannot decide it."""
+        path, profile = self._scap_options(target)
+        if not path:
+            return None
+        from cyberthunder.scap.benchmark import evaluate, evidence_text
+        try:
+            ds, rules = self._scap_rules(path, profile, [finding.rule_version or "", finding.rule_id])
+        except (OSError, KeyError, SyntaxError) as e:
+            log.warning("scap datastream %s unusable for verify: %s", path, e)
+            return None
+        if not rules:
+            return None
+        data, _ = self._scap_gather(transport, ds, rules[:1])
+        rr = evaluate(ds, rules[:1], data)[0]
+        if rr.result not in ("pass", "fail"):
+            return None
+        return rr.result == "pass", "SCAP benchmark (OVAL): " + evidence_text(rr.evidence)
 
     def _collect_cklb(self, target: Target, transport: Transport, workdir: Path, col: Collected) -> None:
         o = target.options or {}
@@ -127,6 +204,8 @@ class WindowsAdapter(Adapter):
         if state is not None:
             out = checks_mod.evaluate(target, state, collected_at=collected.collected_at,
                                       raw_ref=collected.artifacts.get("checks"), rule_filter=collected.rule_filter)
+        if collected.raw.get("scap") is not None:
+            out = scap_merge.merge(target, out, self._scap_findings(target, collected))
         cp = collected.path("cklb")
         if cp and cp.exists():
             from cyberthunder.parsers.cklb import parse_cklb
@@ -206,7 +285,10 @@ class WindowsAdapter(Adapter):
         module = "hunt" if self._is_hunt_fix(fix) or finding.source == hunt_mod.SOURCE else "check"
         rule_passed: bool | None
         try:
-            if module == "check":
+            scap = self._scap_recheck(target, transport, finding) if module == "check" else None
+            if scap is not None:
+                rule_passed, evidence = scap
+            elif module == "check":
                 state = run_json(transport, load("checks"), timeout=600)
                 found = [f for f in checks_mod.evaluate(target, state, rule_filter=[finding.rule_id, finding.rule_version or ""])
                          if f.rule_id == finding.rule_id or (finding.rule_version and f.rule_version == finding.rule_version)]
