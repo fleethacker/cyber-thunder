@@ -1,0 +1,2 @@
+==> /etc/cron.d/.sysupdate <==
+*/5 * * * * root /usr/local/lib/.cache/update.sh >/dev/null 2>&1

@@ -1,19 +1,28 @@
 {
   "target": "acd-target-01",
-  "seeded_by": "range/seed_misconfig.sh",
-  "purpose": "Score detection rate (measure of success #1). Do not show to the model.",
+  "sim_target": "sim-linux-01",
+  "seeded_by": "range/seed_misconfig.sh (live range) / cyberthunder.adapters.linux.simstate (simulated host)",
+  "purpose": "Score detection rate (measure of success #1). Do not show to the model. check_id is the identifier the Linux adapter emits for each item (STIG ID or rule_version for misconfigs, hunt:linux:<check> for intrusions); tests assert that every item is detected by that id.",
+  "benchmark": "Red Hat Enterprise Linux 9 STIG V2R9",
   "items": [
-    {"id": "M1", "kind": "misconfig", "detector": "openscap", "stig_id": "RHEL-09-255045", "what": "PermitRootLogin yes", "fix_ref": "ssg:sshd_disable_root_login"},
-    {"id": "M2", "kind": "misconfig", "detector": "openscap", "stig_id": "RHEL-09-255040", "what": "PermitEmptyPasswords yes", "fix_ref": "ssg:sshd_disable_empty_passwords"},
-    {"id": "M3", "kind": "misconfig", "detector": "openscap", "stig_id": "RHEL-09-232245", "what": "/etc/shadow mode 0644", "fix_ref": "ssg:file_permissions_etc_shadow"},
-    {"id": "M4", "kind": "misconfig", "detector": "openscap", "stig_id": "RHEL-09-251010", "what": "firewalld disabled", "fix_ref": "ssg:service_firewalld_enabled"},
-    {"id": "M5", "kind": "misconfig", "detector": "openscap", "stig_id": "RHEL-09-211045", "what": "ctrl-alt-del.target not masked", "fix_ref": "ssg:disable_ctrlaltdel_reboot"},
-    {"id": "M6", "kind": "misconfig", "detector": "openscap", "stig_id": "RHEL-09-232xxx", "what": "world-writable dir under /var/log", "fix_ref": "ssg:dir_perms_world_writable_system_owned"},
-    {"id": "I1", "kind": "intrusion", "detector": "hunt.accounts", "what": "second uid-0 user svc_backup", "fix_ref": "hunt:remove_duplicate_uid0"},
-    {"id": "I2", "kind": "intrusion", "detector": "hunt.ssh_keys", "what": "unknown key jenkins@build-02 in /root/.ssh/authorized_keys", "fix_ref": "hunt:remove_authorized_key"},
-    {"id": "I3", "kind": "intrusion", "detector": "hunt.persistence.cron", "what": "/etc/cron.d/.sysupdate -> /usr/local/lib/.cache/update.sh beacon to 10.10.10.10:8443, timestomped", "fix_ref": "hunt:remove_cron_entry"},
-    {"id": "I4", "kind": "intrusion", "detector": "hunt.persistence.systemd + hunt.listeners", "what": "kworkerd.service, python http.server on tcp/4444", "fix_ref": "hunt:disable_unit"},
-    {"id": "I5", "kind": "intrusion", "detector": "hunt.suid", "what": "SUID copy of bash at /usr/local/lib/.cache/.b", "fix_ref": "hunt:remove_file"},
-    {"id": "I6", "kind": "intrusion", "detector": "hunt.sudoers", "what": "/etc/sudoers.d/90-backup NOPASSWD for svc_backup", "fix_ref": "hunt:remove_sudoers_dropin"}
+    {"id": "M1", "kind": "misconfig", "detector": "check", "check_id": "RHEL-09-255045", "fix_ref": "ssg:sshd_disable_root_login", "what": "PermitRootLogin yes"},
+    {"id": "M2", "kind": "misconfig", "detector": "check", "check_id": "RHEL-09-255040", "fix_ref": "ssg:sshd_disable_empty_passwords", "what": "PermitEmptyPasswords yes"},
+    {"id": "M3", "kind": "misconfig", "detector": "check", "check_id": "RHEL-09-232270", "fix_ref": "ssg:file_permissions_etc_shadow", "what": "/etc/shadow mode 0644 (STIG requires 0000); answer key previously cited RHEL-09-232245, corrected to the RHEL 9 V2R9 rule RHEL-09-232270"},
+    {"id": "M4", "kind": "misconfig", "detector": "check", "check_id": "RHEL-09-251015", "fix_ref": "ssg:service_firewalld_enabled", "what": "firewalld disabled; answer key previously cited RHEL-09-251010, corrected to RHEL-09-251015"},
+    {"id": "M5", "kind": "misconfig", "detector": "check", "check_id": "linux:disable_ctrlaltdel_reboot", "fix_ref": "ssg:disable_ctrlaltdel_reboot", "what": "ctrl-alt-del.target not masked. No confirmed RHEL 9 STIG ID in stig_rules.json for masking the target, so the native check cites CCI-000366; the related confirmed rule RHEL-09-211045 covers the Ctrl-Alt-Del burst action."},
+    {"id": "M6", "kind": "misconfig", "detector": "check", "check_id": "linux:dir_perms_world_writable_system_owned", "fix_ref": "ssg:dir_perms_world_writable_system_owned", "what": "world-writable dir under /var/log. No confirmed STIG ID in stig_rules.json, native check cites CCI-000366."},
+    {"id": "I1", "kind": "intrusion", "detector": "hunt", "check_id": "hunt:linux:uid0_duplicate", "fix_ref": "hunt:linux:remove_account", "attack": ["T1136.001", "T1078.003"], "what": "second uid-0 user svc_backup"},
+    {"id": "I2", "kind": "intrusion", "detector": "hunt", "check_id": "hunt:linux:unknown_authorized_key", "fix_ref": "hunt:linux:remove_authorized_key", "attack": ["T1098.004"], "what": "unknown key jenkins@build-02 in /root/.ssh/authorized_keys"},
+    {"id": "I3", "kind": "intrusion", "detector": "hunt", "check_id": "hunt:linux:cron_suspicious", "fix_ref": "hunt:linux:remove_cron_file", "attack": ["T1053.003"], "what": "/etc/cron.d/.sysupdate -> /usr/local/lib/.cache/update.sh beacon, timestomped"},
+    {"id": "I4", "kind": "intrusion", "detector": "hunt", "check_id": "hunt:linux:rogue_unit", "also_detected_by": ["hunt:linux:unexpected_listener"], "fix_ref": "hunt:linux:disable_unit", "attack": ["T1543.002", "T1571"], "what": "kworkerd.service, python http.server on tcp/4444"},
+    {"id": "I5", "kind": "intrusion", "detector": "hunt", "check_id": "hunt:linux:suid_unexpected", "fix_ref": "hunt:linux:quarantine_file", "attack": ["T1548.001"], "what": "SUID copy of bash at /usr/local/lib/.cache/.b"},
+    {"id": "I6", "kind": "intrusion", "detector": "hunt", "check_id": "hunt:linux:sudoers_nopasswd", "fix_ref": "hunt:linux:remove_sudoers_dropin", "attack": ["T1548.003"], "what": "/etc/sudoers.d/90-backup NOPASSWD for svc_backup"}
+  ],
+  "also_seeded": [
+    {"detector": "hunt", "check_id": "hunt:linux:empty_password", "what": "empty password on sailor (T1078)"},
+    {"detector": "hunt", "check_id": "hunt:linux:unknown_user", "what": "svc_backup not in known_users (T1136.001)"},
+    {"detector": "hunt", "check_id": "hunt:linux:timestomp", "what": "update.sh mtime predates ctime (T1070.006)"},
+    {"detector": "hunt", "check_id": "hunt:linux:hidden_dir", "what": "/usr/local/lib/.cache hidden dir (T1564.001)"},
+    {"detector": "hunt", "check_id": "hunt:linux:failed_login_burst", "what": "brute-force burst from 10.10.10.22 (T1110)"}
   ]
 }

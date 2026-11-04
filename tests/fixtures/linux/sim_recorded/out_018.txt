@@ -1,0 +1,8 @@
+root:$6$seed$1234567890abcdefSEEDEDhashNOTrealFORsimulationONLYxxxxxxxxxxxxxxxx.:19000:1:60:7:::
+bin:!!:19000:1:60:7:::
+daemon:!!:19000:1:60:7:::
+sshd:!!:19000:1:60:7:::
+chrony:!!:19000:1:60:7:::
+sailor::19000:1:60:7:::
+itadmin:$6$seed$1234567890abcdefSEEDEDhashNOTrealFORsimulationONLYxxxxxxxxxxxxxxxx.:19000:1:60:7:::
+svc_backup:$6$seed$1234567890abcdefSEEDEDhashNOTrealFORsimulationONLYxxxxxxxxxxxxxxxx.:19000:1:60:7:::

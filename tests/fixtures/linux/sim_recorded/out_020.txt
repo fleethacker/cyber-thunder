@@ -1,0 +1,4 @@
+==> /home/itadmin/.ssh/authorized_keys <==
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICitadminLEGITIMATEkeyFORsailorADMINaccessxxxxxxxx itadmin@workstation
+==> /root/.ssh/authorized_keys <==
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB1cyberthunderSEEDEDroguekeyFORdemoONLYxxxxxxxxxxx jenkins@build-02

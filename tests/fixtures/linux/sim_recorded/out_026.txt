@@ -1,0 +1,2 @@
+812 sshd.service sshd: /usr/sbin/sshd -D [listener]
+7001 kworkerd.service /usr/bin/python3 -m http.server 4444 --directory /usr/local/lib/.cache

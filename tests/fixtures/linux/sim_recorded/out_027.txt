@@ -1,0 +1,11 @@
+4755|root|0|/usr/bin/sudo
+4755|root|0|/usr/bin/su
+4755|root|0|/usr/bin/passwd
+4755|root|0|/usr/bin/chage
+4755|root|0|/usr/bin/mount
+4755|root|0|/usr/bin/umount
+4755|root|0|/usr/bin/pkexec
+4755|root|0|/usr/bin/crontab
+2755|root|0|/usr/bin/write
+4755|root|0|/usr/sbin/unix_chkpwd
+4755|root|31|/usr/local/lib/.cache/.b
