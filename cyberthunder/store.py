@@ -24,6 +24,13 @@ from typing import Any, Iterable
 
 from cyberthunder.findings.schema import Finding, dump_findings, load_findings, utcnow
 
+# Runs that re-evaluate only part of the picture; they overlay the latest full scan instead of replacing it.
+PARTIAL_TRIGGERS = {"bulletin", "stig_delta", "verify"}
+
+
+def is_partial_run(run: dict) -> bool:
+    return run.get("trigger") in PARTIAL_TRIGGERS or bool(run.get("rule_filter"))
+
 
 class StateStore:
     def __init__(self, root: str | Path):
@@ -92,19 +99,45 @@ class StateStore:
         runs = [r for r in (self.read_json(p) for p in self.scans_dir.glob("*/run.json")) if r]
         return sorted(runs, key=lambda r: r.get("started_at", ""), reverse=True)
 
-    def latest_scan_id(self) -> str | None:
+    def latest_scan_id(self, *, full_only: bool = True) -> str | None:
+        """Newest scan run. By default partial runs (bulletin matches, targeted rescans after a STIG
+        delta, verification rescans) are skipped, so a bulletin never hides the last full picture."""
         runs = self.list_scan_runs()
+        for run in runs:
+            if full_only and is_partial_run(run):
+                continue
+            return run["id"]
         return runs[0]["id"] if runs else None
 
     def save_findings(self, scan_id: str, findings: Iterable[Finding], meta: dict | None = None) -> None:
         dump_findings(findings, self.scan_dir(scan_id) / "findings.json", meta=meta)
 
-    def load_findings(self, scan_id: str | None = None) -> list[Finding]:
-        scan_id = scan_id or self.latest_scan_id()
-        if not scan_id:
-            return []
+    def _run_findings(self, scan_id: str) -> list[Finding]:
         p = self.scans_dir / scan_id / "findings.json"
         return load_findings(p) if p.exists() else []
+
+    def load_findings(self, scan_id: str | None = None) -> list[Finding]:
+        """Findings of one run, or (default) the current picture: see current_findings()."""
+        if scan_id:
+            return self._run_findings(scan_id)
+        return self.current_findings()
+
+    def current_findings(self) -> list[Finding]:
+        """The latest full scan's findings with every newer partial run overlaid by finding id.
+
+        Finding ids are stable per (host, source, rule), so a targeted rescan replaces the findings it
+        re-evaluated and a bulletin match adds its findings, while everything else from the full scan stays."""
+        runs = self.list_scan_runs()
+        base_id = self.latest_scan_id(full_only=True)
+        if not base_id:
+            return []
+        base_run = next(r for r in runs if r["id"] == base_id)
+        merged = {f.id: f for f in self._run_findings(base_id)}
+        newer = [r for r in runs if r["id"] != base_id and r.get("started_at", "") >= base_run.get("started_at", "")]
+        for run in reversed(newer):          # oldest first, so the newest result wins
+            for f in self._run_findings(run["id"]):
+                merged[f.id] = f
+        return list(merged.values())
 
     def get_finding(self, finding_id: str, scan_id: str | None = None) -> Finding | None:
         for f in self.load_findings(scan_id):

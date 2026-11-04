@@ -1,2 +1,4 @@
 cyberthunder/ui/dist/** -diff linguist-generated=true
 vendor/*.whl binary
+*.ps1 text eol=lf
+*.sh text eol=lf
