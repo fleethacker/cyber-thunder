@@ -40,9 +40,14 @@ def test_ingest_stig_with_explicit_old(ctx, bench_pair):
     assert rep["counts"]["changed"] == 2
 
 
-def test_rescan_for_delta_without_scanner(ctx, bench_pair):
+def test_rescan_for_delta_without_scanner(ctx, bench_pair, monkeypatch):
     old, new = bench_pair
     rep = ctx.ingest.ingest_stig(new, old=old)
+
+    def _absent(*args, **kwargs):
+        raise NotImplementedError("scanner not available in this build")
+
+    monkeypatch.setattr(ctx.scanner, "start", _absent)
     with pytest.raises(IngestError, match="scanner"):
         ctx.ingest.rescan_for_delta(rep["id"], "it2.smith")
 

@@ -15,6 +15,11 @@ from cyberthunder.inventory.targets import Target
 
 class FakeAdapter(Adapter):
     asset_type = "linux"
+
+    def make_transport(self, target, settings=None):
+        # the fake never runs a command (collect returns an empty Collected), so any transport object will do
+        from cyberthunder.transport.local import LocalTransport
+        return LocalTransport()
     resets: list = []
 
     def discover(self, target, transport): return AssetFacts(hostname=target.name)
@@ -105,6 +110,5 @@ def test_cli_load_status_reset_run(ctx, state_dir, capsys):
     assert json.loads(capsys.readouterr().out)["reset"] == {"demo-linux": True}
     rc = main([*base, "run"])
     captured = capsys.readouterr()
-    # the scanner may still be a stub in this checkout: that must produce a clear message, not a traceback
-    if rc != 0:
-        assert "scanner is not built" in captured.err
+    assert rc == 0, captured.err or captured.out
+    assert "scan " in captured.out and "proposals:" in captured.out
