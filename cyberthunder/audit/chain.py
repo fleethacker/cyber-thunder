@@ -12,6 +12,8 @@ import json
 import os
 import platform
 import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -19,6 +21,42 @@ from typing import Iterator
 from cyberthunder.findings.schema import utcnow
 
 GENESIS = "0" * 64
+
+
+@contextmanager
+def _file_lock(path: Path, timeout: float = 15.0):
+    """Exclusive lock shared by every process that appends to the same log (the API server and a CLI
+    command, for example). Lock file sits next to the log; msvcrt on Windows, flock elsewhere."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "a+b")
+    deadline = time.monotonic() + timeout
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() > deadline:
+                        raise TimeoutError(f"audit log lock busy: {path}")
+                    time.sleep(0.02)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            fh.close()
 
 
 def canonical(obj: dict) -> bytes:
@@ -63,10 +101,28 @@ class AuditLog:
                     yield json.loads(line)
 
     def _tail(self) -> tuple[int, str]:
-        seq, head = 0, GENESIS
-        for rec in self.records():
-            seq, head = rec["seq"], rec["hash"]
-        return seq, head
+        """(seq, hash) of the last record. Reads only the end of the file; falls back to a full pass if the
+        tail is not clean JSON."""
+        if not self.path.exists():
+            return 0, GENESIS
+        try:
+            with self.path.open("rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                fh.seek(max(0, size - 65536))
+                chunk = fh.read().decode("utf-8", "replace")
+            lines = [l for l in chunk.splitlines() if l.strip()]
+            if not lines:
+                return 0, GENESIS
+            rec = json.loads(lines[-1])
+            if size > 65536 and len(lines) == 1:
+                raise ValueError("tail window holds a partial line")
+            return rec["seq"], rec["hash"]
+        except (ValueError, KeyError):
+            seq, head = 0, GENESIS
+            for rec in self.records():
+                seq, head = rec["seq"], rec["hash"]
+            return seq, head
 
     def __len__(self) -> int:
         return self._seq
@@ -82,8 +138,12 @@ class AuditLog:
     # -- writing -----------------------------------------------------------
     def append(self, action: str, actor: str, details: dict | None = None, *,
                outcome: str = "ok", subject: str | None = None) -> dict:
-        """Append one event. `actor` is a human (sailor id) or 'agent'."""
-        with self._lock:
+        """Append one event. `actor` is a human (sailor id) or 'agent'.
+
+        Safe across processes: the tail is re-read under a file lock right before writing, so a CLI
+        command and the API server appending to the same log keep one unbroken chain."""
+        with self._lock, _file_lock(self.path.with_name(self.path.name + ".lock")):
+            self._seq, self._head = self._tail()
             rec = {
                 "seq": self._seq + 1,
                 "ts": utcnow(),

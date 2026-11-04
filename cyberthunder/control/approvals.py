@@ -111,11 +111,16 @@ class ApprovalGate:
         return [p for p in self._items.values() if state is None or p.state == state]
 
     # -- lifecycle -----------------------------------------------------------
-    def propose(self, *, actor: str = "agent", **kwargs) -> Proposal:
+    def propose(self, *, actor: str = "agent", meta: dict | None = None, **kwargs) -> Proposal:
+        """Create a proposal. `meta` (risk tags, severity, asset type) rides in the first history entry and
+        in the audit record so the approver's view and the log carry the same facts."""
         p = Proposal(**kwargs)
         self._items[p.id] = p
-        p.history.append({"ts": p.created_at, "state": p.state.value, "actor": actor, "note": None})
-        self.audit.append("proposal.create", actor, {"proposal": p.to_dict()}, subject=p.id)
+        entry = {"ts": p.created_at, "state": p.state.value, "actor": actor, "note": None}
+        if meta:
+            entry["meta"] = dict(meta)
+        p.history.append(entry)
+        self.audit.append("proposal.create", actor, {"proposal": p.to_dict(), "meta": dict(meta or {})}, subject=p.id)
         self._save()
         return p
 

@@ -4,7 +4,7 @@ import json
 import pytest
 
 from cyberthunder import demo
-from cyberthunder.adapters import registry
+from cyberthunder.adapters import load_all, registry
 from cyberthunder.adapters.base import Adapter, AssetFacts, Collected
 from cyberthunder.audit.chain import verify_file
 from cyberthunder.cli import main
@@ -39,6 +39,7 @@ class FakeAdapter(Adapter):
 @pytest.fixture
 def ctx(state_dir):
     FakeAdapter.resets = []
+    load_all()  # import the real adapters once so AppContext does not re-register them over the fake
     saved = dict(registry._adapters)
     registry._adapters.clear()
     registry.register(FakeAdapter)

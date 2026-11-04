@@ -81,7 +81,16 @@ class StateStore:
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(p.suffix + ".tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-        os.replace(tmp, p)
+        # Windows refuses to replace a file another reader has open for a moment (the UI polling a run);
+        # retry briefly instead of losing the write.
+        for attempt in range(20):
+            try:
+                os.replace(tmp, p)
+                return
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.05)
 
     # -- scans -----------------------------------------------------------------
     def scan_dir(self, scan_id: str) -> Path:
