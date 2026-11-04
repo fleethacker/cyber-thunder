@@ -1,0 +1,28 @@
+{
+  "title": "Evaluate-STIG_WS-01",
+  "id": "7d2f0a3e-1c4b-4a8e-9f60-3b2a1c0d9e11",
+  "active": true,
+  "mode": 2,
+  "has_path": true,
+  "target_data": {"target_type": "Computer", "host_name": "WS-01", "ip_address": "192.168.56.21", "fqdn": "ws-01.range.local", "role": "Workstation"},
+  "stigs": [
+    {
+      "stig_name": "Microsoft Windows 11 Security Technical Implementation Guide",
+      "display_name": "Microsoft Windows 11",
+      "stig_id": "MS_Windows_11_STIG",
+      "release_info": "Release: 11 Benchmark Date: 30 Sep 2026",
+      "uuid": "5b6c7d8e-0000-4000-8000-000000000011",
+      "size": 2,
+      "rules": [
+        {"uuid": "r1", "group_id": "V-253358", "rule_id": "SV-253358r958478", "rule_id_src": "SV-253358r958478_rule",
+         "severity": "medium", "rule_version": "WN11-CC-000038", "rule_title": "WDigest Authentication must be disabled.",
+         "discussion": "Checklist discussion text for WDigest.", "check_content": "Checklist check text.", "fix_text": "Checklist fix text.",
+         "ccis": ["CCI-000381"], "status": "not_a_finding", "finding_details": "Value read as 0 at last checklist run."},
+        {"uuid": "r2", "group_id": "V-253260", "rule_id": "SV-253260r1268251", "rule_id_src": "SV-253260r1268251_rule",
+         "severity": "high", "rule_version": "WN11-00-000040", "rule_title": "Windows 11 systems must be maintained at a supported servicing level.",
+         "discussion": "Unsupported releases do not receive security updates.", "check_content": "Run winver.", "fix_text": "Update the system.",
+         "ccis": ["CCI-000366"], "status": "open", "finding_details": "Build 22621 is out of servicing."}
+      ]
+    }
+  ]
+}

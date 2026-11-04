@@ -1,0 +1,17 @@
+{
+  "target": "sim-win-01",
+  "seeded_by": "range/windows/seed_misconfig.ps1 (live VM) and cyberthunder/adapters/windows/simhost.py (simulated)",
+  "purpose": "Score detection rate (measure of success #1). Do not show to the model.",
+  "items": [
+    {"id": "M1", "kind": "misconfig", "detector": "windows.checks", "stig_id": "WN11-00-000165", "what": "SMBv1 enabled on the SMB server (LanmanServer\\Parameters\\SMB1 = 1)", "fix_ref": "windows:smb1_server"},
+    {"id": "M2", "kind": "misconfig", "detector": "windows.checks", "stig_id": "WN11-SO-000010", "what": "built-in Guest account enabled", "fix_ref": "windows:guest_disabled"},
+    {"id": "M3", "kind": "misconfig", "detector": "windows.checks", "stig_id": "WN11-CC-000038", "what": "WDigest UseLogonCredential = 1", "fix_ref": "windows:wdigest_off"},
+    {"id": "M4", "kind": "misconfig", "detector": "windows.checks", "stig_id": "WN11-SO-000205", "what": "LmCompatibilityLevel = 2 (NTLM allowed)", "fix_ref": "windows:lm_compat"},
+    {"id": "M5", "kind": "misconfig", "detector": "windows.checks", "stig_id": "WN11-AC-000035", "what": "minimum password length 8", "fix_ref": "windows:min_password_length"},
+    {"id": "M6", "kind": "misconfig", "detector": "windows.checks", "stig_id": "WN11-CC-000326", "what": "PowerShell script block logging off", "fix_ref": "windows:script_block_logging"},
+    {"id": "I1", "kind": "intrusion", "detector": "hunt.admin_member", "attack": "T1078.003", "indicator": "svc_backup", "what": "rogue local administrator svc_backup (created 3 days ago)", "fix_ref": "windows:hunt:remove_admin_member"},
+    {"id": "I2", "kind": "intrusion", "detector": "hunt.run_key", "attack": "T1547.001", "indicator": "upd.exe", "what": "HKLM Run value WindowsUpdateHelper -> %APPDATA%\\upd.exe", "fix_ref": "windows:hunt:remove_run_value"},
+    {"id": "I3", "kind": "intrusion", "detector": "hunt.scheduled_task", "attack": "T1053.005", "indicator": "OneDriveSync2", "what": "scheduled task OneDriveSync2 running powershell -EncodedCommand", "fix_ref": "windows:hunt:disable_task"},
+    {"id": "I4", "kind": "intrusion", "detector": "hunt.service", "attack": "T1543.003", "indicator": "WinDefendSvc2", "what": "service WinDefendSvc2 from C:\\Users\\Public\\windefend.exe, recent 7045", "fix_ref": "windows:hunt:disable_service"}
+  ]
+}
