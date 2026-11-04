@@ -1,0 +1,11 @@
+{
+  "id": "2026-A-0123",
+  "title": "OpenSSH remote code execution",
+  "severity": "high",
+  "cves": ["CVE-2024-6387"],
+  "affected": [
+    {"package": "openssh*", "versions_below": "8.7p1-38.el9_4.1"}
+  ],
+  "source": "Exercise IAVM bulletin (sample data for the range)",
+  "published": "2026-11-03"
+}
