@@ -5,12 +5,17 @@ different namespaces/containers. We match on local tag names and walk the whole 
 """
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from cyberthunder.findings.schema import (Finding, Reference, Severity, Status,
                                  extract_references, utcnow)
+
+
+_FIX_ATTRS = ("complexity", "disruption", "reboot", "strategy")
+_RE_SRG = re.compile(r"\bSRG-[A-Z]+-\d+(?:-[A-Z0-9]+-\d+)?\b")
 
 
 def _local(tag: str) -> str:
@@ -47,6 +52,15 @@ class RuleMeta:
     fix_script: str | None = None
     fix_ansible: str | None = None
     references: list[Reference] = field(default_factory=list)
+    fix_attrs: dict[str, str] = field(default_factory=dict)   # complexity / disruption / reboot / strategy
+    srg: str | None = None                                    # DISA Group title, e.g. SRG-OS-000480-GPOS-00227
+
+    @property
+    def extra_tags(self) -> list[str]:
+        tags = [f"fix:{k}={self.fix_attrs[k]}" for k in _FIX_ATTRS if k in self.fix_attrs]
+        if self.srg:
+            tags.append(f"srg:{self.srg}")
+        return tags
 
 
 @dataclass
@@ -69,10 +83,13 @@ def _parse_rule(rule: ET.Element, parents: dict) -> RuleMeta:
     rid = rule.get("id", "")
     # Nearest enclosing Group carries the V-id in DISA content.
     group_id = None
+    srg = None
     p = parents.get(rule)
     while p is not None:
         if _local(p.tag) == "Group":
             group_id = p.get("id")
+            m = _RE_SRG.search(_text(_child(p, "title")))
+            srg = m.group(0) if m else None
             break
         p = parents.get(p)
 
@@ -94,8 +111,13 @@ def _parse_rule(rule: ET.Element, parents: dict) -> RuleMeta:
 
     fix_text = _text(_child(rule, "fixtext")) or None
     fix_script = fix_ansible = None
+    fix_attrs: dict[str, str] = {}
     for fx in _children(rule, "fix"):
         system = (fx.get("system") or "").lower()
+        # Prefer the attributes of the shell fix (the one we can run); otherwise the first fix that has any.
+        attrs = {k: fx.get(k) for k in _FIX_ATTRS if fx.get(k) is not None}
+        if attrs and (not fix_attrs or (system.endswith("script:sh") and not fix_script)):
+            fix_attrs = attrs
         body = "".join(fx.itertext()).strip()
         if system.endswith("script:sh") and not fix_script:
             fix_script = body
@@ -121,7 +143,8 @@ def _parse_rule(rule: ET.Element, parents: dict) -> RuleMeta:
 
     return RuleMeta(rule_id=rid, title=_text(_child(rule, "title")), severity=Severity.parse(rule.get("severity")),
                     group_id=group_id, rule_version=version, description=description, check_text=check_text,
-                    fix_text=fix_text, fix_script=fix_script, fix_ansible=fix_ansible, references=references)
+                    fix_text=fix_text, fix_script=fix_script, fix_ansible=fix_ansible, references=references,
+                    fix_attrs=fix_attrs, srg=srg)
 
 
 def parse_xccdf(path: str | Path, host: str | None = None, source: str = "openscap") -> XccdfParse:
@@ -168,6 +191,6 @@ def parse_xccdf(path: str | Path, host: str | None = None, source: str = "opensc
                 benchmark=out.benchmark_title or out.benchmark_id, benchmark_release=out.benchmark_release,
                 description=meta.description, check_text=meta.check_text, fix_text=meta.fix_text,
                 fix_script=meta.fix_script, fix_ansible=meta.fix_ansible, references=list(meta.references),
-                evidence=evidence, collected_at=collected, raw_ref=path,
+                evidence=evidence, collected_at=collected, raw_ref=path, tags=meta.extra_tags,
             ))
     return out
