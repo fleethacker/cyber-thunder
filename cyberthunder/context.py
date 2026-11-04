@@ -41,6 +41,7 @@ class AppContext:
         self.explain = ExplainService(self)
         self.ingest = self._optional("cyberthunder.ingest.service", "IngestService")
         self.reports = self._optional("cyberthunder.report.service", "ReportService")
+        self.discovery = self._optional("cyberthunder.discovery.service", "DiscoveryService")
 
     def _optional(self, module: str, cls: str):
         try:
