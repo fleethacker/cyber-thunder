@@ -1,0 +1,56 @@
+[
+  {
+    "match": "docker version --format '{{json .}}'",
+    "stdout": {
+      "file": "out_000.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "docker info --format '{{json .}}'",
+    "stdout": {
+      "file": "out_001.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "docker ps -a --no-trunc --format '{{json .}}'",
+    "stdout": {
+      "file": "out_002.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "docker inspect 5aefaebccd12b5f6cfb0b4f37c26ac32b65a61450860c763838034e177e5b183 1d29f34e5f1d8df048a323394e19b1ea2f9f63b4edd9ceff9813d4bb96979f97 aadb616cb63d143895428940595e12781dc5592e267098086fab84151954c240 db81039c44baff142429c93dbe327e33ea757c5118203d06a2facc906d23f5b3 0837577d5ad5438fadfcf342d876d114862878a5e8b048963924465869a1f300 85bcf83eb8b2cb5582e49c9a6d92389db7f76fe82896311b00bc6da1c442086c 880ce3891c017e9d11c08f6a6f0a378aeb7049cdc22b9bcda4b1fdadb32fe83b",
+    "stdout": {
+      "file": "out_003.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "docker images --format '{{json .}}'",
+    "stdout": {
+      "file": "out_004.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "command -v trivy",
+    "stdout": "/usr/local/bin/trivy\n",
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "regex": "^trivy image --skip-db-update --quiet --format json ",
+    "stdout": {
+      "file": "trivy_image.json"
+    },
+    "stderr": "",
+    "exit": 0
+  }
+]

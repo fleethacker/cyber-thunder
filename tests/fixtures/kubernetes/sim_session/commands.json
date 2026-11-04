@@ -1,0 +1,106 @@
+[
+  {
+    "match": "kubectl version -o json",
+    "stdout": {
+      "file": "out_000.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "kubectl get nodes -o json",
+    "stdout": {
+      "file": "out_001.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "kubectl get namespaces -o json",
+    "stdout": {
+      "file": "out_002.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "kubectl get pods -A -o json",
+    "stdout": {
+      "file": "out_003.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "kubectl get deployments -A -o json",
+    "stdout": {
+      "file": "out_004.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "kubectl get serviceaccounts -A -o json",
+    "stdout": {
+      "file": "out_005.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "kubectl get clusterrolebindings -o json",
+    "stdout": {
+      "file": "out_006.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "kubectl get rolebindings -A -o json",
+    "stdout": {
+      "file": "out_007.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "kubectl get networkpolicies -A -o json",
+    "stdout": {
+      "file": "out_008.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "kubectl get cronjobs -A -o json",
+    "stdout": {
+      "file": "out_009.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "kubectl get services -A -o json",
+    "stdout": {
+      "file": "out_010.txt"
+    },
+    "stderr": "",
+    "exit": 0
+  },
+  {
+    "match": "kubectl get --raw /api/v1/nodes/k3s-01/proxy/configz",
+    "stdout": {
+      "file": "out_011.txt"
+    },
+    "stderr": "Error from server (NotFound): the server could not find the requested resource",
+    "exit": 1
+  },
+  {
+    "match": "kubectl get --raw /api/v1/nodes/k3s-02/proxy/configz",
+    "stdout": {
+      "file": "out_012.txt"
+    },
+    "stderr": "Error from server (NotFound): the server could not find the requested resource",
+    "exit": 1
+  }
+]

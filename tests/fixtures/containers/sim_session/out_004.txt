@@ -1,0 +1,7 @@
+{"CreatedSince": "3 weeks ago", "ID": "6f3b076956b5", "Repository": "docker.io/library/nginx", "Size": "48.2MB", "Tag": "1.25.3"}
+{"CreatedSince": "3 weeks ago", "ID": "c1ae0fc45dc3", "Repository": "registry.local/ops/agent", "Size": "48.2MB", "Tag": "3.2"}
+{"CreatedSince": "3 weeks ago", "ID": "1cb47c3d0796", "Repository": "registry.local/ops/dashboard", "Size": "48.2MB", "Tag": "1.4"}
+{"CreatedSince": "3 weeks ago", "ID": "3261fea9e424", "Repository": "registry.local/ops/relay", "Size": "48.2MB", "Tag": "2.0"}
+{"CreatedSince": "3 weeks ago", "ID": "bbf519ed763f", "Repository": "docker.io/xmrig/xmrig", "Size": "48.2MB", "Tag": "6.21.0"}
+{"CreatedSince": "3 weeks ago", "ID": "78da0f7d18b7", "Repository": "registry.local/ops/backup", "Size": "48.2MB", "Tag": "1.0"}
+{"CreatedSince": "3 weeks ago", "ID": "00beb45ed9d1", "Repository": "203.0.113.50:5000/cache-sync", "Size": "48.2MB", "Tag": "0.3"}

@@ -1,0 +1,303 @@
+[
+ {
+  "stig_id": "CNTR-K8-000320",
+  "group_id": "V-242386",
+  "rule_id": null,
+  "severity": "high",
+  "title": "API server insecure port flag must be disabled",
+  "check_summary": "Look for --insecure-port in the kube-apiserver command line; anything other than 0 is a finding.",
+  "fix_summary": "Set --insecure-port=0 in the API server manifest.",
+  "object_evidence": "kube-system kube-apiserver pod.spec.containers[].command/args --insecure-port",
+  "cci": [
+   "CCI-000213"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000320",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000330",
+  "group_id": "V-242387",
+  "rule_id": null,
+  "severity": "high",
+  "title": "Kubelet read-only port must be disabled",
+  "check_summary": "Kubelet must not have --read-only-port set, and readOnlyPort in kubelet config must be 0 or absent.",
+  "fix_summary": "Remove the flag and set readOnlyPort to 0 or remove it, then restart kubelet.",
+  "object_evidence": "kubelet command-line / config readOnlyPort (node configz)",
+  "cci": [
+   "CCI-000213"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000330",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000340",
+  "group_id": "V-242388",
+  "rule_id": null,
+  "severity": "high",
+  "title": "API server insecure bind address must not be set",
+  "check_summary": "The API server manifest must not carry an --insecure-bind-address flag.",
+  "fix_summary": "Remove the --insecure-bind-address value from the API server manifest.",
+  "object_evidence": "kube-apiserver args --insecure-bind-address",
+  "cci": [
+   "CCI-000213"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000340",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000360",
+  "group_id": "V-242390",
+  "rule_id": null,
+  "severity": "high",
+  "title": "API server anonymous authentication must be disabled",
+  "check_summary": "Finding if kube-apiserver sets --anonymous-auth to true.",
+  "fix_summary": "Set --anonymous-auth=false in the API server manifest.",
+  "object_evidence": "kube-apiserver args --anonymous-auth",
+  "cci": [
+   "CCI-000213"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000360",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000370",
+  "group_id": "V-242391",
+  "rule_id": null,
+  "severity": "high",
+  "title": "Kubelet anonymous authentication must be disabled",
+  "check_summary": "Kubelet must not pass --anonymous-auth, and its config must set authentication.anonymous.enabled to false.",
+  "fix_summary": "Remove the flag, set anonymous.enabled false in kubelet config, restart kubelet.",
+  "object_evidence": "kubelet config authentication.anonymous.enabled / --anonymous-auth",
+  "cci": [
+   "CCI-000213"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000370",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000380",
+  "group_id": "V-242392",
+  "rule_id": null,
+  "severity": "high",
+  "title": "Kubelet must enable explicit authorization",
+  "check_summary": "Kubelet --authorization-mode must be present and equal to Webhook.",
+  "fix_summary": "Set --authorization-mode=Webhook for the kubelet and restart it.",
+  "object_evidence": "kubelet --authorization-mode / config authorization.mode",
+  "cci": [
+   "CCI-000213"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000380",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000270",
+  "group_id": "V-242382",
+  "rule_id": null,
+  "severity": "medium",
+  "title": "API server must use Node,RBAC authorization mode",
+  "check_summary": "Finding if --authorization-mode is AlwaysAllow or not configured on the API server.",
+  "fix_summary": "Set --authorization-mode=Node,RBAC in the API server manifest.",
+  "object_evidence": "kube-apiserver args --authorization-mode",
+  "cci": [
+   "CCI-000213"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000270",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000290",
+  "group_id": "V-242383",
+  "rule_id": null,
+  "severity": "high",
+  "title": "User-managed resources must be in dedicated namespaces",
+  "check_summary": "Workloads in default, kube-public or kube-node-lease (other than the kubernetes service) are a finding.",
+  "fix_summary": "Move such resources to dedicated user namespaces.",
+  "object_evidence": "metadata.namespace of pods/deployments/services etc. in default, kube-public, kube-node-lease",
+  "cci": [
+   "CCI-000366"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000290",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000220",
+  "group_id": "V-242381",
+  "rule_id": null,
+  "severity": "high",
+  "title": "Controller Manager must create unique service accounts per workload",
+  "check_summary": "Finding if kube-controller-manager lacks --use-service-account-credentials or sets it false.",
+  "fix_summary": "Set --use-service-account-credentials=true in the controller manager manifest.",
+  "object_evidence": "kube-controller-manager args --use-service-account-credentials",
+  "cci": [
+   "CCI-000015"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000220",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000420",
+  "group_id": "V-242395",
+  "rule_id": null,
+  "severity": "medium",
+  "title": "Kubernetes dashboard must not be enabled",
+  "check_summary": "Any pod labeled k8s-app=kubernetes-dashboard in any namespace is a finding.",
+  "fix_summary": "Delete the kubernetes-dashboard deployment in kube-system.",
+  "object_evidence": "pod.metadata.labels[k8s-app]=kubernetes-dashboard",
+  "cci": [
+   "CCI-000213"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000420",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000440",
+  "group_id": "V-242397",
+  "rule_id": null,
+  "severity": "high",
+  "title": "Kubelet staticPodPath must not enable static pods",
+  "check_summary": "Kubelet config must not set staticPodPath and the service must not use --pod-manifest-path.",
+  "fix_summary": "Remove staticPodPath and --pod-manifest-path, then restart kubelet.",
+  "object_evidence": "kubelet config staticPodPath / --pod-manifest-path; pods with kubernetes.io/config.source=file",
+  "cci": [
+   "CCI-000213"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000440",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-003280",
+  "group_id": "V-242461",
+  "rule_id": null,
+  "severity": "medium",
+  "title": "API server audit logs must be enabled",
+  "check_summary": "The API server manifest must set a valid --audit-policy-file; absent or invalid is a finding.",
+  "fix_summary": "Set --audit-policy-file in the API server manifest to a valid policy.",
+  "object_evidence": "kube-apiserver args --audit-policy-file",
+  "cci": [
+   "CCI-000366"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-003280",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000610",
+  "group_id": "V-242402",
+  "rule_id": null,
+  "severity": "medium",
+  "title": "API server must have an audit log path set",
+  "check_summary": "Finding if --audit-log-path is not set on the API server.",
+  "fix_summary": "Set --audit-log-path to a secure location and mount the host path if the API server runs as a pod.",
+  "object_evidence": "kube-apiserver args --audit-log-path; spec.volumes hostPath",
+  "cci": [
+   "CCI-001464"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000610",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-001160",
+  "group_id": "V-242415",
+  "rule_id": null,
+  "severity": "high",
+  "title": "Secrets must not be stored as environment variables",
+  "check_summary": "Any pod, deployment or container env var sourced via secretKeyRef is a finding.",
+  "fix_summary": "Move such secrets to mounted secret files or an external vault.",
+  "object_evidence": "pod.spec.containers[].env[].valueFrom.secretKeyRef",
+  "cci": [
+   "CCI-004062",
+   "CCI-000196"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-001160",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-001360",
+  "group_id": "V-242417",
+  "rule_id": null,
+  "severity": "medium",
+  "title": "Kubernetes must separate user functionality",
+  "check_summary": "User pods running in kube-system, kube-public or kube-node-lease are a finding.",
+  "fix_summary": "Move user pods to user-specific namespaces.",
+  "object_evidence": "pod.metadata.namespace vs. non-system workloads",
+  "cci": [
+   "CCI-001082"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-001360",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-002001",
+  "group_id": "V-254801",
+  "rule_id": null,
+  "severity": "high",
+  "title": "PodSecurity admission must be enabled on static pods and kubelets",
+  "check_summary": "Static pod manifests need feature-gates including PodSecurity=true; kubelet must not use --feature-gates on the command line and its config must enable PodSecurity.",
+  "fix_summary": "Add PodSecurity=true to feature gates in manifests and kubelet config, remove kubelet --feature-gates flag, restart kubelet.",
+  "object_evidence": "kube-system pod args --feature-gates; kubelet config featureGates",
+  "cci": [
+   "CCI-002263"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-002001",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-002010",
+  "group_id": "V-242437",
+  "rule_id": null,
+  "severity": "high",
+  "title": "Kubernetes must have a pod security policy set",
+  "check_summary": "On pre-1.25 clusters at least one PodSecurityPolicy must exist requiring non-root and non-zero group ranges; PSP is removed in 1.25 so Pod Security Admission applies instead.",
+  "fix_summary": "Create a restricted policy (no privileged, no escalation, drop capabilities, no host namespaces, non-root) or use Pod Security Admission.",
+  "object_evidence": "podsecuritypolicies.spec.runAsUser/fsGroup/supplementalGroups; namespace labels pod-security.kubernetes.io/*",
+  "cci": [
+   "CCI-002263"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-002010",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000910",
+  "group_id": "V-242409",
+  "rule_id": null,
+  "severity": "medium",
+  "title": "Controller Manager must disable profiling",
+  "check_summary": "Finding if kube-controller-manager lacks --profiling or sets it true.",
+  "fix_summary": "Set --profiling=false in the controller manager manifest.",
+  "object_evidence": "kube-controller-manager args --profiling",
+  "cci": [
+   "CCI-000381"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000910",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-001620",
+  "group_id": "V-242434",
+  "rule_id": null,
+  "severity": "high",
+  "title": "Kubelet must enable kernel protection",
+  "check_summary": "Kubelet must not use --protect-kernel-defaults flag and config protectKernelDefaults must be true.",
+  "fix_summary": "Remove the flag, set protectKernelDefaults true in kubelet config, restart kubelet.",
+  "object_evidence": "kubelet config protectKernelDefaults",
+  "cci": [
+   "CCI-001084"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-001620",
+  "confirmed": true
+ },
+ {
+  "stig_id": "CNTR-K8-000960",
+  "group_id": "V-242414",
+  "rule_id": null,
+  "severity": "medium",
+  "title": "Cluster must use non-privileged host ports for user pods",
+  "check_summary": "Pods in user namespaces mapping any host port below 1024 are a finding.",
+  "fix_summary": "Use a service mapping to a non-privileged host port or change the image to use unprivileged ports.",
+  "object_evidence": "pod.spec.containers[].ports[].hostPort < 1024 (excluding kube-system, kube-node-lease, kube-public)",
+  "cci": [
+   "CCI-000382"
+  ],
+  "source_url": "https://stigaview.com/products/srg-kubernetes/v2r4/CNTR-K8-000960",
+  "confirmed": true
+ }
+]

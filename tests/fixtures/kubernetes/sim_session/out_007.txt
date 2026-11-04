@@ -1,0 +1,32 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "name": "web-reader",
+        "namespace": "apps",
+        "resourceVersion": "1042",
+        "uid": "2bd83718-sim"
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "pod-reader"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "default",
+          "namespace": "apps"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "resourceVersion": ""
+  }
+}

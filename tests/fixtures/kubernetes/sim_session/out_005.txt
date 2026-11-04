@@ -1,0 +1,67 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "name": "default",
+        "namespace": "apps",
+        "resourceVersion": "1031",
+        "uid": "2d81a8ab-sim"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "automountServiceAccountToken": false,
+      "kind": "ServiceAccount",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "name": "default",
+        "namespace": "default",
+        "resourceVersion": "1029",
+        "uid": "03011090-sim"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "name": "default",
+        "namespace": "kube-system",
+        "resourceVersion": "1032",
+        "uid": "f4f7647e-sim"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "automountServiceAccountToken": false,
+      "kind": "ServiceAccount",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "name": "default",
+        "namespace": "monitoring",
+        "resourceVersion": "1030",
+        "uid": "b700961c-sim"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "automountServiceAccountToken": true,
+      "kind": "ServiceAccount",
+      "metadata": {
+        "creationTimestamp": "2026-10-20T08:00:00Z",
+        "name": "prometheus",
+        "namespace": "monitoring",
+        "resourceVersion": "1033",
+        "uid": "759d0f23-sim"
+      }
+    }
+  ],
+  "metadata": {
+    "resourceVersion": ""
+  }
+}

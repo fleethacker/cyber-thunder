@@ -1,0 +1,1 @@
+{"ServerVersion": "24.0.9", "Containers": 7, "ContainersRunning": 7, "OperatingSystem": "Rocky Linux 9.4 (Blue Onyx)", "Name": "rocky-01", "SecurityOptions": ["name=seccomp,profile=builtin", "name=selinux"], "LiveRestoreEnabled": false}

