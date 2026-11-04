@@ -89,6 +89,26 @@ cluster deployment: Untested.
    after deployment verification succeeds. Normal deployment excludes the
    identity bootstrap and credential output.
 
+   Rerun `./deploy.sh dev` to re-enable a disabled development administrator
+   and clear that account's failed-login lockout. The bootstrap verifies login
+   and enabled status before succeeding. The realm's lockout policy remains
+   enabled.
+
+   If deployment ran without `dev`, configure the development administrator
+   afterward without rebuilding the bundle or redeploying workloads:
+
+   ```sh
+   ./setup-dev-user.sh
+   ```
+
+   This command uses `.build/kubeconfig`, or the file specified by `KUBECONFIG`,
+   and requires context `k3d-cyber-thunder`. Install UDS CLI, Python 3, and curl
+   before running it. The cluster and Keycloak must already be running. It
+   creates or reuses the same saved password as `./deploy.sh dev` and prints
+   credentials after the identity bootstrap verifies login. It does not call
+   k3d or the container runtime. The development identity changes described
+   above also apply to this command.
+
    If `cyber-thunder` already exists, dev mode updates only identity bootstrap
    and Podinfo. It preserves the cluster and Core deployment. A missing
    Keycloak master administrator is created through the first-admin welcome
@@ -230,8 +250,8 @@ Distribution-specific kernel and networking requirements still apply.
 
    ```sh
    python3 -m unittest discover -s tests -v
-   bash -n deploy.sh deploy-mac.sh deploy-linux.sh scripts/*.sh packages/identity-bootstrap/scripts/*.sh
-   shellcheck deploy.sh deploy-mac.sh deploy-linux.sh scripts/*.sh packages/identity-bootstrap/scripts/*.sh
+   bash -n deploy.sh deploy-mac.sh deploy-linux.sh setup-dev-user.sh scripts/*.sh packages/identity-bootstrap/scripts/*.sh
+   shellcheck deploy.sh deploy-mac.sh deploy-linux.sh setup-dev-user.sh scripts/*.sh packages/identity-bootstrap/scripts/*.sh
    uds zarf dev lint packages/podinfo
    uds zarf dev lint packages/identity-bootstrap
    uds run build --dry-run

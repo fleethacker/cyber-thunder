@@ -92,11 +92,16 @@ if [[ -z "$user_id" ]]; then
       -H "@$request_dir/admin-headers" -H 'Content-Type: application/json' --data-binary @-
   user_id="$(curl -fsS "${keycloak_admin_url}/admin/realms/uds/users?username=${username}&exact=true" \
     -H "@$request_dir/admin-headers" | "${zarf[@]}" tools yq -r '.[0].id')"
-else
-  curl -fsS -o /dev/null -X PUT "${keycloak_admin_url}/admin/realms/uds/users/${user_id}" \
-    -H "@$request_dir/admin-headers" -H 'Content-Type: application/json' \
-    --data-raw '{"username":"admin","email":"admin@uds.dev","enabled":true,"emailVerified":true,"requiredActions":[]}'
 fi
+
+# Permanent brute-force lockouts retain failed-login state when enabled is set.
+# Clear only this development account's failures before testing its password.
+curl -fsS -o /dev/null -X DELETE \
+  "${keycloak_admin_url}/admin/realms/uds/attack-detection/brute-force/users/${user_id}" \
+  -H "@$request_dir/admin-headers"
+curl -fsS -o /dev/null -X PUT "${keycloak_admin_url}/admin/realms/uds/users/${user_id}" \
+  -H "@$request_dir/admin-headers" -H 'Content-Type: application/json' \
+  --data-raw '{"username":"admin","email":"admin@uds.dev","enabled":true,"emailVerified":true,"requiredActions":[]}'
 
 password_status="$(curl -sS -o /dev/null -w '%{http_code}' \
   "https://sso.${domain}/realms/uds/protocol/openid-connect/token" \
@@ -145,6 +150,12 @@ done
 if [[ -z "$user_token" ]]; then
   printf 'local development identity login failed: %s\n' \
     "$(printf '%s' "$token_response" | "${zarf[@]}" tools yq -r '.error_description // .error // "unknown error"')" >&2
+  exit 1
+fi
+
+if ! curl -fsS "${keycloak_admin_url}/admin/realms/uds/users/${user_id}" \
+  -H "@$request_dir/admin-headers" | "${zarf[@]}" tools yq -e '.enabled == true' >/dev/null; then
+  echo "Local development administrator is still disabled after login." >&2
   exit 1
 fi
 
