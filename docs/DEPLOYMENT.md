@@ -162,6 +162,51 @@ cluster deployment: Untested.
    credentials local. The demo domains must resolve to the machine exposing the
    cluster ports. A VM or remote engine also needs host port forwarding.
 
+## Windows 11 host (WSL2)
+
+The launcher runs on Linux, so on a Windows laptop it runs inside a WSL2 Ubuntu distribution that has Docker
+Engine, k3d and the UDS CLI installed. This path has not been exercised yet; the first run is recorded here
+when it has happened.
+
+1. Enable WSL2 once from an elevated PowerShell, then restart Windows:
+
+   ```powershell
+   wsl --install -d Ubuntu-24.04 --no-launch
+   ```
+
+   VMware Workstation keeps working next to WSL2 (it switches to the Windows hypervisor platform; nested
+   virtualization inside VMware guests is lost).
+
+2. Give the WSL VM what UDS Core needs (4 CPUs and 10 GiB at least) in `%USERPROFILE%\.wslconfig`, then
+   `wsl --shutdown` so it applies:
+
+   ```ini
+   [wsl2]
+   memory=20GB
+   processors=6
+   swap=8GB
+   ```
+
+3. Open Ubuntu from the Start menu, create the Linux user, and run the bootstrap. It installs Docker Engine,
+   k3d v5.9.0 and UDS CLI v0.39.0, and clones this repository into the Linux file system:
+
+   ```sh
+   bash /mnt/c/dev/cyber-thunder/scripts/wsl-bootstrap.sh
+   ```
+
+   The first run switches systemd on and asks for one `wsl --shutdown`; rerun it afterwards.
+
+4. In a new shell:
+
+   ```sh
+   cd ~/cyber-thunder && ./deploy.sh dev
+   ```
+
+Ports 80, 443 and 6550 must be free on Windows as well as inside WSL, because WSL forwards them to
+`localhost`; the `uds.dev` names resolve to 127.0.0.1, so the printed addresses open from a Windows browser.
+Keep the clone in the Linux file system (`~`), not under `/mnt/c`: Docker bind mounts and k3d are far slower
+there.
+
 ## Existing Kubernetes cluster
 
 This mode deploys Zarf initialization, UDS Core, and Podinfo into the named

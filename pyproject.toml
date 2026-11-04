@@ -27,7 +27,7 @@ cyberthunder = "cyberthunder.cli:main"
 include = ["cyberthunder*"]
 
 [tool.setuptools.package-data]
-cyberthunder = ["report/templates/*.j2", "adapters/*/stig_rules.json", "adapters/windows/ps/*.ps1", "ui/dist/*", "ui/dist/assets/*"]
+cyberthunder = ["report/templates/*.j2", "adapters/*/stig_rules.json", "adapters/windows/ps/*.ps1", "ingest/data/*.json", "ui/dist/*", "ui/dist/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

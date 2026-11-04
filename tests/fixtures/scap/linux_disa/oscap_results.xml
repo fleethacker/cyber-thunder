@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2" id="xccdf_mil.disa.stig_benchmark_RHEL_9_STIG" resolved="1" xml:lang="en">
+  <status>accepted</status>
+  <title>Red Hat Enterprise Linux 9 STIG SCAP Benchmark</title>
+  <plain-text id="release-info">Release: 10 Benchmark Date: 01 Oct 2026</plain-text>
+  <version>002.010</version>
+  <Group id="xccdf_mil.disa.stig_group_V-257947">
+    <title>SRG-OS-000480-GPOS-00227</title>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-257947r1044853_rule" severity="medium">
+      <version>RHEL-09-211015</version>
+      <title>RHEL 9 must be configured so that the Network File System (NFS) is configured to use RPCSEC_GSS.</title>
+      <ident system="http://cyber.mil/cci">CCI-000366</ident>
+      <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+        <check-content-ref href="U_RHEL_9_V2R10_STIG_SCAP_1-3_Benchmark-oval.xml" name="oval:mil.disa.stig.rhel9:def:257947"/>
+      </check>
+    </Rule>
+  </Group>
+  <Group id="xccdf_mil.disa.stig_group_V-258094">
+    <title>SRG-OS-000480-GPOS-00227</title>
+    <Rule id="xccdf_mil.disa.stig_rule_SV-258094r1045179_rule" severity="high">
+      <version>RHEL-09-611025</version>
+      <title>RHEL 9 must not allow blank or null passwords.</title>
+      <ident system="http://cyber.mil/cci">CCI-000366</ident>
+      <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5">
+        <check-content-ref href="U_RHEL_9_V2R10_STIG_SCAP_1-3_Benchmark-oval.xml" name="oval:mil.disa.stig.rhel9:def:258094"/>
+      </check>
+    </Rule>
+  </Group>
+  <TestResult id="xccdf_org.open-scap_testresult_xccdf_mil.disa.stig_profile_MAC-1_Classified" start-time="2026-11-04T10:00:00" end-time="2026-11-04T10:02:10">
+    <benchmark href="#scap_mil.disa.stig_comp_U_RHEL_9_V2R10_STIG_SCAP_1-3_Benchmark-xccdf.xml" id="xccdf_mil.disa.stig_benchmark_RHEL_9_STIG"/>
+    <title>OSCAP Scan Result</title>
+    <profile idref="xccdf_mil.disa.stig_profile_MAC-1_Classified"/>
+    <target>rhel9-01</target>
+    <rule-result idref="xccdf_mil.disa.stig_rule_SV-257947r1044853_rule" severity="medium" time="2026-11-04T10:00:05">
+      <result>pass</result>
+    </rule-result>
+    <rule-result idref="xccdf_mil.disa.stig_rule_SV-258094r1045179_rule" severity="high" time="2026-11-04T10:00:06">
+      <result>fail</result>
+    </rule-result>
+  </TestResult>
+</Benchmark>

@@ -1,0 +1,41 @@
+[
+ {
+  "match": "command -v oscap",
+  "stdout": "/usr/bin/oscap\n",
+  "exit": 0
+ },
+ {
+  "match": "command -v trivy",
+  "stdout": "",
+  "exit": 1
+ },
+ {
+  "match": "test -r /var/lib/cyberthunder/scap/U_RHEL_9_V2R10_STIG_SCAP_1-3_Benchmark.xml",
+  "stdout": "",
+  "exit": 0
+ },
+ {
+  "match": "oscap info /var/lib/cyberthunder/scap/U_RHEL_9_V2R10_STIG_SCAP_1-3_Benchmark.xml",
+  "stdout": {
+   "file": "oscap_info_disa.txt"
+  },
+  "exit": 0
+ },
+ {
+  "match": "ls /usr/share/xml/scap/ssg/content/ssg-*-ds.xml 2>/dev/null",
+  "stdout": "/usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml\n",
+  "exit": 0
+ },
+ {
+  "match": "oscap info /usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml",
+  "stdout": {
+   "file": "oscap_info_ssg.txt"
+  },
+  "exit": 0
+ },
+ {
+  "regex": "^oscap xccdf eval --profile \\S+ +--results /tmp/ct-oscap-results\\.xml \\S+$",
+  "stdout": "",
+  "exit": 2
+ }
+]

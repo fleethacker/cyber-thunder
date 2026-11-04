@@ -48,6 +48,12 @@ class Settings:
     link_kbps: float = field(default_factory=lambda: _env_num("CT_LINK_KBPS", 56.0))
     link_latency_ms: int = field(default_factory=lambda: _env_num("CT_LINK_LATENCY_MS", 500, int))
     link_connected: bool = field(default_factory=lambda: _env_bool("CT_LINK_CONNECTED", True))
+    # DISA content pulls (ingest/content): check the public index when the link comes back, pull only on request
+    content_check_on_reconnect: bool = field(default_factory=lambda: _env_bool("CT_CONTENT_CHECK_ON_RECONNECT", True))
+    content_auto_pull: bool = field(default_factory=lambda: _env_bool("CT_CONTENT_AUTO_PULL", False))
+    content_max_bytes: int = field(default_factory=lambda: _env_num("CT_CONTENT_MAX_BYTES", 512 * 1024 * 1024, int))
+    content_timeout_s: int = field(default_factory=lambda: _env_num("CT_CONTENT_TIMEOUT", 30, int))
+    content_snapshot: str | None = field(default_factory=lambda: _env("CT_CONTENT_SNAPSHOT", "") or None)
     # web
     host: str = field(default_factory=lambda: _env("CT_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: _env_num("CT_PORT", 8000, int))

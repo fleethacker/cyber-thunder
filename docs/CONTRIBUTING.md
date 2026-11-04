@@ -92,3 +92,5 @@ git remote set-url origin https://github.com/fleethacker/cyber-thunder.git
 
 Untracked material is not in the bundle: the STIG downloads under `range/downloads/` (public, re-downloadable
 from public.cyber.mil), local model files, and anything under `state/`.
+
+Taking the tool to a new environment (inventory, transports, benchmarks, new adapters): see [ADAPTING.md](ADAPTING.md).

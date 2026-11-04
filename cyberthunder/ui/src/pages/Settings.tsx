@@ -1,4 +1,4 @@
-// Settings: actor, model status, standing approval policy, link emulation, demo controls.
+// Settings: actor, model status, standing approval policy, link emulation, content updates, demo controls.
 import { Alert, Badge, Button, Card, Group, Paper, SimpleGrid, Stack, Switch, Text, TextInput } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconFlask } from '@tabler/icons-react';
@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { api, errorText } from '../api/client';
 import { actorProblem } from '../components/ActorChip';
 import { ErrorBox, Loading, PageTitle } from '../components/common';
+import { ContentUpdates } from '../components/ContentUpdates';
 import { LinkControls } from '../components/LinkControls';
 import { PolicyEditor } from '../components/PolicyEditor';
 import { useAsync } from '../lib/hooks';
@@ -113,6 +114,7 @@ export default function Settings() {
       </SimpleGrid>
       <Paper withBorder p="md" radius="md"><PolicyEditor /></Paper>
       <LinkControls />
+      <ContentUpdates />
       <DemoControls />
     </Stack>
   );

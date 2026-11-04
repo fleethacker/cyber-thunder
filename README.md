@@ -48,8 +48,10 @@ hosts; the first run against a real range host is the next step.
 | Remediation engine (apply, verify, auto-rollback) | `cyberthunder/remediation/engine.py` | built |
 | Scan orchestration | `cyberthunder/scan.py` | built |
 | Linux, Cisco, Kubernetes, container, Windows adapters | `cyberthunder/adapters/<type>/` | built |
+| DISA SCAP benchmarks run by the tool itself (OVAL evaluator for Windows, DISA datastreams through oscap on Linux) | `cyberthunder/scap/` | built |
 | Local-model explanations with citation validation | `cyberthunder/explain/` | built |
 | STIG delta ingest, link emulation, outbox | `cyberthunder/ingest/` | built |
+| DISA content pull (public STIG index, resumable allow-listed downloads, manifest round trip for disconnected sites) | `cyberthunder/ingest/content/` | built |
 | Reports (one-pager, POA&M, checklist, path to fleet) | `cyberthunder/report/` | built |
 | HTTP API | `cyberthunder/api/` | built |
 | Web UI | `cyberthunder/ui/` | built |
@@ -160,23 +162,27 @@ checklist, path to fleet), `demo reset|run`.
 | Document | What it is |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | pipeline, contracts, guardrails, how to add an adapter |
+| [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |
+| [docs/CONTENT.md](docs/CONTENT.md) | how STIGs and SCAP benchmarks reach the node: pull when connected, manifest and removable media when not |
+| [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |
 | [docs/API.md](docs/API.md) | HTTP API v1 |
 | [docs/UI.md](docs/UI.md) | screens and behaviour |
 | [docs/DEMO.md](docs/DEMO.md) | 10-minute demo runbook |
 | [docs/SUBMISSION.md](docs/SUBMISSION.md) | portal submission draft |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | working in this repo |
 | [docs/PLAN.md](docs/PLAN.md), [docs/CONTEXT.md](docs/CONTEXT.md) | build plan and event context |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | UDS cluster deployment: macOS, Linux, and Windows through WSL2 |
 | [range/README.md](range/README.md) | local range, link emulation, answer keys |
 
 ## Guardrails (enforced in code)
 
 | Question | Answer | Where |
 |---|---|---|
-| What may it do | Scan, read configs and logs, propose fixes, apply approved fixes from the vetted library | `RemediationEngine.execute` runs `FixEntry` payloads only |
+| What may it do | Scan, read configs and logs, propose fixes, apply approved fixes from the vetted library, pull public STIG content from two allow-listed DoD hosts when the link is up | `RemediationEngine.execute` runs `FixEntry` payloads only |
 | What may it never do | Run shell text from a model, change anything unapproved, touch hosts outside scope, delete logs or audit | `explain/` returns validated JSON text; `Inventory.assert_in_scope()`; audit is append-only |
 | What needs human approval | Every state-changing action | `ApprovalGate` human-only edges reject actors `agent`, `llm`, `system` |
 | How is it logged | Every scan, finding, proposal, approval, denial, apply, verify, rollback, kill, scope and policy change | hash-chained audit log; head hash shown in the UI and on every report |
-| How is it stopped | Kill switch (file, `CT_KILL`, or `KILL` sentinel) blocks every apply and rollback | `KillSwitch.guard()` |
+| How is it stopped | Kill switch (file, `CT_KILL`, or `KILL` sentinel) blocks every apply, rollback and content pull | `KillSwitch.guard()` |
 | Can it be undone | Every library fix declares a rollback; before-state is captured first; failed verify rolls back automatically | `FixEntry.rollback_kind`, `BeforeState` |
 
 ## Cluster deployment

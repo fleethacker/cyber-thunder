@@ -28,6 +28,7 @@ CLI_MODULES = (
     "cyberthunder.remediation.cli",
     "cyberthunder.explain.cli",
     "cyberthunder.ingest.cli",
+    "cyberthunder.scap.cli",
     "cyberthunder.report.cli",
     "cyberthunder.api.cli",
     "cyberthunder.demo",

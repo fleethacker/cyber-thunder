@@ -391,3 +391,123 @@ export interface DiscoveryAccept {
   in_scope: boolean;
   reason: string;
 }
+
+// -- DISA content updates (docs/CONTENT.md) ------------------------------------------------------
+export type ContentKind = 'manual_stig' | 'scap_benchmark' | 'srg' | 'automation' | 'compilation' | 'document' | 'tool' | 'other';
+
+export interface ContentRow {
+  filename: string;
+  url: string;
+  product_key: string | null;
+  kind: ContentKind;
+  version: number[] | null;
+  version_label: string | null;
+  upload_date: string | null;
+  title?: string;
+  sunset?: boolean;
+  targets?: string[];
+  held_version?: number[] | null;
+  expected_bytes?: number | null;
+  expected_etag?: string | null;
+}
+
+export interface ContentSkip { target_id?: string; filename?: string; product_key?: string; kind?: string; reason: string }
+
+export interface UpdateCheck {
+  checked_at: string | null;
+  checked_by?: string;
+  source?: 'live' | 'snapshot';
+  index_entries?: number;
+  index_bytes?: number;
+  index_wire_bytes?: number;
+  gzip?: boolean;
+  estimate_seconds_at_link?: number | null;
+  index_estimate_seconds?: number | null;
+  wanted: ContentRow[];
+  updates: ContentRow[];
+  current: ContentRow[];
+  skipped: ContentSkip[];
+  wanted_count?: number;
+  new_count?: number;
+  index_estimate?: { bytes: number; seconds: number; link: LinkState };
+  connected?: boolean;
+}
+
+export interface PullDelta {
+  id: string;
+  benchmark_id: string;
+  old_release: string | null;
+  new_release: string | null;
+  counts: Record<string, number>;
+  rescan_rules: number;
+  full_import: boolean;
+  filename: string;
+}
+
+export interface PullFile {
+  filename: string;
+  url: string;
+  kind: ContentKind | null;
+  product_key: string | null;
+  version_label: string | null;
+  bytes: number;
+  total: number | null;
+  state: 'pending' | 'downloading' | 'verifying' | 'retrying' | 'done' | 'failed' | 'quarantined' | 'stopped';
+  error: string | null;
+  estimate_seconds: number | null;
+  sha256: string | null;
+  delta: PullDelta | null;
+  datastream_path: string | null;
+}
+
+export interface PullJob {
+  id: string;
+  created_at: string;
+  created_by: string;
+  state: 'queued' | 'running' | 'done' | 'partial' | 'failed' | 'stopped';
+  pace: boolean;
+  files: PullFile[];
+  deltas: PullDelta[];
+  error: string | null;
+  finished_at: string | null;
+}
+
+export interface HeldFile {
+  filename: string;
+  product_key: string | null;
+  kind: ContentKind;
+  version: number[] | null;
+  version_label: string | null;
+  upload_date: string | null;
+  sha256: string;
+  bytes: number;
+  fetched_at: string;
+  fetched_by: string;
+  source: 'pulled' | 'imported' | 'bundled';
+  ingest: { delta_id?: string; catalog_path?: string; datastream_path?: string };
+}
+
+export interface HeldContent {
+  files: HeldFile[];
+  products: { product_key: string; files: HeldFile[] }[];
+  scap: { product_key: string | null; filename: string; datastream_path: string }[];
+  quarantine: { filename: string; reason: string; quarantined_at: string }[];
+  dir: string;
+}
+
+export interface ContentManifest {
+  generated_at: string;
+  node: string | null;
+  items: { filename: string; url: string; product_key: string | null; kind: string; version: number[] | null; expected_bytes?: number; expected_etag?: string }[];
+  path: string;
+  sha256: string;
+}
+
+export interface ImportDirResult {
+  imported: HeldFile[];
+  refused: { filename: string; reason: string }[];
+  skipped: { filename: string; reason: string }[];
+  missing: string[];
+  verified_by: string;
+  deltas: PullDelta[];
+}
