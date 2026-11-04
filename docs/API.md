@@ -4,8 +4,10 @@ Base path `/api/v1`. JSON in and out. Served by `cyberthunder serve` from the sa
 Interactive docs at `/api/docs`.
 
 **Identity.** Every request may carry `X-Actor: <name>` (the UI sends the name the Sailor typed).
-Mutating endpoints require it to be non-empty and not one of `agent`, `llm`, `system` → `400`.
-Approvals, denials, kill switch and policy changes are recorded under that actor.
+Every POST, PUT, PATCH and DELETE route except `POST /policy/evaluate` requires it to name a person: a missing or
+blank header, a bare or prefixed machine identity (`agent`, `llm`, `system`, `agent:*`, `llm:*`, `system:*`) and any
+`policy:*` value are refused with `400`. Approvals, denials, kill switch, scope and policy changes are recorded under
+that actor. Request validation errors return `400` with a string `detail`, not the framework default `422`.
 
 **Errors.** `{"detail": "..."}`. `404` unknown id · `409` illegal proposal transition or duplicate live
 proposal · `403` scope violation or machine actor on a human edge · `423` kill switch engaged ·
@@ -37,7 +39,7 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/scans/{id}` | → ScanRun |
 
 ## Findings
-| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&q&limit=200&offset=0` → `{findings: [Finding+], total, scan_id, summary}`. Default scan = latest. `q` matches title/rule_id/rule_version |
+| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&q&limit=200&offset=0` → `{findings: [Finding+], total, scan_id, summary}`. Default = the current picture (latest full scan with newer bulletin and targeted-rescan runs overlaid). Filters accept comma-separated values. `q` matches title/rule_id/rule_version |
 |---|---|---|
 | GET | `/findings/{id}` | → Finding+ |
 | POST | `/findings/{id}/propose` | → Proposal+ (`409` if a live proposal already exists, `404` if no library fix) |
@@ -52,15 +54,16 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/proposals/{id}/deny` | `{note?}` → Proposal+ |
 | POST | `/proposals/{id}/cancel` | `{note?}` → Proposal+ |
 | POST | `/proposals/{id}/apply` | `{simulate_verify_fail?: bool}` → `202 {proposal_id, state: "applying"}`; engine.execute runs in background: before-state → apply → verify → verified, or failed → automatic rollback. `409` unless APPROVED, `423` if kill switch engaged |
-| POST | `/proposals/{id}/rollback` | → `202`; manual rollback of APPLIED/VERIFIED |
+| POST | `/proposals/{id}/rollback` | → `202`; manual rollback of APPLIED, VERIFIED or FAILED |
+| POST | `/proposals/{id}/verify` | → Proposal+; re-checks an APPLIED proposal (used after an operator completes a runbook): VERIFIED or FAILED. `501` on a node whose engine lacks it |
 | GET | `/proposals/{id}/diff` | → `{before: {...}, after: {...}, verify: VerifyResult, apply: ApplyResult, files: [{path, before, after}]}` |
-| POST | `/proposals/bulk` | `{action: "approve"|"deny", ids: [..], note?}` → `{results: [{id, state} | {id, error}]}` |
+| POST | `/proposals/bulk` | `{action: "approve"|"deny", ids: [..], note?}` → `{results: [{id, state} | {id, status, error}]}` (`status` is the HTTP code the single call would have returned) |
 
 ## Audit
-| GET | `/audit` | `?after_seq=0&limit=200&action&actor&subject` → `{records: [AuditRecord], head, count}` |
+| GET | `/audit` | `?after_seq=0&limit=200&action&actor&subject` → `{records: [AuditRecord], head, count}`. An `action` value ending in `.` is a prefix filter (`proposal.`) |
 |---|---|---|
 | GET | `/audit/verify` | → `{ok, count, head, bad_seq, reason}` |
-| GET | `/audit/stream` | `?after_seq` → `text/event-stream`; event `audit`, data = AuditRecord JSON; replays records after `after_seq`, then tails the file (poll ≤ 500 ms). Sends a `: keepalive` comment every 15 s |
+| GET | `/audit/stream` | `?after_seq&max_seconds` → `text/event-stream`; event `audit`, data = AuditRecord JSON; replays records after `after_seq` (or the `Last-Event-ID` header on reconnect), then tails the file (poll ≤ 500 ms). Sends a `: keepalive` comment every 15 s; closes after `max_seconds` when given |
 
 ## Kill switch
 | GET | `/kill` | → `{engaged, by, reason, at, via}` |
@@ -100,3 +103,4 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 |---|---|---|
 | POST | `/demo/load` | → `{targets}`; adds one simulated target per adapter that supports it. Audit `demo.load` |
 | POST | `/demo/reset` | → `{ok}`; simulated hosts back to seeded state. Audit `demo.reset` |
+| PUT | `/demo` | `{simulate_verify_fail_next: bool}` → demo status; arms or disarms the forced verification failure for the next apply (demonstration control, audited) |
