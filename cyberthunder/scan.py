@@ -6,13 +6,20 @@ ScanRun lives at store.scans/<id>/run.json; findings at findings.json; raw artif
 """
 from __future__ import annotations
 
+import logging
+import threading
+import time
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Iterable
 
-from cyberthunder.findings.schema import utcnow
+from cyberthunder.adapters.base import MODULES
+from cyberthunder.findings.schema import Finding, summarize, utcnow
+from cyberthunder.inventory.targets import ScopeViolation
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
+
+log = logging.getLogger(__name__)
 
 STATUSES = ("pending", "running", "done", "error", "skipped", "cancelled")
 
@@ -62,22 +69,237 @@ class ScanRun:
 
 
 class Scanner:
+    """Read-only orchestration. A scan never changes an asset; fixes go through RemediationEngine."""
+
     def __init__(self, ctx: "AppContext"):
         self.ctx = ctx
+        self._threads: dict[str, threading.Thread] = {}
+        self._active: dict[str, dict] = {}         # runs in progress, served from memory while they write
+        self._lock = threading.Lock()
 
+    # -- lifecycle ---------------------------------------------------------------------
     def start(self, target_ids: Iterable[str] | None = None, *, modules: Iterable[str] | None = None,
               rule_filter: list[str] | None = None, trigger: str = "manual", requested_by: str = "operator",
               background: bool = True) -> ScanRun:
         """Create the run, persist it, and run it (in a daemon thread when background=True). Returns at once."""
-        raise NotImplementedError("scanner not built yet")
+        if target_ids is None:
+            ids = [t.id for t in self.ctx.inventory.all() if t.in_scope]
+        else:
+            ids = list(dict.fromkeys(target_ids))
+        run = ScanRun(id=self.ctx.store.new_id("scan-"), targets=ids,
+                      modules=list(modules) if modules else list(MODULES),
+                      rule_filter=list(rule_filter) if rule_filter else None,
+                      trigger=trigger, requested_by=requested_by)
+        run.results = {tid: TargetScanResult(tid) for tid in ids}
+        self._save(run)
+        if background:
+            th = threading.Thread(target=self._run_quietly, args=(run,), name=f"scan-{run.id}", daemon=True)
+            with self._lock:
+                self._threads[run.id] = th
+            th.start()
+        else:
+            self.run(run)
+        return run
 
+    def join(self, scan_id: str, timeout: float | None = None) -> ScanRun | None:
+        """Wait for a background scan (tests and the CLI). Returns the persisted run."""
+        with self._lock:
+            th = self._threads.get(scan_id)
+        if th is not None:
+            th.join(timeout)
+            if not th.is_alive():
+                with self._lock:
+                    self._threads.pop(scan_id, None)
+        return self.get(scan_id)
+
+    def is_running(self, scan_id: str) -> bool:
+        with self._lock:
+            th = self._threads.get(scan_id)
+        return bool(th and th.is_alive())
+
+    def _run_quietly(self, run: ScanRun) -> None:
+        try:
+            self.run(run)
+        except Exception:  # noqa: BLE001  a background thread must not die silently; run() already recorded it
+            log.exception("scan %s failed", run.id)
+
+    def _save(self, run: ScanRun) -> None:
+        d = run.to_dict()
+        with self._lock:
+            if run.status in ("pending", "running"):
+                self._active[run.id] = d
+            else:
+                self._active.pop(run.id, None)
+        # Windows refuses to replace a file another reader has open for a moment (the UI polling run.json);
+        # retry briefly rather than lose the progress update.
+        for attempt in range(20):
+            try:
+                self.ctx.store.save_scan_run(d)
+                return
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.05)
+
+    # -- execution ---------------------------------------------------------------------
     def run(self, run: ScanRun) -> ScanRun:
         """Execute synchronously: per target -> assert_in_scope -> transport -> adapter.collect -> run_detection
         -> persist. Audit: scan.start, scan.target (per target, with counts/errors), scan.finish."""
-        raise NotImplementedError
+        ctx = self.ctx
+        actor = run.requested_by
+        run.status = "running"
+        self._save(run)
+        ctx.audit.append("scan.start", actor, {"targets": run.targets, "modules": run.modules,
+                                               "rule_filter": run.rule_filter, "trigger": run.trigger}, subject=run.id)
+        all_findings: list[Finding] = []
+        updated: list[str] = []
+        try:
+            for tid in run.targets:
+                res = run.results.setdefault(tid, TargetScanResult(tid))
+                found = self._scan_target(run, res)
+                if found is not None:
+                    all_findings.extend(found)
+                    updated.append(tid)
+                run.findings_count = len(all_findings)
+                ctx.store.save_findings(run.id, all_findings, meta=self._meta(run))
+                self._save(run)
+            run.summary = summarize(all_findings)
+            run.findings_count = len(all_findings)
+            ctx.store.save_findings(run.id, all_findings, meta=self._meta(run))
+            if run.results and all(r.status == "error" for r in run.results.values()):
+                run.status, run.error = "error", "every target failed; see per-target errors"
+            else:
+                run.status = "done"
+        except Exception as e:  # noqa: BLE001
+            log.exception("scan %s aborted", run.id)
+            run.status, run.error = "error", str(e)
+        run.finished_at = utcnow()
+        self._save(run)
+        if updated:
+            try:
+                ctx.save_inventory(actor, "inventory.update",
+                                   {"reason": "last_scan", "scan_id": run.id, "targets": updated})
+            except Exception as e:  # noqa: BLE001
+                log.warning("inventory save after scan %s failed: %s", run.id, e)
+        ctx.audit.append("scan.finish", actor, {"status": run.status, "summary": run.summary,
+                                                "findings": run.findings_count, "error": run.error,
+                                                "progress": run.progress}, subject=run.id,
+                         outcome="ok" if run.status == "done" else "error")
+        if run.trigger != "verify" and run.status == "done":
+            self._after_scan(run, all_findings)
+        return run
 
+    @staticmethod
+    def _meta(run: ScanRun) -> dict:
+        return {"scan_id": run.id, "trigger": run.trigger, "targets": run.targets, "modules": run.modules}
+
+    def _after_scan(self, run: ScanRun, findings: list[Finding]) -> None:
+        ctx = self.ctx
+        open_ = [f for f in findings if f.is_open]
+        if ctx.settings.auto_propose and open_:
+            try:
+                created = ctx.engine.auto_propose(open_)
+                run.summary["proposals_created"] = len(created)
+            except Exception as e:  # noqa: BLE001
+                log.exception("auto-propose after scan %s failed", run.id)
+                run.summary["auto_propose_error"] = str(e)
+        explain = getattr(ctx, "explain", None)
+        if ctx.settings.explain_precompute and explain is not None and findings:
+            try:
+                run.summary["explanations_queued"] = explain.precompute(findings)
+            except NotImplementedError:
+                run.summary["explanations_queued"] = 0
+            except Exception as e:  # noqa: BLE001
+                run.summary["explain_error"] = str(e)
+        self._save(run)
+
+    def _scan_target(self, run: ScanRun, res: TargetScanResult) -> list[Finding] | None:
+        """Scan one target. Returns its findings, or None when it was skipped or failed."""
+        ctx = self.ctx
+        actor = run.requested_by
+        tid = res.target_id
+        res.status, res.started_at, res.errors = "running", utcnow(), []
+        self._save(run)
+        t0 = time.monotonic()
+
+        def finish(status: str, *, outcome: str = "ok", findings: list[Finding] | None = None) -> None:
+            res.status, res.finished_at = status, utcnow()
+            fl = findings or []
+            ctx.audit.append("scan.target", actor, {
+                "scan_id": run.id, "target": tid, "status": status, "findings": len(fl),
+                "open": sum(1 for f in fl if f.is_open), "duration_s": round(time.monotonic() - t0, 3),
+                "errors": res.errors[:20]}, subject=run.id, outcome=outcome)
+
+        try:
+            target = ctx.inventory.assert_in_scope(tid)
+        except ScopeViolation as e:
+            res.errors.append(str(e))
+            ctx.audit.append("action.blocked", actor, {"action": "scan.collect", "target": tid, "scan_id": run.id,
+                                                       "reason": str(e)}, subject=tid, outcome="blocked")
+            finish("skipped", outcome="blocked")
+            return None
+        try:
+            adapter = ctx.adapter_for(target)
+        except KeyError as e:
+            res.errors.append(str(e).strip("'\""))
+            finish("skipped", outcome="skipped")
+            return None
+        try:
+            transport = ctx.transport_for(target)
+        except Exception as e:  # noqa: BLE001  TransportError or a connect failure inside the factory
+            res.errors.append(f"transport: {e}")
+            finish("error", outcome="error")
+            return None
+
+        workdir = ctx.store.scan_dir(run.id) / "raw" / tid
+        workdir.mkdir(parents=True, exist_ok=True)
+        try:
+            facts = None
+            try:
+                facts = adapter.discover(target, transport)
+            except Exception as e:  # noqa: BLE001  discovery is informational
+                res.errors.append(f"discover: {e}")
+            collected = adapter.collect(target, transport, workdir, modules=run.modules, rule_filter=run.rule_filter)
+            if collected.facts is None and facts is not None:
+                collected.facts = facts
+            findings = adapter.run_detection(target, collected)
+            findings = self._filter(findings, run.rule_filter)
+            for f in findings:
+                f.scan_id = run.id
+                f.asset_type = f.asset_type or target.asset_type
+            ctx.store.write_json(workdir / "collected.json", collected.to_dict())
+            res.errors.extend(collected.errors)
+            res.findings = len(findings)
+            res.open = sum(1 for f in findings if f.is_open)
+            res.facts = collected.facts.to_dict() if collected.facts is not None else None
+            ctx.inventory.update(tid, last_scan=utcnow())
+            finish("done", findings=findings)
+            return findings
+        except Exception as e:  # noqa: BLE001
+            log.exception("scan of %s failed", tid)
+            res.errors.append(f"collect: {e}")
+            finish("error", outcome="error")
+            return None
+        finally:
+            try:
+                transport.close()
+            except Exception:  # noqa: BLE001
+                log.warning("transport close failed for %s", tid)
+
+    @staticmethod
+    def _filter(findings: list[Finding], rule_filter: list[str] | None) -> list[Finding]:
+        """A targeted rescan reports only the requested rules, whatever the adapter returned."""
+        if not rule_filter:
+            return findings
+        wanted = set(rule_filter)
+        return [f for f in findings if wanted & {f.rule_id, f.rule_version, f.group_id, *f.citations}]
+
+    # -- queries -----------------------------------------------------------------------
     def get(self, scan_id: str) -> ScanRun | None:
-        d = self.ctx.store.load_scan_run(scan_id)
+        with self._lock:
+            d = self._active.get(scan_id)
+        if d is None:
+            d = self.ctx.store.load_scan_run(scan_id)
         return ScanRun.from_dict(d) if d else None
 
     def list(self) -> list[ScanRun]:
