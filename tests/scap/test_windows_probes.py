@@ -110,6 +110,17 @@ def test_policy_falls_back_to_net_accounts():
     assert run(simple_test("passwordpolicy"), POLICY_OBJ.format(k="passwordpolicy"), state, data) == TRUE
 
 
+def test_policy_field_secedit_could_not_read_is_never_a_fail():
+    # secedit failed (no admin rights): net accounts has no complexity setting, so the rule is undecided
+    data = {"net_accounts": {"Minimum password length": "14"}, "errors": ["secedit: export failed"]}
+    state = ('<win:passwordpolicy_state id="s" version="1"><win:password_complexity datatype="boolean">1'
+             '</win:password_complexity></win:passwordpolicy_state>')
+    assert run(simple_test("passwordpolicy"), POLICY_OBJ.format(k="passwordpolicy"), state, data) == ERROR
+    # with secedit output, an absent setting is still a fail
+    data = {"system_access": {"MinimumPasswordLength": "14"}}
+    assert run(simple_test("passwordpolicy"), POLICY_OBJ.format(k="passwordpolicy"), state, data) == FALSE
+
+
 AUDIT = {"audit": [{"subcategory": "Credential Validation", "setting": "Success and Failure"},
                    {"subcategory": "Logon", "setting": "Failure"}, {"subcategory": "Plug and Play Events", "setting": "Success"},
                    {"subcategory": "Other Logon/Logoff Events", "setting": "No Auditing"}]}

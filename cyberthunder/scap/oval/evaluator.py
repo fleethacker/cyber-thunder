@@ -35,6 +35,9 @@ log = logging.getLogger(__name__)
 TRUE, FALSE, UNKNOWN, ERROR = "true", "false", "unknown", "error"
 NOT_EVALUATED, NOT_APPLICABLE = "not evaluated", "not applicable"
 RESULTS = (TRUE, FALSE, UNKNOWN, ERROR, NOT_EVALUATED, NOT_APPLICABLE)
+# item key listing fields the probe could not read on this host (for example secedit without admin rights);
+# a state entity on such a field evaluates to error, never false
+UNAVAILABLE = "_unavailable"
 
 # collected object flags
 COMPLETE, INCOMPLETE, DOES_NOT_EXIST, FLAG_ERROR, NOT_COLLECTED = (
@@ -474,6 +477,9 @@ class Evaluator:
 
     def state_entity(self, e: Entity, item: dict) -> str:
         if e.name not in item:
+            if e.name in (item.get(UNAVAILABLE) or ()):
+                # the probe could not read this field: undecided, never a fail
+                return ERROR
             # the item has no such field: the state entity does not hold
             return FALSE
         item_values = _as_list(item[e.name])

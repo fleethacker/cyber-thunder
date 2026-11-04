@@ -33,8 +33,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .evaluator import (COMPLETE, DOES_NOT_EXIST, FLAG_ERROR, NOT_COLLECTED, EvalError, ResolvedEntity, Unsupported,
-                        compile_pattern)
+from .evaluator import (COMPLETE, DOES_NOT_EXIST, FLAG_ERROR, NOT_COLLECTED, UNAVAILABLE, EvalError, ResolvedEntity,
+                        Unsupported, compile_pattern)
 from .model import ObjectDef
 
 log = logging.getLogger(__name__)
@@ -328,7 +328,17 @@ def _passwordpolicy_items(o: ObjectDef, resolved: dict, data: dict) -> tuple:
               "reversible_encryption": None if pv("ClearTextPassword") is None else pv("ClearTextPassword") == 1,
               "anonymous_name_lookup": None if pv("LSAAnonymousNameLookup") is None
               else pv("LSAAnonymousNameLookup") == 1}
-    return COMPLETE, [{k: v for k, v in fields.items() if v is not None}]
+    return COMPLETE, [_policy_item(data, fields)]
+
+
+def _policy_item(data: dict, fields: dict) -> dict:
+    """Fields with a value; when secedit was not collected, the missing ones are unavailable, not unset."""
+    item = {k: v for k, v in fields.items() if v is not None}
+    if "system_access" not in data:
+        missing = sorted(k for k, v in fields.items() if v is None)
+        if missing:
+            item[UNAVAILABLE] = missing
+    return item
 
 
 def _lockoutpolicy_items(o: ObjectDef, resolved: dict, data: dict) -> tuple:
@@ -340,7 +350,9 @@ def _lockoutpolicy_items(o: ObjectDef, resolved: dict, data: dict) -> tuple:
     flo = pv("ForceLogoffWhenHourExpire")
     if flo is not None:
         fields["force_logoff"] = 0 if flo == 1 else -1
-    return COMPLETE, [{k: v for k, v in fields.items() if v is not None}]
+    elif "system_access" not in data:
+        fields["force_logoff"] = None
+    return COMPLETE, [_policy_item(data, fields)]
 
 
 def audit_field(subcategory: str) -> str:
