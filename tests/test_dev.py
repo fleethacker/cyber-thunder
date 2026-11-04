@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import urllib.parse
 
 name = Path(sys.argv[0]).name
 arguments = sys.argv[1:]
@@ -45,10 +46,66 @@ elif name == "uds":
     elif "current-context" in arguments:
         print(os.environ.get("TEST_CONTEXT", "k3d-cyber-thunder"))
     elif "secret" in arguments:
-        print(json.dumps({"data": {"username":"YWRtaW4=", "password":base64.b64encode(b"master-secret").decode()}}))
+        if any(argument.startswith("jsonpath=") for argument in arguments):
+            print(base64.b64encode(b"master-secret").decode())
+        else:
+            print(json.dumps({"data": {"username":"YWRtaW4=", "password":base64.b64encode(b"master-secret").decode()}}))
 elif name == "verify.sh":
     sys.exit(int(os.environ.get("TEST_VERIFY_FAILURE", "0")))
 elif name == "curl":
+    if os.environ.get("TEST_IDENTITY_FLOW"):
+        state_file = Path("account-state.json")
+        state = json.loads(state_file.read_text()) if state_file.exists() else {"enabled": False, "locked": True}
+        url = next(argument for argument in arguments if argument.startswith("https://"))
+        path = urllib.parse.urlsplit(url).path
+        method = arguments[arguments.index("-X") + 1] if "-X" in arguments else "GET"
+        response = {}
+        status = "200"
+        if path == "/realms/master/protocol/openid-connect/token":
+            response = {"access_token": "test-master-token"}
+        elif path == "/realms/uds/protocol/openid-connect/token":
+            if state["locked"] or not state["enabled"]:
+                status = "400"
+                response = {"error": "invalid_grant", "error_description": "Invalid user credentials"}
+            else:
+                response = {"access_token": "test-user-token"}
+        elif "/attack-detection/brute-force/users/" in path:
+            if method != "DELETE":
+                sys.exit("Expected account-specific lockout reset")
+            if os.environ.get("TEST_UNLOCK_FAILURE"):
+                status = "500"
+            else:
+                state["locked"] = False
+                status = "204"
+        elif path.endswith("/authentication/flows/Authentication/executions"):
+            response = []
+        elif path == "/admin/realms/uds/users":
+            response = [{"id": "test-user", "username": "admin", "enabled": state["enabled"]}]
+        elif path == "/admin/realms/uds/users/test-user":
+            if method == "PUT":
+                state["enabled"] = json.loads(arguments[arguments.index("--data-raw") + 1])["enabled"]
+                status = "204"
+            else:
+                response = {"enabled": False if os.environ.get("TEST_ACCOUNT_REDISABLED") else state["enabled"]}
+        elif path.endswith("/reset-password"):
+            sys.exit("The saved password must not be reset to repair a lockout")
+        elif path == "/admin/realms/uds/groups":
+            response = [{"id": "uds-core"}]
+        elif path == "/admin/realms/uds/groups/uds-core/children":
+            response = [{"id": "admin-group", "name": "Admin"}]
+        elif path == "/admin/realms/uds/users/test-user/groups/admin-group":
+            status = "204"
+        elif path not in ("/realms/master", "/admin/realms/master"):
+            sys.exit("Unexpected identity endpoint: " + path)
+        state_file.write_text(json.dumps(state))
+        body = json.dumps(response)
+        if "-o" in arguments:
+            Path(arguments[arguments.index("-o") + 1]).write_text(body)
+        else:
+            print(body, end="")
+        if "-w" in arguments:
+            print(status, end="")
+        sys.exit(22 if status == "500" else 0)
     output = arguments[arguments.index("-o") + 1]
     if os.environ.get("TEST_INVALID_MASTER"):
         Path(output).write_text(json.dumps({"error":"invalid_grant", "error_description":"Invalid user credentials"}))
@@ -61,13 +118,21 @@ elif name == "curl":
 
 @unittest.skipUnless(REAL_UDS, "UDS CLI is required for configuration and payload rendering.")
 class DevelopmentModeTests(unittest.TestCase):
-    def run_script(self, arguments=(), script="scripts/deploy-bundle.sh", repeat=1, **settings):
+    def run_script(self, arguments=(), script="scripts/deploy-bundle.sh", repeat=1,
+                   create_kubeconfig=True, saved_password=None, **settings):
         with tempfile.TemporaryDirectory() as temporary_directory:
             working_dir = Path(temporary_directory)
             (working_dir / "scripts").mkdir()
             shutil.copytree(REPOSITORY / "bundles", working_dir / "bundles")
             shutil.copytree(REPOSITORY / "packages/identity-bootstrap", working_dir / "packages/identity-bootstrap")
             shutil.copy(REPOSITORY / "scripts/deploy-bundle.sh", working_dir / "scripts/deploy-bundle.sh")
+            shutil.copy(REPOSITORY / "setup-dev-user.sh", working_dir / "setup-dev-user.sh")
+            (working_dir / ".build").mkdir()
+            if create_kubeconfig:
+                (working_dir / ".build/kubeconfig").write_text("test kubeconfig")
+            if saved_password is not None:
+                (working_dir / ".build/identity").mkdir()
+                (working_dir / ".build/identity/admin-password").write_text(saved_password)
             executable_dir = working_dir / "bin"
             executable_dir.mkdir()
             for command in ("docker", "k3d", "uds", "curl"):
@@ -79,7 +144,7 @@ class DevelopmentModeTests(unittest.TestCase):
                 command_file.write_text(FAKE_COMMAND.replace("#!/usr/bin/python3", "#!" + sys.executable, 1))
                 command_file.chmod(0o755)
             environment = os.environ.copy()
-            for key in ("DOCKER_HOST", "DOCKER_CONTEXT", "UDS_CONFIG", "DEV_MODE", "ADMIN_PASSWORD", "BOOTSTRAP_DRY_RUN"):
+            for key in ("DOCKER_HOST", "DOCKER_CONTEXT", "UDS_CONFIG", "DEV_MODE", "ADMIN_PASSWORD", "BOOTSTRAP_DRY_RUN", "KUBECONFIG"):
                 environment.pop(key, None)
             environment.update(settings)
             environment["REAL_UDS"] = REAL_UDS
@@ -180,6 +245,96 @@ class DevelopmentModeTests(unittest.TestCase):
         self.assertIn("invalid", result.stderr)
         self.assertFalse(any("POST" in call["arguments"] or "create" in call["arguments"] for call in calls))
         self.assertEqual(requests, [])
+
+    def test_identity_bootstrap_unlocks_disabled_user_without_resetting_password(self):
+        result, calls, _, _, requests = self.run_script(
+            script="packages/identity-bootstrap/scripts/ensure-user.sh",
+            DEV_MODE="true", ADMIN_PASSWORD="test-password", TEST_IDENTITY_FLOW="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        urls = [call["arguments"] for call in calls if call["command"] == "curl"]
+        unlock = next(index for index, arguments in enumerate(urls) if any("/attack-detection/" in argument for argument in arguments))
+        login = next(index for index, arguments in enumerate(urls) if any("sso.uds.dev" in argument for argument in arguments))
+        self.assertIn("DELETE", urls[unlock])
+        self.assertIn("https://keycloak.admin.uds.dev/admin/realms/uds/attack-detection/brute-force/users/test-user", urls[unlock])
+        self.assertLess(unlock, login)
+        self.assertFalse(any("reset-password" in argument for arguments in urls for argument in arguments))
+        self.assertFalse(any(argument == "https://keycloak.admin.uds.dev/admin/realms/uds" for arguments in urls for argument in arguments))
+        self.assertEqual(requests, [])
+
+    def test_identity_bootstrap_stops_when_unlock_fails(self):
+        result, calls, _, _, requests = self.run_script(
+            script="packages/identity-bootstrap/scripts/ensure-user.sh",
+            DEV_MODE="true", ADMIN_PASSWORD="test-password", TEST_IDENTITY_FLOW="1", TEST_UNLOCK_FAILURE="1",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any("sso.uds.dev" in argument for call in calls for argument in call["arguments"]))
+        self.assertNotIn("identity reconciled", result.stdout)
+        self.assertEqual(requests, [])
+
+    def test_identity_bootstrap_rejects_disabled_account_after_login(self):
+        result, _, _, _, requests = self.run_script(
+            script="packages/identity-bootstrap/scripts/ensure-user.sh",
+            DEV_MODE="true", ADMIN_PASSWORD="test-password", TEST_IDENTITY_FLOW="1", TEST_ACCOUNT_REDISABLED="1",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("still disabled after login", result.stderr)
+        self.assertNotIn("identity reconciled", result.stdout)
+        self.assertEqual(requests, [])
+
+    def test_standalone_setup_creates_credentials_without_deployment(self):
+        result, calls, _, passwords, requests = self.run_script(
+            script="setup-dev-user.sh", TEST_IDENTITY_FLOW="1", BOOTSTRAP_DRY_RUN="true",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(passwords[0].endswith("Aa1!@"))
+        self.assertIn("UDS username: admin", result.stdout)
+        self.assertIn("UDS password: " + passwords[0], result.stdout)
+        self.assertNotIn(passwords[0], json.dumps(calls))
+        self.assertNotIn("test-master-token", result.stdout + json.dumps(calls))
+        self.assertNotIn("test-user-token", result.stdout + json.dumps(calls))
+        self.assertTrue(any(call["command"] == "curl" for call in calls))
+        self.assertTrue(all(call["command"] in ("uds", "curl") for call in calls))
+        self.assertTrue(all(call["arguments"][:2] == ["zarf", "tools"] for call in calls if call["command"] == "uds"))
+        self.assertEqual(requests, [])
+
+    def test_standalone_setup_reuses_saved_password(self):
+        saved = "existing-development-credential!@"
+        result, _, _, passwords, _ = self.run_script(
+            script="setup-dev-user.sh", repeat=2, saved_password=saved, TEST_IDENTITY_FLOW="1",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(passwords, [saved, saved])
+
+    def test_standalone_setup_does_not_print_credentials_on_failure(self):
+        result, _, _, passwords, requests = self.run_script(
+            script="setup-dev-user.sh", TEST_IDENTITY_FLOW="1", TEST_UNLOCK_FAILURE="1",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("UDS username:", result.stdout)
+        self.assertNotIn(passwords[0], result.stdout + result.stderr)
+        self.assertEqual(requests, [])
+
+    def test_standalone_setup_requires_deployment_kubeconfig(self):
+        result, calls, _, passwords, _ = self.run_script(script="setup-dev-user.sh", create_kubeconfig=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Deployment kubeconfig not found", result.stderr)
+        self.assertEqual(calls, [])
+        self.assertEqual(passwords, [])
+
+    def test_standalone_setup_rejects_other_contexts_before_creating_password(self):
+        result, calls, _, passwords, _ = self.run_script(script="setup-dev-user.sh", TEST_CONTEXT="other-cluster")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires context k3d-cyber-thunder", result.stderr)
+        self.assertFalse(any(call["command"] == "curl" for call in calls))
+        self.assertEqual(passwords, [])
+
+    def test_standalone_setup_rejects_arguments(self):
+        result, calls, _, passwords, _ = self.run_script(script="setup-dev-user.sh", arguments=("unexpected",))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Usage: ./setup-dev-user.sh", result.stderr)
+        self.assertEqual(calls, [])
+        self.assertEqual(passwords, [])
 
 
 if __name__ == "__main__":
