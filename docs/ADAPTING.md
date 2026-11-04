@@ -121,7 +121,7 @@ part; trustworthy before-state and rollback take the time. Start read-only and s
 
 ## 6. Remediation policy
 
-* **Vetted fix library.** Fixes come only from the library (`remediation/library.py` plus each adapter's
+* **Vetted fix library.** Fixes come only from the library (`cyberthunder/remediation/library.py` plus each adapter's
   `fixes()`): reviewed payloads with before-state, verify and rollback. Nothing a model or a person types is
   ever executed.
 * **Runbook fixes.** Where a change cannot be applied safely (a reboot, a vendor patch, a push to a device
@@ -147,9 +147,9 @@ Measured on the hack laptop (i7-6820HQ, 64 GB, 4 GB GPU; [PLAN.md](PLAN.md) sect
 and 61 s, `gemma3:1b` too weak. Explanations are precomputed after each scan, so 30 s per finding is
 acceptable. A larger GPU can run a larger model with the same code.
 
-The backend is configuration (`cyberthunder/config.py`): `CT_LLM_BACKEND` (`ollama`; `openai` for any local
-server that speaks the common chat-completions API; `template` for no model), `CT_LLM_URL`, `CT_LLM_MODEL`, `CT_LLM_FALLBACK_MODEL`
-and `CT_LLM_TIMEOUT`. `explain-status` shows what is answering.
+The backend is configuration (`cyberthunder/config.py`): `CT_LLM_BACKEND` (`ollama` by default; a
+chat-completions value for any local server that speaks that common API, named in `config.py`; `template`
+for no model), `CT_LLM_URL`, `CT_LLM_MODEL`, `CT_LLM_FALLBACK_MODEL` and `CT_LLM_TIMEOUT`. `explain-status` shows what is answering.
 
 ## 8. Reports and sync
 
