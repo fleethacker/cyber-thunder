@@ -1,10 +1,11 @@
 // Typed fetch wrapper for /api/v1. Every request carries X-Actor (the name typed in Settings).
 // Errors come back as ApiError with the server's {detail} verbatim.
 import type {
-  AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, DeltaReport,
+  AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, ContentManifest, DeltaReport,
   DemoStatus, DiscoveredAsset, DiscoveryAccept, Finding, DiscoveryMode, DiscoveryOverview, DiscoveryRun, DiscoveryScope,
-  DiscoveryStatus, Explanation, FindingPlus, FindingsPage, IngestHistory, KillStatus, LinkState, Outbox,
-  PolicyDecision, ProposalDiff, ProposalPlus, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
+  DiscoveryStatus, Explanation, FindingPlus, FindingsPage, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
+  Outbox, PolicyDecision, ProposalDiff, ProposalPlus, PullJob, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
+  UpdateCheck,
 } from './types';
 
 export const API_BASE = '/api/v1';
@@ -170,6 +171,13 @@ export const api = {
     return request<BulletinResult>('POST', '/ingest/bulletin', { form });
   },
   ingestHistory: () => get<IngestHistory>('/ingest/history'),
+  updates: () => get<UpdateCheck>('/ingest/updates'),
+  checkUpdates: (source: 'live' | 'snapshot' = 'live') => post<UpdateCheck>('/ingest/updates/check', { source }),
+  pullUpdates: (body: { filenames?: string[]; all_matching?: boolean; pace?: boolean }) => post<PullJob>('/ingest/updates/pull', body),
+  pullJob: (id: string) => get<PullJob>(`/ingest/updates/jobs/${enc(id)}`),
+  content: () => get<HeldContent>('/ingest/content'),
+  writeManifest: () => post<ContentManifest>('/ingest/manifest'),
+  importDir: (path: string) => post<ImportDirResult>('/ingest/import-dir', { path }),
   outbox: () => get<Outbox>('/outbox'),
   sync: () => post<SyncResult>('/outbox/sync'),
 
