@@ -1,0 +1,4 @@
+variables:
+  uds-k3d-dev:
+    CLUSTER_NAME: cyber-thunder
+    K3D_NETWORK: cyber-thunder

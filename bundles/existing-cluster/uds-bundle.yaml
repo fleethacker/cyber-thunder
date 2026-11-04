@@ -1,0 +1,85 @@
+# Copyright 2024-2026 Defense Unicorns
+# SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Defense-Unicorns-Commercial
+
+kind: UDSBundle
+metadata:
+  name: cyber-thunder-existing
+  description: UDS Core and Podinfo for an existing Kubernetes cluster.
+  version: 0.0.1
+packages:
+  - name: init
+    repository: ghcr.io/zarf-dev/packages/init
+    ref: v0.86.0
+    keylessVerification:
+      certificateIdentityRegexp: https://github\.com/zarf-dev/zarf/\.github/workflows/release\.yml@refs/tags/v\d+\.\d+\.\d+
+      certificateOIDCIssuer: https://token.actions.githubusercontent.com
+  - name: core
+    repository: ghcr.io/defenseunicorns/packages/uds/core
+    ref: 1.14.3-upstream
+    keylessVerification:
+      certificateIdentityRegexp: ^https://github\.com/defenseunicorns/uds-core/\.github/workflows/publish\.yaml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$
+      certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    overrides:
+      keycloak:
+        keycloak:
+          values:
+            - path: devMode
+              value: false
+          variables:
+            - name: KEYCLOAK_DB_HOST
+              path: postgresql.host
+            - name: KEYCLOAK_DB_USERNAME
+              path: postgresql.username
+            - name: KEYCLOAK_DB_DATABASE
+              path: postgresql.database
+            - name: KEYCLOAK_DB_PASSWORD
+              path: postgresql.password
+              sensitive: true
+      loki:
+        loki:
+          variables:
+            - name: LOKI_CHUNKS_BUCKET
+              path: loki.storage.bucketNames.chunks
+            - name: LOKI_ADMIN_BUCKET
+              path: loki.storage.bucketNames.admin
+            - name: LOKI_S3_ENDPOINT
+              path: loki.storage.s3.endpoint
+            - name: LOKI_S3_REGION
+              path: loki.storage.s3.region
+            - name: LOKI_ACCESS_KEY_ID
+              path: loki.storage.s3.accessKeyId
+              sensitive: true
+            - name: LOKI_SECRET_ACCESS_KEY
+              path: loki.storage.s3.secretAccessKey
+              sensitive: true
+      velero:
+        velero:
+          variables:
+            - name: VELERO_BUCKET
+              path: configuration.backupStorageLocation[0].bucket
+            - name: VELERO_REGION
+              path: configuration.backupStorageLocation[0].config.region
+            - name: VELERO_S3_ENDPOINT
+              path: configuration.backupStorageLocation[0].config.s3Url
+            - name: VELERO_CLOUD_CREDENTIALS
+              path: credentials.secretContents.cloud
+              sensitive: true
+      istio-admin-gateway:
+        uds-istio-config:
+          variables:
+            - name: ADMIN_TLS_CERT
+              path: tls.cert
+            - name: ADMIN_TLS_KEY
+              path: tls.key
+              sensitive: true
+      istio-tenant-gateway:
+        uds-istio-config:
+          variables:
+            - name: TENANT_TLS_CERT
+              path: tls.cert
+            - name: TENANT_TLS_KEY
+              path: tls.key
+              sensitive: true
+  - name: podinfo
+    path: ../../.build/
+    ref: 0.0.1

@@ -159,6 +159,12 @@ checklist, path to fleet), `demo reset|run`.
 | How is it stopped | Kill switch (file, `CT_KILL`, or `KILL` sentinel) blocks every apply and rollback | `KillSwitch.guard()` |
 | Can it be undone | Every library fix declares a rollback; before-state is captured first; failed verify rolls back automatically | `FixEntry.rollback_kind`, `BeforeState` |
 
+## Cluster deployment
+
+Deploy UDS Core and Podinfo with `./deploy.sh`. See
+[UDS cluster deployment](docs/DEPLOYMENT.md) for macOS Podman, Linux,
+existing Kubernetes clusters, and the optional `./deploy.sh dev` identity setup.
+
 ## Git
 
 Commits carry the human author only. The hook path is per-clone configuration, so every teammate runs this once

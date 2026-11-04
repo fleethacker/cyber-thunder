@@ -1,0 +1,22 @@
+shared:
+  domain: example.invalid
+variables:
+  core:
+    KEYCLOAK_DB_HOST: ''
+    KEYCLOAK_DB_USERNAME: ''
+    KEYCLOAK_DB_DATABASE: ''
+    KEYCLOAK_DB_PASSWORD: ''
+    LOKI_CHUNKS_BUCKET: ''
+    LOKI_ADMIN_BUCKET: ''
+    LOKI_S3_ENDPOINT: ''
+    LOKI_S3_REGION: ''
+    LOKI_ACCESS_KEY_ID: ''
+    LOKI_SECRET_ACCESS_KEY: ''
+    VELERO_BUCKET: ''
+    VELERO_REGION: ''
+    VELERO_S3_ENDPOINT: ''
+    VELERO_CLOUD_CREDENTIALS: ''
+    ADMIN_TLS_CERT: ''
+    ADMIN_TLS_KEY: ''
+    TENANT_TLS_CERT: ''
+    TENANT_TLS_KEY: ''
