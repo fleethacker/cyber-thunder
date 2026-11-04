@@ -1,0 +1,88 @@
+{
+  "title": "Evaluate-STIG_acd-target-02",
+  "id": "4c3e9a2a-5b1d-4f0e-9c7a-2b8e1d3f5a60",
+  "active": true,
+  "mode": 2,
+  "has_path": true,
+  "target_data": {
+    "target_type": "Computer",
+    "host_name": "acd-target-02",
+    "ip_address": "192.168.56.11",
+    "mac_address": "00:0c:29:aa:bb:cc",
+    "fqdn": "acd-target-02.range.local",
+    "comments": "",
+    "role": "Member Server",
+    "is_web_database": false,
+    "technology_area": "",
+    "web_db_site": "",
+    "web_db_instance": ""
+  },
+  "stigs": [
+    {
+      "stig_name": "Microsoft Windows Server 2022 Security Technical Implementation Guide",
+      "display_name": "Microsoft Windows Server 2022",
+      "stig_id": "MS_Windows_Server_2022_STIG",
+      "release_info": "Release: 2 Benchmark Date: 24 Jan 2026",
+      "uuid": "1f0c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8",
+      "reference_identifier": "5411",
+      "size": 4,
+      "rules": [
+        {
+          "uuid": "a1", "stig_uuid": "1f0c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8", "target_key": null, "stig_ref": null,
+          "group_id": "V-254239", "rule_id": "SV-254239r848540", "rule_id_src": "SV-254239r848540_rule",
+          "weight": "10.0", "classification": "Unclassified", "severity": "high", "rule_version": "WN22-00-000010",
+          "group_title": "SRG-OS-000480-GPOS-00227",
+          "rule_title": "Windows Server 2022 users with Administrative privileges must have separate accounts for administrative duties and normal operational tasks.",
+          "fix_text": "Ensure each user with administrative privileges has a separate account for user duties and one for privileged duties.",
+          "false_positives": "", "false_negatives": "",
+          "discussion": "Using a privileged account to perform routine functions makes the computer vulnerable to malicious software inadvertently introduced during a session that has been granted full privileges.",
+          "check_content": "Verify each user with administrative privileges has been assigned a unique administrative account separate from their standard user account. If users with administrative privileges do not have separate accounts for administrative functions and standard user functions, this is a finding.",
+          "documentable": "false", "mitigations": "", "potential_impacts": "", "third_party_tools": "", "mitigation_control": "", "responsibility": "", "security_override_guidance": "", "ia_controls": "",
+          "check_content_ref": {"href": "", "name": "M"},
+          "legacy_ids": ["V-92957", "SV-103045"],
+          "ccis": ["CCI-000366"],
+          "group_tree": [{"id": "V-254239", "title": "SRG-OS-000480-GPOS-00227", "description": "<GroupDescription></GroupDescription>"}],
+          "createdAt": "2026-11-04T14:10:00.000Z", "updatedAt": "2026-11-04T14:12:30.000Z", "STIGUuid": "1f0c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8",
+          "status": "open", "overrides": {}, "comments": "",
+          "finding_details": "Evaluate-STIG 1.2412.0 (Scan-Windows_Server_2022_Checks)\nAccount 'svc_backup' is a member of Administrators and has interactive logons."
+        },
+        {
+          "uuid": "a2", "stig_uuid": "1f0c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8", "target_key": null, "stig_ref": null,
+          "group_id": "V-254240", "rule_id": "SV-254240r848543", "rule_id_src": "SV-254240r848543_rule",
+          "weight": "10.0", "classification": "Unclassified", "severity": "medium", "rule_version": "WN22-00-000020",
+          "group_title": "SRG-OS-000480-GPOS-00227",
+          "rule_title": "Windows Server 2022 passwords for the built-in Administrator account must be changed at least every 60 days.",
+          "fix_text": "Change the built-in Administrator account password at least every 60 days.",
+          "discussion": "The longer a password is in use, the greater the opportunity for someone to gain unauthorized knowledge of the password.",
+          "check_content": "Review the password last set date for the built-in Administrator account.",
+          "check_content_ref": {"href": "", "name": "M"}, "legacy_ids": [], "ccis": ["CCI-000199"],
+          "group_tree": [{"id": "V-254240", "title": "SRG-OS-000480-GPOS-00227", "description": ""}],
+          "createdAt": "2026-11-04T14:10:00.000Z", "updatedAt": "2026-11-04T14:12:31.000Z", "STIGUuid": "1f0c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8",
+          "status": "not_a_finding", "overrides": {}, "comments": "", "finding_details": "Password last set 12 days ago."
+        },
+        {
+          "uuid": "a3", "stig_uuid": "1f0c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8", "target_key": null, "stig_ref": null,
+          "group_id": "V-254241", "rule_id": "SV-254241r848546", "rule_id_src": "SV-254241r848546_rule",
+          "weight": "10.0", "classification": "Unclassified", "severity": "low", "rule_version": "WN22-00-000030",
+          "group_title": "SRG-OS-000480-GPOS-00227",
+          "rule_title": "Windows Server 2022 administrative accounts must not be used with applications that access the Internet.",
+          "fix_text": "Establish and enforce a policy.", "discussion": "Policy.", "check_content": "Verify policy.",
+          "check_content_ref": {"href": "", "name": "M"}, "legacy_ids": [], "ccis": ["CCI-000366"],
+          "group_tree": [], "createdAt": "2026-11-04T14:10:00.000Z", "updatedAt": "2026-11-04T14:12:32.000Z", "STIGUuid": "1f0c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8",
+          "status": "not_applicable", "overrides": {}, "comments": "", "finding_details": "No Internet access from this enclave."
+        },
+        {
+          "uuid": "a4", "stig_uuid": "1f0c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8", "target_key": null, "stig_ref": null,
+          "group_id": "V-254242", "rule_id": "SV-254242r848549", "rule_id_src": "SV-254242r848549_rule",
+          "weight": "10.0", "classification": "Unclassified", "severity": "medium", "rule_version": "WN22-00-000040",
+          "group_title": "SRG-OS-000480-GPOS-00227",
+          "rule_title": "Windows Server 2022 members of the Backup Operators group must have separate accounts for backup duties and normal operational tasks.",
+          "fix_text": "Ensure each member of Backup Operators has separate accounts.", "discussion": "Backup Operators are able to read and write to any file in the system.", "check_content": "Review Backup Operators membership.",
+          "check_content_ref": {"href": "", "name": "M"}, "legacy_ids": [], "ccis": ["CCI-000366"],
+          "group_tree": [], "createdAt": "2026-11-04T14:10:00.000Z", "updatedAt": "2026-11-04T14:12:33.000Z", "STIGUuid": "1f0c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8",
+          "status": "not_reviewed", "overrides": {}, "comments": "", "finding_details": ""
+        }
+      ]
+    }
+  ]
+}
