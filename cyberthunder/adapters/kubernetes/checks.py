@@ -161,6 +161,7 @@ class Workload:
     ref: ObjRef            # owner object (deployment / cronjob / bare pod)
     pod_spec: dict
     labels: dict = field(default_factory=dict)
+    meta: dict = field(default_factory=dict)   # the object's metadata (owner references, annotations)
 
     @property
     def namespace(self) -> str:
@@ -172,7 +173,7 @@ def workloads(data: KubeData) -> Iterator[Workload]:
     for d in data.items("deployments"):
         md = d["metadata"]
         yield Workload(ObjRef(md["namespace"], "deployment", md["name"]),
-                       d.get("spec", {}).get("template", {}).get("spec", {}), md.get("labels", {}))
+                       d.get("spec", {}).get("template", {}).get("spec", {}), md.get("labels", {}), md)
     for cj in data.items("cronjobs"):
         md = cj["metadata"]
         spec = cj.get("spec", {}).get("jobTemplate", {}).get("spec", {}).get("template", {}).get("spec", {})
@@ -182,7 +183,7 @@ def workloads(data: KubeData) -> Iterator[Workload]:
         owners = {o.get("kind") for o in md.get("ownerReferences", [])}
         if owners & {"ReplicaSet", "Job"}:
             continue
-        yield Workload(ObjRef(md["namespace"], "pod", md["name"]), p.get("spec", {}), md.get("labels", {}))
+        yield Workload(ObjRef(md["namespace"], "pod", md["name"]), p.get("spec", {}), md.get("labels", {}), md)
 
 
 def containers_of(spec: dict) -> list[dict]:
@@ -222,10 +223,30 @@ def component_pods(data: KubeData, component: str) -> list[tuple[ObjRef, dict[st
     return out
 
 
+K3S_FLAGS = "k3s_flags"   # Collected.raw key written by the adapter when options.node_target is set
+
+
+def component_sources(data: KubeData, component: str) -> list[tuple[ObjRef, str, dict[str, str]]]:
+    """(object, evidence prefix, flags) for every place `component` flags were read: kube-system pods
+    (kubeadm-style static pods) and, on k3s, the server node's config file and unit command line."""
+    out = [(ObjRef(ref.namespace, "pod", ref.name), f"kube-system/{ref.name} container {ref.container}: ", f)
+           for ref, f in component_pods(data, component)]
+    k3s = data.doc(K3S_FLAGS)
+    if isinstance(k3s, dict) and isinstance(k3s.get(component), dict):
+        node = str(k3s.get("node") or "")
+        try:
+            node_ref = ObjRef(None, "node", node)
+        except ValueError:
+            return out
+        src = " + ".join(k3s.get("sources") or []) or "k3s defaults"
+        out.append((node_ref, f"node {node} k3s {component} ({src}): ", dict(k3s[component])))
+    return out
+
+
 # -- finding builder --------------------------------------------------------------------------
 def finding(target, rule: Rule, ref: ObjRef | None, evidence: str, *, extra: str = "",
             source: str = SOURCE, tags: Iterable[str] = (), severity: str | None = None,
-            collected_at: str | None = None, raw_ref: str | None = None) -> Finding:
+            collected_at: str | None = None, raw_ref: str | None = None, status: str = "open") -> Finding:
     rule_id = f"k8s:{rule.base}" if not rule.base.startswith("k8s:") else rule.base
     t = list(tags)
     if ref is not None:
@@ -235,15 +256,25 @@ def finding(target, rule: Rule, ref: ObjRef | None, evidence: str, *, extra: str
                         severity=severity or rule.severity, description=(rule.description + (" " + extra if extra else "")).strip(),
                         evidence=evidence, references=rule.refs, rule_version=rule.base, group_id=rule.group_id,
                         benchmark=rule.benchmark, check_text=rule.check_text, fix_text=rule.fix_text,
-                        tags=["kubernetes", *t], collected_at=collected_at, raw_ref=raw_ref)
+                        tags=["kubernetes", *t], collected_at=collected_at, raw_ref=raw_ref, status=status)
 
 
 # -- checks -----------------------------------------------------------------------------------
+APISERVER_RULES = ("CNTR-K8-000360", "CNTR-K8-000320", "CNTR-K8-000340", "CNTR-K8-000270", "CNTR-K8-000610",
+                   "CNTR-K8-003280")
+
+
 def check_apiserver(target, data: KubeData) -> list[Finding]:
     out: list[Finding] = []
-    for ref, f in component_pods(data, "kube-apiserver"):
-        pod_ref = ObjRef(ref.namespace, "pod", ref.name)
-        ev = f"kube-system/{ref.name} container {ref.container}: "
+    sources = component_sources(data, "kube-apiserver")
+    if not sources and data.doc("pods") is not None:
+        # k3s, RKE2 and managed clusters keep the API server out of the API; say so instead of passing silently
+        why = ("No kube-apiserver flags were collected: no kube-apiserver pod in kube-system and no k3s server node "
+               "(target option node_target) to read them from. Review this rule on the control-plane node by hand.")
+        for sid in APISERVER_RULES:
+            out.append(finding(target, stig(sid), None, why, status="not_reviewed"))
+        return out
+    for pod_ref, ev, f in sources:
         if f.get("anonymous-auth", "").lower() == "true":
             out.append(finding(target, stig("CNTR-K8-000360"), pod_ref, ev + "--anonymous-auth=true"))
         if "insecure-port" in f and f["insecure-port"] != "0":
@@ -263,9 +294,7 @@ def check_apiserver(target, data: KubeData) -> list[Finding]:
 
 def check_controller_manager(target, data: KubeData) -> list[Finding]:
     out: list[Finding] = []
-    for ref, f in component_pods(data, "kube-controller-manager"):
-        pod_ref = ObjRef(ref.namespace, "pod", ref.name)
-        ev = f"kube-system/{ref.name}: "
+    for pod_ref, ev, f in component_sources(data, "kube-controller-manager"):
         if f.get("use-service-account-credentials", "false").lower() != "true":
             out.append(finding(target, stig("CNTR-K8-000220"), pod_ref, ev + "--use-service-account-credentials not true"))
         if f.get("profiling", "true").lower() != "false":
@@ -276,16 +305,17 @@ def check_controller_manager(target, data: KubeData) -> list[Finding]:
 def check_kubelet(target, data: KubeData) -> list[Finding]:
     """Kubelet flags from a kube-system pod running kubelet, and kubelet config from the node configz endpoint."""
     out: list[Finding] = []
-    for ref, f in component_pods(data, "kubelet"):
-        pod_ref = ObjRef(ref.namespace, "pod", ref.name)
-        ev = f"kube-system/{ref.name}: "
+    configz = data.configz()
+    for pod_ref, ev, f in component_sources(data, "kubelet"):
+        if pod_ref.kind == "node" and pod_ref.name in configz:
+            continue   # the node's configz is the effective kubelet configuration; prefer it over k3s flags
         if f.get("anonymous-auth", "").lower() == "true":
             out.append(finding(target, stig("CNTR-K8-000370"), pod_ref, ev + "--anonymous-auth=true"))
         if "read-only-port" in f and f["read-only-port"] != "0":
             out.append(finding(target, stig("CNTR-K8-000330"), pod_ref, ev + f"--read-only-port={f['read-only-port']}"))
         if "authorization-mode" in f and f["authorization-mode"] != "Webhook":
             out.append(finding(target, stig("CNTR-K8-000380"), pod_ref, ev + f"--authorization-mode={f['authorization-mode']}"))
-    for node, cfg in data.configz().items():
+    for node, cfg in configz.items():
         try:
             node_ref = ObjRef(None, "node", node)
         except ValueError:
@@ -350,6 +380,13 @@ def check_pod_security(target, data: KubeData) -> list[Finding]:
                     out.append(finding(target, stig("CNTR-K8-001160"), cref,
                                        f"{cw}: env {e.get('name')} from secret {skr.get('name')}/{skr.get('key')}"))
                     break
+            else:
+                for e in c.get("envFrom", []) or []:
+                    sr = e.get("secretRef")
+                    if sr:
+                        out.append(finding(target, stig("CNTR-K8-001160"), cref,
+                                           f"{cw}: envFrom secret {sr.get('name')} (all keys)"))
+                        break
             for port in c.get("ports", []) or []:
                 hp = port.get("hostPort")
                 if hp and int(hp) < 1024:

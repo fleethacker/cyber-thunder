@@ -80,3 +80,10 @@ def write_collected(store, scan_id: str, target_id: str, packages: list[dict], o
     p = d / "collected.json"
     p.write_text(json.dumps(doc), encoding="utf-8")
     return p
+
+
+def add_targets(ctx, *target_ids: str) -> None:
+    """Put fixture hosts in the inventory: bulletins only match hosts that are in scope."""
+    from cyberthunder.inventory.targets import Target
+    for tid in target_ids:
+        ctx.inventory.add(Target(id=tid, name=tid, asset_type="linux", transport="fixture"))

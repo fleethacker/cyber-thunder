@@ -1,0 +1,6 @@
+node_modules/
+.vite/
+*.local
+# the built bundle is committed on purpose (served offline by the Python process)
+!dist/
+!dist/**

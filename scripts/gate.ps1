@@ -53,7 +53,13 @@ if ($hits) { $bad = $true; $hits | ForEach-Object { Write-Output "  $_" } }
 Step 'secret scan' (-not $bad)
 
 # 4. Whitespace errors in the latest commit (trailing spaces, stray conflict markers).
-git show --check --format= HEAD *> $null
+# With uncommitted work, check the staged and unstaged changes; on a clean tree check the last commit.
+if ((git status --porcelain --untracked-files=no) -ne $null) {
+  git diff --check *> $null; $rcA = $LASTEXITCODE; git diff --cached --check *> $null
+  if ($rcA -ne 0) { $global:LASTEXITCODE = $rcA }
+} else {
+  git show --check --format= HEAD *> $null
+}
 Step 'git diff --check' ($LASTEXITCODE -eq 0)
 
 # 5. The handoff notes file must never be committed.

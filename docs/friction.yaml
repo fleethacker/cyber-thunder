@@ -1,0 +1,51 @@
+# Friction log: barriers met while building, for the after-action review. Rendered by `cyberthunder report friction`.
+# area is one of: policy, data, authority, ato, tooling, range
+entries:
+  - id: F1
+    area: ato
+    what: A new application and each of its runtime dependencies needs its own DADMS registration before it can be fielded.
+    impact: Every Python package and the web framework is a separate approval, so a small tool carries a long approval list.
+    workaround: Keep dependencies to seven well-known packages and list them in the path to fleet.
+    ask: A DADMS family or bundle entry for an approved Python runtime and its common libraries.
+  - id: F2
+    area: policy
+    what: There is no DADMS-approved offline LLM runtime.
+    impact: The explain layer cannot be fielded with a model today, only demonstrated.
+    workaround: Detection never depends on the model; a deterministic template produces the same cited explanation when no model is present.
+    ask: An approved offline model runtime, or a decision on how one gets evaluated.
+  - id: F3
+    area: tooling
+    what: The CAC-gated scanners (Evaluate-STIG, SCC) cannot be copied into this repository.
+    impact: They cannot be bundled; the tool depends on being able to call them where they are already installed.
+    workaround: Call them externally and parse their CKLB or XCCDF output only. Open source scanners cover the same ground when they are absent.
+    ask: Confirmation that the range hosts carry the scanners, or permission for a cleared user to bring a copy.
+  - id: F4
+    area: data
+    what: The portal Datasets tab was empty on day one.
+    impact: No official sample logs, configurations or STIG content to build against.
+    workaround: Built against public DISA STIG content and hand-made fixtures that match the answer key.
+    ask: Publish the range datasets before the event starts.
+  - id: F5
+    area: range
+    what: Range connection details were unknown at build start (hosts, operating system mix, credentials, link speed).
+    impact: Could not test adapters against the real range during the build window.
+    workaround: Simulated targets that behave like the seeded hosts, plus recorded fixtures; switch to live transports when the range opens.
+    ask: Range address list, account model and the emulated link speed, a week ahead.
+  - id: F6
+    area: tooling
+    what: The hack laptop has 4 GB of VRAM, so the 26B-class offline model path is out of reach.
+    impact: Only small local models are usable on the build machine, and their tool-calling is less reliable.
+    workaround: Use a 3B to 4B class model for explanation only, never for tool calling, and keep the template fallback.
+    ask: Loaner GPU hardware or range-side inference for the event.
+  - id: F7
+    area: authority
+    what: Event rules forbid wireless gear, travel routers and access points at the venue.
+    impact: A real low-bandwidth link cannot be built with portable hardware.
+    workaround: Emulate the link in software (rate and latency model on the outbox and ingest path); netem on the range host if it is offered.
+    ask: A wired shaping point or range-provided link emulation.
+  - id: F8
+    area: tooling
+    what: Git inside a cloud-synced folder locked files during commits and worktree operations.
+    impact: Lost time to failed commits and corrupted index files.
+    workaround: Moved the working repository out of the synced folder and keep only a copy there.
+    ask: A standard issue development folder that is excluded from sync.

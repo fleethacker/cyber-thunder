@@ -12,6 +12,8 @@ Guardrails, in code order:
     reasons and is audited as inventory.add (and scope.change when the new target is in scope)
 
 State lives under <state_dir>/discovery/: scopes.json, assets.json, ignored.json, runs/<id>.json.
+A running sweep holds an OS lock on runs/<id>.lock; a run still marked running whose lock nobody holds
+was cut off by a process exit and is closed as failed (interrupted) the next time the service starts.
 """
 from __future__ import annotations
 
@@ -49,17 +51,17 @@ DEFAULT_TRANSPORT = {"linux": "ssh", "windows": "winrm", "cisco_ios": "ssh", "ku
 # management port to record on the new target, by transport, in order of preference
 TRANSPORT_PORTS = {"ssh": (22,), "winrm": (5986, 5985), "kubeconfig": (6443,)}
 
+# a credential reference is a name, looked up as CT_CRED_<ref>; never a path or an arbitrary variable
+CREDENTIAL_REF_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+# per-scope sweep outcome: complete; partial (live hosts known, port data missing); failed (liveness unknown)
+SCOPE_COMPLETE, SCOPE_PARTIAL, SCOPE_FAILED = "complete", "partial", "failed"
 
 
 def require_human(actor: str | None) -> str:
-    """The actor for a human-only decision: refuses empty and machine identities."""
-    a = (actor or "").strip()
-    if not a:
-        raise PermissionError("an operator identity is required")
-    if a.lower() in MACHINE_ACTORS or a.lower().startswith(("agent:", "llm:", "system:")):
-        raise PermissionError(f"actor {a!r} is reserved for the machine; a named operator must decide this")
-    return a
+    """The actor for a human-only decision: one rule for the whole product (control.identity)."""
+    from cyberthunder.control.identity import require_human as _require_human
+    return _require_human(actor)
 
 
 def _reason(reason: str | None) -> str:
@@ -82,6 +84,50 @@ def target_address(t: Target) -> str | None:
         return None
 
 
+class _RunLock:
+    """An exclusive, non-blocking OS lock on runs/<id>.lock, released by the OS if the process dies."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._fh = None
+
+    def acquire(self) -> bool:
+        fh = open(self.path, "a+b")
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fh.close()
+            return False
+        self._fh = fh
+        return True
+
+    def release(self) -> None:
+        fh, self._fh = self._fh, None
+        if fh is None:
+            return
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        fh.close()
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+
+
 class DiscoveryService:
     def __init__(self, ctx: "AppContext"):
         self.ctx = ctx
@@ -89,8 +135,30 @@ class DiscoveryService:
         (self.dir / "runs").mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._threads: dict[str, threading.Thread] = {}
+        self._run_locks: dict[str, _RunLock] = {}
         # the transport that runs nmap when no scope names a scanner_target; replaceable for tests
         self.local_transport_factory: Callable[[], "Transport"] = self._default_local_transport
+        self._close_interrupted()
+
+    def _close_interrupted(self) -> None:
+        """Runs still marked running whose lock nobody holds ended with their process: record them as failed."""
+        for path in sorted((self.dir / "runs").glob("*.json")):
+            d = self._read(path, None)
+            if not d or d.get("status") != "running":
+                continue
+            run = DiscoveryRun.from_dict(d)
+            lock = _RunLock(path.with_suffix(".lock"))
+            if not lock.acquire():
+                continue                                   # another process (or this one) is still sweeping
+            try:
+                run.status, run.finished_at = "failed", utcnow()
+                run.errors.append("interrupted: the process running this sweep exited before it finished")
+                self._save_run(run)
+                self.ctx.audit.append("discovery.finish", "system", {"run": run.id, "status": "failed",
+                                                                     **run.counts(), "errors": run.errors[-3:]},
+                                      outcome="error", subject=run.id)
+            finally:
+                lock.release()
 
     # -- files ---------------------------------------------------------------------------------
     @property
@@ -185,6 +253,9 @@ class DiscoveryService:
         except KillSwitchEngaged as e:
             self._stopped(run, actor, str(e))
             raise
+        lock = _RunLock(self._run_file(run.id).with_suffix(".lock"))
+        if lock.acquire():
+            self._run_locks[run.id] = lock
         self._save_run(run)
         if not background:
             self._execute(run, chosen, actor, raise_stop=True)
@@ -209,8 +280,8 @@ class DiscoveryService:
 
     def _execute(self, run: DiscoveryRun, scopes: list[DiscoveryScope], actor: str, raise_stop: bool = False) -> None:
         try:
-            observed, baseline = self._collect(run, scopes, actor)
-            self._finish(run, scopes, observed, baseline, actor)
+            observed, baseline, incomplete = self._collect(run, scopes, actor)
+            self._finish(run, scopes, observed, baseline, actor, incomplete)
         except KillSwitchEngaged as e:
             self._stopped(run, actor, str(e))
             if raise_stop:
@@ -224,10 +295,17 @@ class DiscoveryService:
                                                               "errors": run.errors[-3:]}, outcome="error", subject=run.id)
             if raise_stop:
                 raise
+        finally:
+            lock = self._run_locks.pop(run.id, None)
+            if lock is not None:
+                lock.release()
 
     def _collect(self, run: DiscoveryRun, scopes: list[DiscoveryScope], actor: str):
-        """Gather raw observations from every source. Returns (assets, baseline ports or None)."""
+        """Gather raw observations from every source. Returns (assets, baseline ports or None, incomplete),
+        where incomplete maps a scope CIDR to SCOPE_PARTIAL (hosts known, port data missing) or SCOPE_FAILED
+        (the liveness sweep failed, so nothing can be said about who is absent)."""
         observed: list[DiscoveredAsset] = []
+        incomplete: dict[str, str] = {}
         baseline: dict[str, set[str]] | None = None
         sim = SimulatedSweep(self.ctx.inventory.all()) if run.mode == "simulated" else None
         if sim is not None:
@@ -236,15 +314,15 @@ class DiscoveryService:
             self.ctx.killswitch.guard("discovery.sweep", actor)
             if sim is not None:
                 got = [a for a in sim.assets() if scope.contains(a.address)]
-            elif run.mode == "passive":
-                got = self._passive(scope, run)
             else:
-                got = self._nmap(scope, run)
+                got, state = self._passive(scope, run) if run.mode == "passive" else self._nmap(scope, run)
+                if state != SCOPE_COMPLETE:
+                    incomplete[scope.cidr] = state
             observed.extend(got)
         if sim is None:
             self.ctx.killswitch.guard("discovery.sweep", actor)
             observed.extend(self._inventory_sources(scopes, run))
-        return observed, baseline
+        return observed, baseline, incomplete
 
     # -- sources -------------------------------------------------------------------------------
     @staticmethod
@@ -261,29 +339,42 @@ class DiscoveryService:
         privileged = sys.platform != "win32" and getattr(os, "geteuid", lambda: 1)() == 0
         return self.local_transport_factory(), nmap.find_nmap() or "nmap", privileged
 
-    def _nmap(self, scope: DiscoveryScope, run: DiscoveryRun) -> list[DiscoveredAsset]:
+    def _nmap(self, scope: DiscoveryScope, run: DiscoveryRun) -> tuple[list[DiscoveredAsset], str]:
+        """(assets, scope state). When only the port phase fails, the hosts the ping sweep saw are still
+        returned and the scope is SCOPE_PARTIAL; when the ping sweep fails it is SCOPE_FAILED."""
         transport, exe, privileged = self._scanner(scope)
+        up: list[DiscoveredAsset] = []
+        swept = False
+        bad: list[str] = []
         try:
             ping = nmap.run_nmap(transport, nmap.build_ping_command([scope], nmap=exe))
+            up = [a for a in nmap.parse_xml(ping, bad) if a.address and scope.contains(a.address)]
             hosts = [h for h in nmap.live_hosts(ping) if scope.contains(h)]
+            swept = True
             if not hosts:
-                return []
+                return [], SCOPE_COMPLETE
             argv = nmap.build_command([scope], run.mode, privileged, hosts=hosts, nmap=exe)
             xml = nmap.run_nmap(transport, argv, sudo=privileged and bool(scope.scanner_target))
-            return [a for a in nmap.parse_xml(xml) if scope.contains(a.address)]
+            got = [a for a in nmap.parse_xml(xml, bad) if scope.contains(a.address)]
+            have = {a.address for a in got}
+            return got + [a for a in up if a.address not in have], SCOPE_PARTIAL if bad else SCOPE_COMPLETE
         except (nmap.NmapError, ValueError) as e:
             run.errors.append(f"nmap {scope.cidr}: {e}")
-            return []
         except Exception as e:  # noqa: BLE001 - transport failures are recorded, not fatal
             run.errors.append(f"nmap {scope.cidr}: {type(e).__name__}: {e}")
-            return []
         finally:
+            run.errors.extend(f"nmap {scope.cidr}: {b}" for b in bad)
             self._close(transport)
+        if up:
+            run.errors.append(f"nmap {scope.cidr}: port scan incomplete; kept {len(up)} host(s) from the ping sweep")
+        return up, SCOPE_PARTIAL if swept else SCOPE_FAILED
 
-    def _passive(self, scope: DiscoveryScope, run: DiscoveryRun) -> list[DiscoveredAsset]:
+    def _passive(self, scope: DiscoveryScope, run: DiscoveryRun) -> tuple[list[DiscoveredAsset], str]:
+        """(assets, scope state). SCOPE_FAILED when no neighbor table could be read."""
         transport, _, _ = self._scanner(scope)
         powershell = getattr(transport, "shell", None) == "powershell"
         got: list[DiscoveredAsset] = []
+        swept = False
         try:
             cmds = [neighbors.NEIGHBOR_COMMANDS["powershell"]] if powershell else \
                 [neighbors.NEIGHBOR_COMMANDS["posix"], neighbors.NEIGHBOR_COMMANDS["posix_fallback"]]
@@ -291,6 +382,7 @@ class DiscoveryService:
                 r = transport.run(cmd, timeout=60)
                 if r.ok and r.stdout.strip():
                     got.extend(neighbors.parse_neighbors(r.stdout))
+                    swept = True
                     break
             else:
                 run.errors.append(f"passive {scope.cidr}: no neighbor table could be read")
@@ -305,9 +397,10 @@ class DiscoveryService:
                     run.errors.append(f"passive {scope.cidr}: {label}: {e}")
         except Exception as e:  # noqa: BLE001
             run.errors.append(f"passive {scope.cidr}: {type(e).__name__}: {e}")
+            swept = False
         finally:
             self._close(transport)
-        return [a for a in got if scope.contains(a.address)]
+        return [a for a in got if scope.contains(a.address)], SCOPE_COMPLETE if swept else SCOPE_FAILED
 
     @staticmethod
     def _known_hosts(transport: "Transport", powershell: bool) -> str:
@@ -404,12 +497,15 @@ class DiscoveryService:
 
     def reconcile(self, observed: Iterable[DiscoveredAsset], scopes: list[DiscoveryScope],
                   baseline: dict[str, set[str]] | None = None,
-                  previous: dict[str, DiscoveredAsset] | None = None) -> tuple[list[DiscoveredAsset], dict]:
-        """Classify and compare against the inventory and the previous sweep. Returns (assets, counts)."""
+                  previous: dict[str, DiscoveredAsset] | None = None,
+                  unswept: Iterable[str] = ()) -> tuple[list[DiscoveredAsset], dict]:
+        """Classify and compare against the inventory and the previous sweep. Returns (assets, counts).
+        Scopes named in `unswept` (their liveness sweep failed) never produce missing assets."""
         previous = self._load_assets() if previous is None else previous
         ignored = self._ignored()
         targets = self.ctx.inventory.all()
         by_addr = {a: t for t in targets if (a := target_address(t))}
+        by_id = {t.id: t for t in targets}
         prev_by_addr = {p.address: p for p in previous.values() if p.address}
         seen = self.merge_observations(observed)
         counts = {"hosts_seen": len(seen), "new": 0, "known": 0, "changed": 0, "missing": 0}
@@ -423,6 +519,8 @@ class DiscoveryService:
             a.last_seen = utcnow()
             a.changes = []
             t = by_addr.get(a.address) if a.address else None
+            if t is None and a.facts.get("simulated_target_id"):
+                t = by_id.get(a.facts["simulated_target_id"])
             if t is None and prev is not None and prev.inventory_target_id:
                 t = next((x for x in targets if x.id == prev.inventory_target_id), None)
             if t is not None:
@@ -453,33 +551,61 @@ class DiscoveryService:
             out.append(a)
         seen_addrs = {a.address for a in out if a.address}
         seen_targets = {a.inventory_target_id for a in out if a.inventory_target_id}
+        unswept = set(unswept)
+        swept = [s for s in scopes if s.cidr not in unswept]
         for t in targets:
             addr = target_address(t)
-            if not addr or addr in seen_addrs or t.id in seen_targets or not any(s.contains(addr) for s in scopes):
+            if not addr or addr in seen_addrs or t.id in seen_targets or not any(s.contains(addr) for s in swept):
                 continue
-            prev = previous.get(asset_id_for(None, addr))
+            # the record already linked to this target (possibly keyed by MAC) stays the one record for it
+            linked = next((p for p in previous.values() if p.inventory_target_id == t.id and p.status != "ignored"),
+                          None)
+            prev = linked or previous.get(asset_id_for(None, addr))
             m = DiscoveredAsset(address=addr, hostname=t.name, asset_type_guess=t.asset_type, status="missing",
                                 inventory_target_id=t.id, sources=["inventory"],
                                 first_seen=prev.first_seen if prev else utcnow(),
                                 last_seen=prev.last_seen if prev and prev.status != "missing" else utcnow())
-            m.id = asset_id_for(None, addr)
+            m.id = linked.id if linked is not None else asset_id_for(None, addr)
+            if linked is not None and linked.mac:
+                m.mac, m.vendor = linked.mac, linked.vendor
             m.evidence.append(f"inventory target {t.id} at {addr} did not answer this sweep")
-            m.changes.append({"kind": "missing", "detail": f"{t.id} not seen inside {', '.join(s.cidr for s in scopes)}"})
+            m.changes.append({"kind": "missing", "detail": f"{t.id} not seen inside {', '.join(s.cidr for s in swept)}"})
             counts["missing"] += 1
             out.append(m)
         return out, counts
 
-    def _finish(self, run: DiscoveryRun, scopes, observed, baseline, actor: str) -> None:
+    @staticmethod
+    def _retire_stale(previous: dict[str, DiscoveredAsset], assets: list[DiscoveredAsset]) -> None:
+        """Drop records this sweep supersedes under another id: one linked to the same inventory target, or an
+        address-only record for a device now identified by its MAC. Ignored records are kept as decided."""
+        current = {a.id for a in assets}
+        for a in assets:
+            for pid, p in list(previous.items()):
+                if pid in current or p.status == "ignored":
+                    continue
+                same_target = bool(a.inventory_target_id) and p.inventory_target_id == a.inventory_target_id
+                rekeyed = bool(a.mac and a.address) and not p.mac and p.address == a.address
+                if same_target or rekeyed:
+                    del previous[pid]
+
+    def _finish(self, run: DiscoveryRun, scopes, observed, baseline, actor: str,
+                incomplete: dict[str, str] | None = None) -> None:
+        incomplete = incomplete or {}
+        unswept = {c for c, state in incomplete.items() if state == SCOPE_FAILED}
         with self._lock:
             previous = self._load_assets()
-            assets, counts = self.reconcile(observed, scopes, baseline, previous)
+            assets, counts = self.reconcile(observed, scopes, baseline, previous, unswept)
+            self._retire_stale(previous, assets)
             for a in assets:
                 previous[a.id] = a
             self._save_assets(previous)
         for k, v in counts.items():
             setattr(run, k, v)
         run.asset_ids = [a.id for a in assets]
-        run.status, run.finished_at = "finished", utcnow()
+        if incomplete:
+            run.errors.append("incomplete scopes (no missing-asset verdict where the sweep failed): " + ", ".join(
+                f"{c} {state}" for c, state in sorted(incomplete.items())))
+        run.status, run.finished_at = ("partial" if incomplete else "finished"), utcnow()
         self._save_run(run, assets)
         self.ctx.audit.append("discovery.finish", actor, {"run": run.id, "status": run.status, "mode": run.mode,
                                                           **counts, "errors": run.errors[:5]}, subject=run.id)
@@ -553,11 +679,40 @@ class DiscoveryService:
                 raise KeyError(f"unknown discovered asset {asset_id!r}")
             if a.status in ("known", "missing") and a.inventory_target_id:
                 raise ValueError(f"asset {asset_id} is already in the inventory as {a.inventory_target_id}")
+            # the inventory may have gained this host since the sweep (targets API, demo load, another operator)
+            mac = (a.mac or "").lower()
+            same = next((t for t in self.ctx.inventory.all()
+                         if (a.address and target_address(t) == a.address)
+                         or (mac and str((t.options or {}).get("mac") or "").lower() == mac)), None)
+            if same is not None:
+                a.status, a.inventory_target_id = "known", same.id
+                assets[a.id] = a
+                self._save_assets(assets)
+                raise ValueError(f"asset {asset_id} ({a.address or a.mac}) is already in the inventory as {same.id}")
             typ = asset_type or a.asset_type_guess
             if typ not in ASSET_TYPES:
                 raise ValueError(f"choose an asset type for {a.address or a.hostname or asset_id}; "
                                  f"expected one of {ASSET_TYPES}")
-            kind = transport or DEFAULT_TRANSPORT[typ]
+            simulated = bool(a.facts.get("simulated"))
+            if simulated:
+                # the host exists only in the emulator: it becomes a simulated target, never a live session
+                if transport not in (None, "", "simulated"):
+                    raise ValueError(f"asset {asset_id} came from a simulated sweep; it can only be accepted "
+                                     f"with transport 'simulated', not {transport!r}")
+                adapter = self.ctx.adapters.get(typ) if self.ctx.adapters.has(typ) else None
+                if "simulated" not in getattr(adapter, "own_transports", ()):
+                    raise ValueError(f"asset {asset_id} came from a simulated sweep and the {typ} adapter has "
+                                     f"no emulator; it cannot be accepted")
+                kind = "simulated"
+                username = credential_ref = None
+            else:
+                kind = transport or DEFAULT_TRANSPORT[typ]
+            if credential_ref and not CREDENTIAL_REF_RE.match(credential_ref):
+                raise ValueError("credential_ref must be a short name (letters, digits, '_', '.', '-'), "
+                                 "resolved as CT_CRED_<ref>; paths are not accepted here")
+            if credential_ref and f"CT_CRED_{credential_ref}" not in os.environ and credential_ref in os.environ:
+                raise ValueError(f"credential_ref {credential_ref!r} names a process environment variable; "
+                                 f"store the credential as CT_CRED_{credential_ref} instead")
             if kind not in TRANSPORTS:
                 raise ValueError(f"unknown transport {kind!r}; expected one of {TRANSPORTS}")
             label = (name or a.hostname or f"{typ}-{a.address or asset_id}").strip()
@@ -571,9 +726,10 @@ class DiscoveryService:
             # discovered_os, not os: an nmap guess is a range, and options.os is read as an operator hint
             if a.facts.get("virtual_platform"):
                 options["virtual_platform"] = a.facts["virtual_platform"]
-            target = Target(id=tid, name=label, asset_type=typ, transport=kind, address=a.address, port=port,
-                            username=username or None, credential_ref=credential_ref or None, tags=["discovered"],
-                            in_scope=in_scope, options=options,
+            target = Target(id=tid, name=label, asset_type=typ, transport=kind, address=a.address,
+                            port=None if simulated else port, username=username or None,
+                            credential_ref=credential_ref or None, tags=["discovered"], in_scope=in_scope,
+                            simulated=simulated, options=options,
                             notes=f"accepted from discovery by {actor}: {reason}")
             self.ctx.inventory.add(target)
             self.ctx.save_inventory(actor, "inventory.add", {
@@ -632,7 +788,7 @@ class DiscoveryService:
 
     def findings(self, run_id: str | None = None) -> list[Finding]:
         if run_id is None:
-            last = next((r for r in self.runs() if r.status == "finished"), None)
+            last = next((r for r in self.runs() if r.status in ("finished", "partial")), None)
             if last is None:
                 return []
             run_id = last.id
@@ -669,7 +825,9 @@ class DiscoveryService:
                         description=("What answers at this address no longer matches its inventory entry. Either the "
                                      "inventory is stale or a different device has taken the address."),
                         evidence=self._evidence(a, c["detail"]), references=["T1036"], tags=["discovery"]))
-                elif c["kind"] == "new_listener" and status == "known":
+                elif c["kind"] == "new_listener" and (status == "known" or
+                                                      (status == "new" and a.facts.get("simulated"))):
+                    # a simulated enclave's previous sweep is fixed, so its listener diff holds without inventory
                     out.append(make_finding(
                         target=host, source="discovery", rule_id="discovery:new_listener", severity="medium",
                         title=f"New listener on {host.id}: {', '.join(c['ports'])}",

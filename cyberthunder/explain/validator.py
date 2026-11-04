@@ -2,7 +2,9 @@
 
 The model's answer is untrusted text. This module parses it as JSON, keeps only the four expected fields,
 clamps their length, and keeps only citations that are identifiers already attached to the finding (or the
-resolved fix_ref). Anything else is dropped and reported. Output from here is display text only.
+resolved fix_ref). Anything else is dropped and reported. An answer whose risk, impact or plan text names an
+identifier outside that set, or carries a shell command, is rejected so the caller retries or falls back to
+the template. Output from here is display text only.
 """
 from __future__ import annotations
 
@@ -20,6 +22,11 @@ _FENCE = re.compile(r"```[a-zA-Z]*")
 # A citation that looks like a command or a path is rejected outright, even if it contains a valid id.
 _SHELL = re.compile(r"[;|&`$<>\\]|\$\(|\b(?:rm|curl|wget|sudo|chmod|chown|bash|sh|powershell|cmd|echo|nc|python)\b"
                     r"|(?:^|\s)/[\w.-]+/", re.IGNORECASE)
+# Command-like fragments in the prose fields. Narrower than _SHELL: prose may name a config file or use "&",
+# but it must never carry something an approver could paste into a shell.
+_PROSE_SHELL = re.compile(r"`|\$\(|&&|\|\s*(?:sudo\s+)?(?:ba|z|k)?sh\b"
+                          r"|\b(?:sudo|rm|curl|wget|chmod|chown|nc|bash|sh|powershell|python\d?)\s+"
+                          r"(?:-{1,2}\w|/|~|https?://|[0-7]{3,4}\b)", re.IGNORECASE)
 
 
 def strip_fences(text: str) -> str:
@@ -76,6 +83,21 @@ def looks_like_shell(text: str) -> bool:
     return bool(_SHELL.search(text))
 
 
+def looks_like_command(text: str) -> bool:
+    """True when prose carries a shell command (rm -rf, curl ... | sh, $(...), backticks)."""
+    return bool(_PROSE_SHELL.search(text))
+
+
+def unknown_ids(text: str, allowed: set[str]) -> list[str]:
+    """Identifiers mentioned in prose that are not among the allowed ones, in order."""
+    out: list[str] = []
+    for rx in ID_PATTERNS:
+        for m in rx.findall(text):
+            if m not in allowed and m not in out:
+                out.append(m)
+    return out
+
+
 def normalise_citation(raw: str, allowed: set[str]) -> list[str]:
     """Identifiers found in one raw citation string, in order. Exact matches on allowed ids (fix_ref,
     ComplianceAsCode rule ids) count, as do any identifiers matched by the schema patterns."""
@@ -95,26 +117,38 @@ def normalise_citation(raw: str, allowed: set[str]) -> list[str]:
 def validate(text: str | None, finding: Finding, fix: FixEntry | None = None) -> tuple[dict | None, list[str]]:
     """Return ({risk, impact, plan, citations}, dropped) or (None, dropped) when the answer is unusable."""
     dropped: list[str] = []
-    if not text:
+    if not text or not isinstance(text, str):     # a backend that hands back a dict or other object is unusable
         return None, dropped
     obj = extract_json_object(text)
     if obj is None:
         return None, dropped
+    allowed = set(finding.citations)
+    if fix and fix.fix_ref:
+        allowed.add(fix.fix_ref)
     out: dict = {}
     for key, limit in LIMITS.items():
         v = obj.get(key)
         if not isinstance(v, str) or not v.strip():
             return None, dropped
         out[key] = clamp(v, limit)
+    # The prose is held to the same rule as the citations: no invented identifiers, no commands.
+    bad = False
+    for key in LIMITS:
+        for i in unknown_ids(out[key], allowed):
+            bad = True
+            if i not in dropped:
+                dropped.append(i)
+        if looks_like_command(out[key]):
+            bad = True
+            dropped.append(f"{key}: {out[key][:70]}")
+    if bad:
+        return None, dropped
     cites = obj.get("citations")
     if isinstance(cites, str):
         cites = [cites]
     if not isinstance(cites, list):
         return None, dropped
 
-    allowed = set(finding.citations)
-    if fix and fix.fix_ref:
-        allowed.add(fix.fix_ref)
     kept: list[str] = []
     for c in cites:
         if not isinstance(c, str):

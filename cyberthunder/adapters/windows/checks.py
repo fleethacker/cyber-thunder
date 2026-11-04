@@ -103,14 +103,15 @@ def _reg(state: dict, path: str):
     return (state.get("registry") or {}).get(path)
 
 
-def _reg_equals(path: str, want: int, missing_ok: bool = False):
+def _reg_equals(path: str, want: int):
     def decide(state: dict, opts: dict) -> Decision:
         reg = state.get("registry") or {}
         if path not in reg:
             return None, f"{path} was not collected"
         v = _int(reg[path])
         if v is None:
-            return (True if missing_ok else False), f"{path} is not set" + (" (default is compliant)" if missing_ok else "")
+            # The STIG check text makes an absent value a finding, even where the OS default would comply.
+            return False, f"{path} is not set (required {want})"
         return v == want, f"{path} = {v} (required {want})"
     return decide
 
@@ -216,7 +217,7 @@ CHECKS: tuple[CheckDef, ...] = (
              _secpol("PasswordHistorySize", lambda v: v >= 24, ">= 24"), "windows:password_history"),
     CheckDef("max_password_age", "Maximum password age", "WN11-AC-000025", _max_age, "windows:max_password_age"),
     CheckDef("uac_enabled", "UAC Admin Approval Mode (EnableLUA)", "WN11-SO-000270",
-             _reg_equals(POL_SYSTEM + r"\EnableLUA", 1, missing_ok=True), "windows:uac_enabled"),
+             _reg_equals(POL_SYSTEM + r"\EnableLUA", 1), "windows:uac_enabled"),
     CheckDef("rdp_nla", "Remote Desktop requires Network Level Authentication", None,
              _reg_equals(RDP_TCP + r"\UserAuthentication", 1), "windows:rdp_nla", severity="medium",
              refs=("CCI-000366", "T1021.001"),
@@ -230,7 +231,7 @@ CHECKS: tuple[CheckDef, ...] = (
     CheckDef("anon_sid_translation", "Anonymous SID/Name translation not allowed", "WN11-SO-000140",
              _secpol("LSAAnonymousNameLookup", lambda v: v == 0, "0"), "windows:anon_sid_translation"),
     CheckDef("no_lm_hash", "LAN Manager hash not stored", "WN11-SO-000195",
-             _reg_equals(LSA + r"\NoLMHash", 1, missing_ok=True), "windows:no_lm_hash"),
+             _reg_equals(LSA + r"\NoLMHash", 1), "windows:no_lm_hash"),
     CheckDef("lm_compat", "LAN Manager authentication level NTLMv2 only", "WN11-SO-000205",
              _reg_equals(LSA + r"\LmCompatibilityLevel", 5), "windows:lm_compat"),
     CheckDef("script_block_logging", "PowerShell script block logging", "WN11-CC-000326",

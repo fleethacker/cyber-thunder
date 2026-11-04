@@ -266,11 +266,17 @@ def oscap_findings(target, c: Collected) -> list[Finding]:
 
 def merge(native: list[Finding], oscap: list[Finding]) -> list[Finding]:
     by_stig = {f.rule_version: f for f in oscap if f.rule_version}
+    # a native rule without a STIG ID still pairs with the OpenSCAP result for the same SSG rule
+    by_ssg = {f.rule_id: f for f in oscap if f.rule_id.startswith(rules.SSG_PREFIX)}
     merged: list[Finding] = []
     used: set[str] = set()
     for n in native:
         o = by_stig.get(n.rule_version) if n.rule_version else None
         if o is None:
+            r = NATIVE_BY_ID.get(n.rule_id)
+            if r is not None and r.ssg:
+                o = by_ssg.get(rules.SSG_PREFIX + r.ssg)
+        if o is None or o.id in used:
             merged.append(n)
             continue
         used.add(o.id)

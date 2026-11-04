@@ -1,0 +1,63 @@
+"""Findings: list and filter the latest (or a named) scan, propose a library fix, explain."""
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query
+
+from cyberthunder.api import util
+from cyberthunder.api.errors import MappedRoute, feature
+from cyberthunder.api.schemas import ExplainBatchBody, ExplainBody
+from cyberthunder.api.util import ActorDep, CtxDep, finding_plus, proposal_plus, to_plain
+
+router = APIRouter(tags=["findings"], route_class=MappedRoute)
+
+
+@router.get("/findings")
+def list_findings(ctx=CtxDep, scan_id: str | None = None, host: str | None = None, status: str | None = None,
+                  severity: str | None = None, source: str | None = None, asset_type: str | None = None,
+                  q: str | None = None, limit: int = Query(200, ge=1, le=5000), offset: int = Query(0, ge=0)) -> dict:
+    return util.list_findings(ctx, scan_id=scan_id, limit=limit, offset=offset, host=host, status=status,
+                              severity=severity, source=source, asset_type=asset_type, q=q)
+
+
+@router.post("/findings/explain")
+def explain_many(body: ExplainBatchBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    """Queue background explanations. Default: every open finding of the latest scan."""
+    body = body or ExplainBatchBody()
+    if body.ids:
+        findings = [util.get_finding(ctx, fid) for fid in body.ids]
+    else:
+        findings = [f for f in ctx.store.load_findings() if f.is_open]
+    with feature("explain"):
+        n = ctx.explain.precompute(findings, background=True)
+    return {"queued": int(n or 0)}
+
+
+@router.get("/findings/{finding_id}")
+def get_finding(finding_id: str, ctx=CtxDep, scan_id: str | None = None) -> dict:
+    return finding_plus(ctx, util.get_finding(ctx, finding_id, scan_id))
+
+
+@router.post("/findings/{finding_id}/propose")
+def propose(finding_id: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    finding = util.get_finding(ctx, finding_id)
+    fix = ctx.library.resolve(finding)
+    if fix is None:
+        raise KeyError(f"no library fix for finding {finding_id} ({finding.rule_version or finding.rule_id})")
+    existing = util.proposal_for(ctx, finding_id)
+    if existing is not None and existing.state.value in util.LIVE_STATES:
+        raise HTTPException(409, f"finding {finding_id} already has a live proposal {existing.id} "
+                                 f"({existing.state.value})")
+    with feature("remediation engine"):
+        p = ctx.engine.propose(finding, actor=actor, fix=fix)
+    if p is None:
+        raise KeyError(f"no library fix for finding {finding_id}")
+    return proposal_plus(ctx, p)
+
+
+@router.post("/findings/{finding_id}/explain")
+def explain_one(finding_id: str, body: ExplainBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    body = body or ExplainBody()
+    finding = util.get_finding(ctx, finding_id)
+    with feature("explain"):
+        e = ctx.explain.explain(finding, force=body.force)
+    return to_plain(e)

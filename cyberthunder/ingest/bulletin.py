@@ -9,9 +9,16 @@ A bulletin arrives as JSON over the link:
    "source": "DISA IAVM", "published": "2026-11-03"}
 
 Package specs match an installed package when the name equals or globs the spec and either no
-versions_below is given or the installed EVR is older (RPM comparison rules). Product and CPE specs
-match on the target's os_name (and os_version when versions_below is given). Matching is a pure function
-of the collected inventories the Scanner already wrote; nothing here touches a host.
+versions_below is given or the installed EVR is older (RPM comparison rules). Bulletins usually state
+fixed versions without an epoch while RHEL ships openssl, gnutls and friends with Epoch 1 or 2, so the
+installed epoch is only compared when versions_below names one ("1:3.0.7-25.el9"); otherwise only
+version-release is compared.
+
+Product specs match on the target's os_name (and os_version when versions_below is given). CPE specs are
+split into vendor, product and version: vendor:product is mapped through CPE_OS_NAMES to the os_name it
+appears as (cpe:/o:canonical:ubuntu_linux -> "Ubuntu"), falling back to the product text, and a CPE
+version must equal os_version or be its leading component (cpe ...:9 matches 9.4, not 8.10). Matching is
+a pure function of the collected inventories the Scanner already wrote; nothing here touches a host.
 """
 from __future__ import annotations
 
@@ -174,6 +181,20 @@ def rpm_vercmp(a: str, b: str) -> int:
     return rpmvercmp(ra, rb)
 
 
+def is_older(installed_evr: str, below: str) -> bool:
+    """True when installed_evr is older than below. The epoch only counts when below states one."""
+    below = str(below).strip()
+    if ":" not in below:
+        installed_evr = split_evr_text(installed_evr)
+    return rpm_vercmp(installed_evr, below) < 0
+
+
+def split_evr_text(evr: str) -> str:
+    """'1:3.0.7-24.el9' -> '3.0.7-24.el9' (the version-release part, epoch dropped)."""
+    s = str(evr).strip()
+    return s.split(":", 1)[1] if ":" in s else s
+
+
 def package_evr(pkg: Mapping) -> str:
     epoch = str(pkg.get("epoch") or "").strip()
     v = str(pkg.get("version") or "")
@@ -184,12 +205,52 @@ def package_evr(pkg: Mapping) -> str:
 
 # -- matching -------------------------------------------------------------------------------------
 
-def _cpe_product(cpe: str) -> str:
+# vendor:product of an OS CPE -> the os_name substrings that release reports (lower case).
+CPE_OS_NAMES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("canonical", "ubuntu_linux"): ("ubuntu",),
+    ("redhat", "enterprise_linux"): ("red hat enterprise linux",),
+    ("rocky", "rocky"): ("rocky linux",),
+    ("rockylinux", "rocky_linux"): ("rocky linux",),
+    ("almalinux", "almalinux"): ("almalinux",),
+    ("oracle", "linux"): ("oracle linux",),
+    ("debian", "debian_linux"): ("debian",),
+    ("centos", "centos"): ("centos",),
+    ("microsoft", "windows_server_2016"): ("windows server 2016",),
+    ("microsoft", "windows_server_2019"): ("windows server 2019",),
+    ("microsoft", "windows_server_2022"): ("windows server 2022",),
+    ("microsoft", "windows_server_2025"): ("windows server 2025",),
+    ("microsoft", "windows_10"): ("windows 10",),
+    ("microsoft", "windows_11"): ("windows 11",),
+}
+
+
+def parse_cpe(cpe: str) -> tuple[str, str, str]:
+    """(vendor, product, version) of a CPE 2.2 URI or 2.3 formatted string; '*' / '-' versions become ''."""
     # cpe:/o:redhat:enterprise_linux:9  or  cpe:2.3:o:redhat:enterprise_linux:9:*:...
+    cpe = cpe.strip()
     parts = cpe.split(":")
     if cpe.startswith("cpe:2.3:"):
         parts = parts[1:]
-    return parts[3].replace("_", " ") if len(parts) > 3 else ""
+    vendor = parts[2].lower() if len(parts) > 2 else ""
+    product = parts[3].lower() if len(parts) > 3 else ""
+    version = parts[4] if len(parts) > 4 else ""
+    return vendor, product, ("" if version in ("*", "-") else version)
+
+
+def _cpe_product(cpe: str) -> str:
+    return parse_cpe(cpe)[1].replace("_", " ")
+
+
+def _cpe_matches(cpe: str, os_name: str, os_version: str) -> bool:
+    vendor, product, version = parse_cpe(cpe)
+    if not product:
+        return False
+    names = CPE_OS_NAMES.get((vendor, product)) or (product.replace("_", " "),)
+    if not any(n in os_name.lower() for n in names):
+        return False
+    if version:
+        return os_version == version or os_version.startswith(version + ".")
+    return True
 
 
 def _facts(collected: Mapping) -> dict:
@@ -231,18 +292,24 @@ def match(bulletin: Bulletin, collected_by_target: Mapping[str, Mapping],
                     if not name or not (name == pat or fnmatch.fnmatchcase(name, pat)):
                         continue
                     evr = package_evr(pkg)
-                    if below and rpm_vercmp(evr, str(below)) >= 0:
+                    if below and not is_older(evr, str(below)):
                         continue
                     if name in seen:
                         continue
                     seen.add(name)
                     out.append(_finding(bulletin, target, name, evr, below, pkg.get("arch"), collected_at))
             else:
-                product = str(spec.get("product") or _cpe_product(str(spec.get("cpe") or ""))).strip()
                 os_name = str(facts.get("os_name") or "")
-                if not product or product.lower() not in os_name.lower():
-                    continue
                 os_version = str(facts.get("os_version") or "")
+                if spec.get("product"):
+                    product = str(spec["product"]).strip()
+                    if not product or product.lower() not in os_name.lower():
+                        continue
+                else:
+                    cpe = str(spec.get("cpe") or "")
+                    product = _cpe_product(cpe).strip()
+                    if not product or not _cpe_matches(cpe, os_name, os_version):
+                        continue
                 if below and (not os_version or rpm_vercmp(os_version, str(below)) >= 0):
                     continue
                 if product in seen:

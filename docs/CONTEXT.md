@@ -167,6 +167,7 @@ If the range isn't live, build against local VMs/Docker containers misconfigured
 ---
 ## 9. Open items
 
+- [x] Team repo created: github.com/fleethacker/cyber-thunder
 - [ ] Is the cyber range live? How to connect, OS mix, containers?
 - [ ] Emulated link speed (to size update payloads)
 - [ ] Is Evaluate-STIG or SCC in the range, or is Joshua cleared to bring his copy?

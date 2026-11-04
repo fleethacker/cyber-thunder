@@ -1,6 +1,7 @@
 """Kubernetes intrusion and persistence indicators. Every finding cites a MITRE ATT&CK technique.
 
-  k8s:hunt:host-escape          privileged pod with a sensitive hostPath (/, runtime socket) outside kube-system   T1611
+  k8s:hunt:host-escape          privileged pod with a sensitive hostPath (/, runtime socket), any namespace except
+                                known kube-system components                                                     T1611
   k8s:hunt:untrusted-registry   image from a registry not in target.options.allowed_registries                    T1525
   k8s:hunt:cronjob-download     CronJob that downloads or opens a shell to the network                            T1053.007
   k8s:hunt:admin-to-default     cluster-admin bound to a default service account or to anonymous users            T1078.004
@@ -27,13 +28,18 @@ SENSITIVE_HOST_PATHS = ("/", "/etc", "/root", "/var/run/docker.sock", "/run/cont
                         "/var/run/containerd/containerd.sock", "/var/run/crio/crio.sock", "/var/lib/kubelet", "/proc")
 
 # Pod name prefixes expected in kube-system on kubeadm, k3s, RKE2 and the common CNIs. Extend per site with
-# target.options.known_kube_system.
+# target.options.known_kube_system. A name match alone is not enough: the pod must also be created by a
+# controller (ReplicaSet, DaemonSet, StatefulSet, Job) or be a static pod, so a hand-made pod named
+# "kube-proxy-helper" or "coredns-x" is still unexpected.
 KNOWN_KUBE_SYSTEM = ("coredns", "kube-apiserver", "kube-controller-manager", "kube-scheduler", "kube-proxy", "etcd",
                      "kubelet", "metrics-server", "local-path-provisioner", "traefik", "svclb-", "helm-install-",
                      "calico", "cilium", "kube-flannel", "flannel", "canal", "weave-net", "kube-dns", "konnectivity",
                      "cloud-controller-manager", "csi-", "snapshot-controller", "rke2-", "kube-vip")
 SYSTEM_DAEMON_NAMES = ("kube-proxy", "kube-apiserver", "kube-controller", "kube-scheduler", "kubelet", "etcd",
                        "coredns", "calico-node", "cilium", "kube-flannel", "systemd", "containerd", "dockerd", "kworker")
+
+CONTROLLER_KINDS = {"ReplicaSet", "DaemonSet", "StatefulSet", "Job", "Node"}
+STATIC_POD_SOURCES = {"file", "http"}
 
 RE_DOWNLOAD = re.compile(r"\b(curl|wget|nc|ncat|socat|tftp)\b")
 RE_SHELL_C = re.compile(r"\b(sh|bash|ash|dash|zsh)\s+-c\b")
@@ -79,10 +85,29 @@ def _cmdline(c: dict) -> str:
     return " ".join(str(x) for x in (c.get("command") or []) + (c.get("args") or []))
 
 
-def hunt_escape(target, data: KubeData) -> list[Finding]:
+def known_system_pod(md: dict, known: tuple[str, ...]) -> bool:
+    """A kube-system pod whose name matches a known component AND that a controller or the kubelet created."""
+    name = md.get("name", "")
+    if not any(name.startswith(k) for k in known):
+        return False
+    owned = any(o.get("kind") in CONTROLLER_KINDS for o in md.get("ownerReferences", []) or [])
+    ann = md.get("annotations") or {}
+    static = "kubernetes.io/config.mirror" in ann or ann.get("kubernetes.io/config.source") in STATIC_POD_SOURCES
+    return owned or static
+
+
+def _known_system_workload(w, known: tuple[str, ...]) -> bool:
+    if w.namespace not in SYSTEM_NAMESPACES:
+        return False
+    if w.ref.kind == "pod":
+        return known_system_pod(w.meta, known)
+    return w.ref.kind == "deployment" and any(w.ref.name.startswith(k) for k in known)
+
+
+def hunt_escape(target, data: KubeData, known: tuple[str, ...] = KNOWN_KUBE_SYSTEM) -> list[Finding]:
     out = []
     for w in workloads(data):
-        if w.namespace in SYSTEM_NAMESPACES:
+        if _known_system_workload(w, known):
             continue
         paths = [(v.get("hostPath") or {}).get("path") for v in w.pod_spec.get("volumes", []) or []]
         sensitive = [p for p in paths if p and p.rstrip("/") in {s.rstrip("/") for s in SENSITIVE_HOST_PATHS}]
@@ -145,7 +170,7 @@ def hunt_system_pods(target, data: KubeData, known: tuple[str, ...]) -> list[Fin
         if md.get("namespace") != "kube-system":
             continue
         name = md["name"]
-        if any(name.startswith(k) for k in known):
+        if known_system_pod(md, known):
             continue
         images = ", ".join(c.get("image", "") for c in p.get("spec", {}).get("containers", []))
         out.append(finding(target, HUNT_RULES["system_pod"], ObjRef("kube-system", "pod", name),
@@ -198,7 +223,7 @@ def run_hunt(target, collected: Collected) -> list[Finding]:
     allowed = list(opts.get("allowed_registries") or [])
     known = KNOWN_KUBE_SYSTEM + tuple(opts.get("known_kube_system") or ())
     out: list[Finding] = []
-    for fn, args in ((hunt_escape, ()), (hunt_registry, (allowed,)), (hunt_cronjobs, ()), (hunt_admin_bindings, ()),
+    for fn, args in ((hunt_escape, (known,)), (hunt_registry, (allowed,)), (hunt_cronjobs, ()), (hunt_admin_bindings, ()),
                      (hunt_system_pods, (known,)), (hunt_masquerade, ()), (hunt_dashboard, ()), (hunt_host_listeners, ())):
         try:
             out.extend(fn(target, data, *args))

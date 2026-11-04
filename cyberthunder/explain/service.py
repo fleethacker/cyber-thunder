@@ -4,13 +4,16 @@ The model never sees a shell and never chooses an action. It receives the findin
 {risk, impact, plan, citations}. The validator normalises citations with the schema regexes, drops any
 identifier not present in Finding.citations (plus the fix_ref), and retries once if nothing survives.
 If no local model is reachable, a deterministic template produces the same shape (fallback=True) so the
-pipeline never blocks on inference. Explanations are cached per finding id under store.explanations/.
+pipeline never blocks on inference. Explanations are cached per finding id under store.explanations/, with a
+fingerprint of the finding; a changed severity, status, evidence, rule or fix makes the cached text stale.
 
 Backends (settings.llm_backend): "ollama" (POST {llm_url}/api/generate, format=json),
 "openai" (POST {llm_url}/v1/chat/completions, any OpenAI-compatible local server), "template".
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 import threading
@@ -57,12 +60,21 @@ class Explanation:
     fallback: bool = False         # True when the template produced it (no model)
     latency_s: float | None = None
     attempts: int = 1
+    fingerprint: str | None = None  # finding_fingerprint() of the finding this text was written for
 
     def to_dict(self) -> dict: return asdict(self)
     @classmethod
     def from_dict(cls, d: dict) -> "Explanation":
         d = {k: v for k, v in d.items() if k != "saved_at"}
         return cls(**d)
+
+
+def finding_fingerprint(finding: Finding) -> str:
+    """Hash of the finding fields an explanation depends on. Finding ids are stable per (host, source, rule),
+    so a cached explanation is only reused while severity, status, evidence, rule and fix are unchanged."""
+    parts = [finding.severity.value, finding.status.value, finding.evidence, finding.rule_version,
+             finding.benchmark_release, finding.fix_ref]
+    return hashlib.sha256(json.dumps(parts).encode("utf-8")).hexdigest()
 
 
 def _first_sentence(text: str | None) -> str:
@@ -135,9 +147,10 @@ class ExplainService:
 
     def explain(self, finding: Finding, *, force: bool = False) -> Explanation:
         """Return cached explanation unless force; otherwise call the backend, validate, cache, audit 'explain.generate'."""
+        fp = finding_fingerprint(finding)
         if not force:
             cached = self.get(finding.id)
-            if cached is not None:
+            if cached is not None and cached.fingerprint == fp:
                 return cached
         fix = self._fix_for(finding)
         backend = self.backend
@@ -178,6 +191,7 @@ class ExplainService:
                               citations=t["citations"], backend="template", model=None,
                               validated=attempts == 0, dropped_citations=dropped, fallback=True,
                               latency_s=latency, attempts=max(attempts, 1))
+        exp.fingerprint = fp
         self.ctx.store.save_explanation(finding.id, exp.to_dict())
         details = {"finding_id": finding.id, "backend": exp.backend, "requested_backend": backend.name,
                    "model": model, "latency_s": latency, "validated": exp.validated, "fallback": exp.fallback,
@@ -205,7 +219,8 @@ class ExplainService:
             if f.id in seen:
                 continue
             seen.add(f.id)
-            if self.ctx.store.load_explanation(f.id) is not None:
+            cached = self.ctx.store.load_explanation(f.id)
+            if cached is not None and cached.get("fingerprint") == finding_fingerprint(f):
                 continue
             todo.append(f)
         todo.sort(key=lambda f: (0 if f.is_open else 1, -f.severity.rank))

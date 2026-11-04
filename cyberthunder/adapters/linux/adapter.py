@@ -6,6 +6,7 @@ Remediation applies exactly one FixEntry payload, captures a before-state first 
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import shlex
@@ -15,6 +16,7 @@ from typing import Iterable
 from cyberthunder.adapters.base import Adapter, AssetFacts, Collected, register
 from cyberthunder.findings.schema import Finding
 from cyberthunder.remediation.library import FixEntry
+from cyberthunder.transport.base import TransportError
 from cyberthunder.remediation.models import (ApplyResult, BeforeState, HealthCheck, HealthResult,
                                              RollbackResult, VerifyResult)
 
@@ -202,6 +204,7 @@ class LinuxAdapter(Adapter):
         spec = dict(fix.before_state)
         subject = self._subject(finding)
         file_list = list(spec.get("files", []))
+        services = list(spec.get("services", []))
         # a hunt fix also captures the file or unit it acts on
         if spec.get("subject") == "key" and subject and "|" in subject:
             file_list.append(subject.split("|", 1)[0])
@@ -209,6 +212,7 @@ class LinuxAdapter(Adapter):
             file_list.append(subject)
         if spec.get("subject") == "unit" and subject and subject.endswith(".service"):
             file_list.append(f"/etc/systemd/system/{subject}")
+            services.append(subject)
         for pat in spec.get("dirs", []):
             file_list.extend(self._glob(transport, pat["dir"], pat["pattern"]))
         before.files = list(dict.fromkeys(file_list))
@@ -221,8 +225,8 @@ class LinuxAdapter(Adapter):
             r = transport.run(cmd, sudo=True)
             (dest / f"cmd_{name}.txt").write_text(r.stdout, encoding="utf-8")
             before.commands[name] = f"cmd_{name}.txt"
-        if "services" in spec:
-            before.extra["services"] = {u: self._svc_pair(transport, u) for u in spec["services"]}
+        if services:
+            before.extra["services"] = {u: self._svc_pair(transport, u) for u in dict.fromkeys(services)}
         if "sysctl" in spec:
             before.extra["sysctl"] = {k: transport.run(f"sysctl -n {shlex.quote(k)}").stdout.strip()
                                       for k in spec["sysctl"]}
@@ -231,8 +235,12 @@ class LinuxAdapter(Adapter):
         if "path_modes" in spec:
             before.extra["path_modes"] = transport.run(spec["path_modes"], sudo=True).stdout
         if "packages" in spec:
-            before.extra["packages"] = {p: transport.run(f"rpm -q {shlex.quote(p)}").stdout.strip()
-                                        for p in spec["packages"]}
+            pkgs = {}
+            for p in spec["packages"]:
+                r = transport.run(f"rpm -q {shlex.quote(p)}")
+                # rpm -q prints "package X is not installed" with exit 1: nothing to reinstall then
+                pkgs[p] = r.stdout.strip() if r.ok else ""
+            before.extra["packages"] = pkgs
         (dest / "before_state.json").write_text(
             __import__("json").dumps(before.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
         return before
@@ -244,11 +252,14 @@ class LinuxAdapter(Adapter):
         mode, owner, grp = st[path]
         try:
             data = transport.read_file(path)
-        except Exception:  # noqa: BLE001
-            data = b""
+        except Exception as e:  # noqa: BLE001
+            # an empty copy would later be "restored" over the real file: stop before anything changes
+            raise TransportError(f"cannot read {path} to capture its before-state ({e}); "
+                                 "nothing was captured or changed") from e
         local = into / path.lstrip("/").replace("/", "__")
         local.write_bytes(data)
-        return {"exists": True, "mode": mode, "owner": owner, "group": grp, "local": local.name}
+        return {"exists": True, "mode": mode, "owner": owner, "group": grp, "local": local.name,
+                "sha256": hashlib.sha256(data).hexdigest()}
 
     def _glob(self, transport, directory: str, pattern: str) -> list[str]:
         r = transport.run(f"find {shlex.quote(directory)} -maxdepth 1 -type f -name {shlex.quote(pattern)} 2>/dev/null")
@@ -349,56 +360,161 @@ class LinuxAdapter(Adapter):
     def rollback(self, target, transport, fix: FixEntry, before: BeforeState) -> RollbackResult:
         if fix.kind == "runbook":
             return RollbackResult(ok=True, output="runbook: operator performs the rollback steps")
-        notes = []
-        meta = (before.extra or {}).get("files", {})
+        extra = before.extra or {}
+        notes: list[str] = []
+        failed: list[str] = []
+
+        def run(cmd: str):
+            r = transport.run(cmd, sudo=True)
+            if not r.ok:
+                failed.append(f"{cmd}: {(r.stderr or r.stdout).strip()[:200] or f'exit {r.exit_code}'}")
+            return r
+
+        meta = extra.get("files", {})
         files_dir = Path(before.dir) / "files"
-        subject = (before.extra or {}).get("subject")
+        subject = extra.get("subject")
+        unit_file = (f"/etc/systemd/system/{subject}"
+                     if fix.before_state.get("subject") == "unit" and subject else None)
+        if unit_file:
+            # systemctl mask left a /dev/null symlink where the unit file was: remove it before moving
+            # the original back
+            run(f"systemctl unmask {shlex.quote(subject)}")
         for path, info in meta.items():
             if not info.get("exists"):
                 # file did not exist before: a quarantine/disable fix moved it away, so it stays gone
                 notes.append(f"{path}: was absent before, left as is")
                 continue
             local = files_dir / info["local"]
-            if fix.before_state.get("quarantine") and path == subject:
+            if fix.before_state.get("quarantine") and path in (subject, unit_file):
                 # the fix moved the original into quarantine: move it back so content, mode, owner and
                 # timestamps are exactly what they were, and no quarantine copy is left behind
                 q = fixes.quarantine_path(path)
                 mv = transport.run(f"mv -f -- {shlex.quote(q)} {shlex.quote(path)}", sudo=True)
                 if mv.ok:
-                    transport.run(f"chmod {info['mode']:o} {shlex.quote(path)}", sudo=True)
+                    run(f"chmod {info['mode']:o} {shlex.quote(path)}")
                     notes.append(f"moved {path} back from quarantine")
                     continue
                 notes.append(f"{path}: quarantine copy not found ({mv.stderr.strip() or mv.stdout.strip()}), "
                              "restoring the captured copy")
-            if local.exists():
-                transport.write_file(path, local.read_bytes(), mode=info.get("mode"), sudo=True)
-                transport.run(f"chmod {info['mode']:o} {shlex.quote(path)}", sudo=True)
-                transport.run(f"chown {shlex.quote(info['owner'])}:{shlex.quote(info['group'])} {shlex.quote(path)}", sudo=True)
-                notes.append(f"restored {path}")
-        for unit, pair in (before.extra or {}).get("services", {}).items():
-            self._restore_service(transport, unit, pair)
+            if not local.exists():
+                failed.append(f"{path}: no captured copy to restore")
+                continue
+            data = local.read_bytes()
+            if info.get("sha256") and hashlib.sha256(data).hexdigest() != info["sha256"]:
+                failed.append(f"{path}: captured copy does not match its recorded sha256, not restored")
+                continue
+            try:
+                transport.write_file(path, data, mode=info.get("mode"), sudo=True)
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"{path}: write failed ({e})")
+                continue
+            run(f"chmod {info['mode']:o} {shlex.quote(path)}")
+            run(f"chown {shlex.quote(info['owner'])}:{shlex.quote(info['group'])} {shlex.quote(path)}")
+            notes.append(f"restored {path}")
+        failed.extend(self._check_restored_files(transport, meta))
+        if unit_file:
+            run("systemctl daemon-reload")
+        for unit, pair in extra.get("services", {}).items():
+            failed.extend(self._restore_service(transport, unit, pair))
             notes.append(f"restored service {unit}")
-        for key, val in (before.extra or {}).get("sysctl", {}).items():
-            transport.run(f"sysctl -q -w {shlex.quote(key)}={shlex.quote(val)}", sudo=True)
+        for key, val in extra.get("sysctl", {}).items():
+            run(f"sysctl -q -w {shlex.quote(key)}={shlex.quote(val)}")
             notes.append(f"restored sysctl {key}")
-        if (before.extra or {}).get("selinux"):
-            prev = before.extra["selinux"].lower()
-            transport.run(f"setenforce {'1' if prev == 'enforcing' else '0'}", sudo=True)
-            notes.append(f"restored SELinux to {before.extra['selinux']}")
+        if extra.get("selinux"):
+            prev = extra["selinux"].lower()
+            run(f"setenforce {'1' if prev == 'enforcing' else '0'}")
+            notes.append(f"restored SELinux to {extra['selinux']}")
+        if extra.get("path_modes"):
+            notes += self._restore_path_modes(fix, extra["path_modes"], run, failed)
+        for pkg, nevra in extra.get("packages", {}).items():
+            if nevra:
+                notes += self._reinstall(target, transport, pkg, nevra, run, failed)
         for svc in fix.restarts_services:
-            transport.run(f"systemctl reload-or-restart {shlex.quote(svc)}", sudo=True)
+            if svc.startswith("("):
+                continue   # a placeholder for the subject unit, whose state is restored above
+            run(f"systemctl reload-or-restart {shlex.quote(svc)}")
             notes.append(f"reloaded {svc}")
-        return RollbackResult(ok=True, output="; ".join(notes) or "nothing to restore",
-                              details={"restored": len(meta)})
+        out = notes + [f"FAILED {f}" for f in failed]
+        return RollbackResult(ok=not failed, output="; ".join(out) or "nothing to restore",
+                              details={"restored": len(meta), "failed": failed})
 
-    def _restore_service(self, transport, unit: str, pair: dict) -> None:
+    def _check_restored_files(self, transport, meta: dict) -> list[str]:
+        """Re-read every restored file and compare mode, owner, group and content with the capture."""
+        problems = []
+        for path, info in meta.items():
+            if not info.get("exists"):
+                continue
+            st = parse.stat_lines(transport.run(f"stat -c '%a %U %G %n' {shlex.quote(path)}").stdout).get(path)
+            if st is None:
+                problems.append(f"{path}: missing after rollback")
+                continue
+            if (st[0], st[1], st[2]) != (info["mode"], info["owner"], info["group"]):
+                problems.append(f"{path}: now {st[0]:o} {st[1]}:{st[2]}, expected "
+                                f"{info['mode']:o} {info['owner']}:{info['group']}")
+            if info.get("sha256"):
+                try:
+                    digest = hashlib.sha256(transport.read_file(path)).hexdigest()
+                except Exception as e:  # noqa: BLE001
+                    problems.append(f"{path}: cannot re-read after rollback ({e})")
+                    continue
+                if digest != info["sha256"]:
+                    problems.append(f"{path}: content differs from the captured copy after rollback")
+        return problems
+
+    def _restore_path_modes(self, fix: FixEntry, listing: str, run, failed: list[str]) -> list[str]:
+        """chmod each "<mode> <path>" line of the capture back, only at or under the fix's path_root."""
+        root = (fix.before_state.get("path_root") or "").rstrip("/")
+        notes = []
+        for line in listing.splitlines():
+            mode, _, path = line.strip().partition(" ")
+            if not mode and not path:
+                continue
+            inside = bool(root) and (path == root or path.startswith(root + "/"))
+            if not re.fullmatch(r"[0-7]{3,4}", mode) or not inside or "/../" in path + "/":
+                failed.append(f"refusing to restore a mode from captured line {line.strip()!r}")
+                continue
+            if run(f"chmod {mode} {shlex.quote(path)}").ok:
+                notes.append(f"restored mode {mode} on {path}")
+        return notes
+
+    def _reinstall(self, target, transport, pkg: str, nevra: str, run, failed: list[str]) -> list[str]:
+        """Put a removed package back at the captured NEVRA, from the enclave mirror only."""
+        if transport.run(f"rpm -q {shlex.quote(pkg)}").ok:
+            return [f"{pkg} still installed"]
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+:~^-]*", nevra):
+            failed.append(f"{pkg}: captured version {nevra!r} is not a package NEVRA")
+            return []
+        repo = str((target.options or {}).get("enclave_repo") or "")
+        if repo and not re.fullmatch(r"[A-Za-z0-9._:-]+", repo):
+            failed.append(f"{pkg}: enclave_repo {repo!r} is not a repo id")
+            return []
+        scope = f"--disablerepo='*' --enablerepo={shlex.quote(repo)} " if repo else ""
+        if not run(f"dnf -y {scope}install {shlex.quote(nevra)}").ok:
+            return []
+        now = transport.run(f"rpm -q {shlex.quote(pkg)}").stdout.strip()
+        if now != nevra:
+            failed.append(f"{pkg}: rpm -q reports {now or 'not installed'} after reinstall, expected {nevra}")
+            return []
+        return [f"reinstalled {nevra}"]
+
+    def _restore_service(self, transport, unit: str, pair: dict) -> list[str]:
+        """Put enabled/active back as captured; returns the problems, empty when the unit matches."""
         enabled, active = pair.get("enabled", ""), pair.get("active", "")
-        if enabled == "masked":
-            transport.run(f"systemctl mask {shlex.quote(unit)}", sudo=True)
-            return
-        transport.run(f"systemctl unmask {shlex.quote(unit)}", sudo=True)
-        transport.run(f"systemctl {'enable' if enabled == 'enabled' else 'disable'} {shlex.quote(unit)}", sudo=True)
-        transport.run(f"systemctl {'start' if active == 'active' else 'stop'} {shlex.quote(unit)}", sudo=True)
+        q = shlex.quote(unit)
+        cmds = ([f"systemctl mask {q}"] if enabled == "masked" else
+                [f"systemctl unmask {q}", f"systemctl {'enable' if enabled == 'enabled' else 'disable'} {q}",
+                 f"systemctl {'start' if active == 'active' else 'stop'} {q}"])
+        problems = []
+        for cmd in cmds:
+            r = transport.run(cmd, sudo=True)
+            if not r.ok:
+                problems.append(f"{cmd}: {(r.stderr or r.stdout).strip()[:200] or f'exit {r.exit_code}'}")
+        now = self._svc_pair(transport, unit)
+        if ((enabled != "masked" and now["active"] != active)
+                or (now["enabled"] == "masked") != (enabled == "masked")
+                or (now["enabled"] == "enabled") != (enabled == "enabled")):
+            problems.append(f"{unit}: now {now['enabled']}/{now['active']}, expected {enabled}/{active}")
+        return problems
 
     # -- transports / simulation ---------------------------------------------------------------
     def make_transport(self, target, settings=None):

@@ -127,10 +127,42 @@ class SimulatedLinuxHost(Transport):
         m = re.fullmatch(r"chmod ([0-7]{1,4}) (.+)", cmd)
         if m:
             path = shlex.split(m.group(2))[0]
+            mode = int(m.group(1), 8)
             if path in s["files"]:
-                s["files"][path]["mode"] = int(m.group(1), 8)
+                s["files"][path]["mode"] = mode
                 self._save()
+            else:
+                # a modelled directory (the world-writable dirs under /var/log)
+                d = next((r for r in s.get("ww_dirs", []) if r["path"] == path), None)
+                if d is not None:
+                    d["mode"] = f"{mode:04o}"
+                    self._save()
+                elif mode & 0o002 and path.startswith("/var/log/"):
+                    s.setdefault("ww_dirs", []).append({"mode": f"{mode:04o}", "owner": "root", "path": path})
+                    self._save()
             return ("", 0)
+
+        # before-state capture of the world-writable dir fix: "<mode> <path>" per world-writable dir
+        m = re.fullmatch(r"find (\S+) -xdev -type d -perm -0002 -printf '%m %p\\n'", cmd)
+        if m:
+            root = m.group(1).rstrip("/")
+            rows = [r for r in _ww_open(s) if r["path"].startswith(root + "/")]
+            return ("".join(f"{r['mode']} {r['path']}\n" for r in rows), 0)
+
+        # rollback of a package removal: reinstall the exact NEVRA from the (modelled) enclave mirror
+        m = re.fullmatch(r"dnf -y (?:--disablerepo='\*' --enablerepo=\S+ )?install (\S+)", cmd)
+        if m:
+            nevra = m.group(1)
+            mirror = s.get("mirror_packages", {})
+            pkg = next((p for p in mirror.values() if _nevra(p) == nevra), None)
+            if pkg is None:
+                return (f"No match for argument: {nevra}\nError: Unable to find a match: {nevra}\n", 1)
+            if not self._installed(pkg["name"]):
+                s["packages"].append(dict(pkg))
+                if pkg["name"] in s.get("removed_packages", []):
+                    s["removed_packages"].remove(pkg["name"])
+                self._save()
+            return (f"Installed:\n  {nevra}\nComplete!\n", 0)
 
         m = re.fullmatch(r"chown ([^:]+):(\S+) (.+)", cmd)
         if m:
@@ -246,7 +278,7 @@ class SimulatedLinuxHost(Transport):
         if name == "coredump":
             return self._grep_storage(), (0 if "Storage=" in self._grep_storage() else 1)
         if name == "ww_dirs":
-            rows = s.get("ww_dirs", [])
+            rows = _ww_open(s)
             return "".join(f"{r['mode']} {r['owner']} {r['path']}\n" for r in rows), (0 if rows else 1)
         if name == "passwd":
             return self._passwd_text(), 0
@@ -553,9 +585,12 @@ def _apply_native(state: dict, ref: str) -> str:
         return "SELinux set to enforcing"
     if f == "pkg_remove":
         pkgs = state["packages"]
+        gone = [x for x in pkgs if x["name"] == p["package"]]
         state["packages"] = [x for x in pkgs if x["name"] != p["package"]]
-        if len(state["packages"]) != len(pkgs):
+        if gone:
             state["removed_packages"].append(p["package"])
+            # the enclave mirror still carries the package, so a rollback can reinstall it
+            state.setdefault("mirror_packages", {})[p["package"]] = dict(gone[0])
         return f"removed {p['package']}"
     if f == "login_defs":
         _set_kv_file(state, "/etc/login.defs", p["key"], p["value"])
@@ -570,7 +605,9 @@ def _apply_native(state: dict, ref: str) -> str:
         _set_assign(state, "/etc/systemd/coredump.conf", "Storage", "none")
         return "Storage=none"
     if f == "ww_dirs":
-        state["ww_dirs"] = []
+        # chmod o-w on every world-writable dir: the dirs stay, only the other-write bit goes
+        for r in state.get("ww_dirs", []):
+            r["mode"] = f"{int(r['mode'], 8) & ~0o002:04o}"
         return "cleared world-writable bit"
     if f == "sudo_nopasswd":
         for path, meta in state["files"].items():
@@ -612,11 +649,21 @@ def _apply_hunt(state: dict, ref: str, subject: str) -> str:
         if upath in state["files"]:
             state["quarantine"][f"etc_systemd_system_{subject}"] = state["files"].pop(upath)
         state["units"][subject] = {"enabled": "masked", "active": "inactive"}
+        # stopping the unit ends its processes and so closes their sockets; find the pids first
+        pids = {str(pid) for pid, p in state["procs"].items() if p.get("unit") == subject}
+        state["listeners"] = [l for l in state["listeners"] if str(l.get("pid")) not in pids]
         state["procs"] = {pid: p for pid, p in state["procs"].items() if p.get("unit") != subject}
-        state["listeners"] = [l for l in state["listeners"]
-                              if state_proc_unit(state, l.get("pid")) != subject]
         return f"disabled and masked {subject}"
     raise FixRefused(f"no simulated effect for hunt fix {ref}")
+
+
+def _ww_open(state: dict) -> list[dict]:
+    """Modelled dirs under /var/log that still carry the other-write bit."""
+    return [r for r in state.get("ww_dirs", []) if int(r["mode"], 8) & 0o002]
+
+
+def _nevra(p: dict) -> str:
+    return f"{p['name']}-{p['version']}-{p['release']}.{p['arch']}"
 
 
 def state_proc_unit(state: dict, pid) -> str | None:

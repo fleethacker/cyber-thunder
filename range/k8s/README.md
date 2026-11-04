@@ -69,13 +69,23 @@ Copy it to the Cyber Thunder machine (for example `C:\ct\kubeconfig-k3s-01.yaml`
 ```
 
 Optional options: `context` (kubeconfig context), `kubectl` (path to the binary), `known_kube_system`
-(extra pod-name prefixes expected in kube-system).
+(extra pod-name prefixes expected in kube-system), `node_target` (id of the k3s server node's `linux`
+target in the same inventory; see below) and `node_name` (the cluster node name of that server, when it
+differs from the linux target's name or address).
 
 ## Detection notes for k3s
 
-- k3s runs the API server and kubelet inside the k3s process, not as pods, so the API-server flag items
-  (M2, M5) are only visible through the API on kubeadm-style clusters with static pods. On k3s confirm them
-  from `/etc/rancher/k3s/config.yaml` (the Linux adapter reads it over SSH) or by hand.
+- k3s runs the API server, controller manager and kubelet inside the k3s process, not as pods, so the
+  API cannot report their flags (M2, M5). Add the k3s server node to the inventory as a `linux` target
+  (in scope) and set `node_target: <that target id>` on the kubernetes target. The scan then runs two
+  read-only commands on that node over its own transport:
+  `sudo cat /etc/rancher/k3s/config.yaml` and `systemctl show k3s --property=ExecStart --value`.
+  It keeps only the `kube-apiserver-arg`, `kube-controller-manager-arg` and `kubelet-arg` lists (the
+  join token and everything else in the file are dropped), layers them over the k3s built-in defaults
+  (config file, then command line), and checks the result. Those findings name the node
+  (`-/node/<node>`), not a pod. Drop-in files under `/etc/rancher/k3s/config.yaml.d/` are not read.
+- Without `node_target` the API-server rules come back as `not_reviewed`, so a k3s scan never passes
+  them silently.
 - Kubelet settings (M3) are read from `kubectl get --raw /api/v1/nodes/<node>/proxy/configz`, which the
   k3s admin kubeconfig allows.
 - To record a fixture from the live cluster for the test suite, wrap the transport in

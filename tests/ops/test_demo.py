@@ -112,3 +112,39 @@ def test_cli_load_status_reset_run(ctx, state_dir, capsys):
     captured = capsys.readouterr()
     assert rc == 0, captured.err or captured.out
     assert "scan " in captured.out and "proposals:" in captured.out
+
+
+def test_reset_refused_while_killed(ctx):
+    from cyberthunder.control.killswitch import KillSwitchEngaged
+    demo.load(ctx, "sailor1")
+    ctx.killswitch.engage("sailor1", "stop everything")
+    with pytest.raises(KillSwitchEngaged):
+        demo.reset(ctx, "sailor1")
+    assert FakeAdapter.resets == []
+
+
+def test_reset_skips_out_of_scope_and_handles_proposals(ctx):
+    demo.load(ctx, "sailor1")
+    open_p = ctx.gate.propose(finding_id="f1", host="demo-linux", title="t", fix_ref="x", fix_preview="p",
+                              rollback_plan="r", risk="k")
+    done_p = ctx.gate.propose(finding_id="f2", host="demo-linux", title="t", fix_ref="x", fix_preview="p",
+                              rollback_plan="r", risk="k")
+    ctx.gate.approve(done_p.id, "sailor1")
+    ctx.gate.start_apply(done_p.id)
+    ctx.gate.applied(done_p.id)
+    out = demo.reset(ctx, "sailor1")
+    assert out["reset"] == {"demo-linux": True}
+    assert out["cancelled_proposals"] == [open_p.id] and out["stale_proposals"] == [done_p.id]
+    assert ctx.gate.get(open_p.id).state.value == "cancelled"
+    ctx.inventory.update("demo-linux", in_scope=False)
+    FakeAdapter.resets = []
+    out = demo.reset(ctx, "sailor1")
+    assert out["reset"] == {"demo-linux": False} and out["skipped_out_of_scope"] == ["demo-linux"]
+    assert FakeAdapter.resets == []
+    assert verify_file(ctx.store.audit_log).ok
+
+
+def test_consuming_the_flag_is_audited(ctx):
+    demo.set_simulate_verify_fail_next(ctx, True, "sailor1")
+    assert demo.consume_simulate_verify_fail(ctx) is True
+    assert [r for r in ctx.audit.records() if r["action"] == "demo.simulate_verify_fail.consumed"]

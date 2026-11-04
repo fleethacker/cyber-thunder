@@ -32,6 +32,7 @@ class FakeIOSChannel:
         self.mode = "exec"
         self.pending: list[str] = []
         self.in_banner: str | None = None
+        self.copying: tuple[str, str] | None = None
         self.closed = False
 
     def recv_ready(self) -> bool:
@@ -46,8 +47,11 @@ class FakeIOSChannel:
         return f"{self.dev.hostname}(config)#" if self.mode == "config" else f"{self.dev.hostname}#"
 
     def send(self, data: str) -> int:
-        for line in data.split("\n"):
-            if line == "" and data.endswith("\n"):
+        lines = data.split("\n")
+        if data.endswith("\n"):
+            lines.pop()
+        for line in lines:
+            if line == "" and self.copying is None:      # a bare Enter only matters at a copy prompt
                 continue
             self._line(line)
         return len(data)
@@ -96,14 +100,37 @@ class FakeIOSChannel:
         elif s == "write memory":
             self.dev.saved = self.dev.config
             body = "Building configuration...\r\n[OK]\r\n"
+        elif self.copying is not None:
+            dest, step = self.copying
+            if step == "name" and dest in self.dev.files:
+                self.copying = (dest, "confirm")
+                self.out.append(echo + "%Warning:There is a file already existing with this name\r\n"
+                                       "Do you want to over write? [confirm]")
+                return
+            self.dev.files[dest] = self.dev.config
+            self.copying = None
+            body = f"{len(self.dev.config)} bytes copied in 0.120 secs\r\n"
+        elif s.startswith("copy running-config "):
+            dest = s.split(None, 2)[2]
+            self.copying = (dest, "name")
+            self.out.append(echo + f"Destination filename [{dest.split(':')[-1]}]? ")
+            return
         elif s == "archive config":
             self.dev.archive = self.dev.config
+            name = f"flash:ct-archive-{len(self.dev.archives) + 1}"
+            self.dev.archives.append(name)
+            self.dev.files[name] = self.dev.config
             body = ""
+        elif s == "show archive":
+            rows = "".join(f"   {i}        {n}{' <- Most Recent' if i == len(self.dev.archives) else ''}\r\n"
+                           for i, n in enumerate(self.dev.archives, 1))
+            body = "The maximum archive configurations allowed is 10.\r\n Archive #  Name\r\n" + rows
         elif s.startswith("configure replace "):
-            if self.dev.archive is None:
-                body = "%Error opening archive\r\n"
+            path = s.split()[2]
+            if path not in self.dev.files:
+                body = f"%Error opening {path} (No such file or directory)\r\n"
             else:
-                self.dev.config = self.dev.archive
+                self.dev.config = self.dev.files[path]
                 body = "Total number of passes: 1\r\nRollback Done\r\n"
         else:
             body = ""
@@ -119,6 +146,8 @@ class FakeIOSDevice:
         self.hostname = hostname
         self.saved: str | None = None
         self.archive: str | None = None
+        self.archives: list[str] = []
+        self.files: dict[str, str] = {}             # device filesystem, e.g. flash:ct-pre.cfg
         self.typed: list[str] = []
         self.channels: list[FakeIOSChannel] = []
 

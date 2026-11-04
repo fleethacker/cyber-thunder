@@ -11,7 +11,7 @@ from typing import Callable, TypeVar
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from cyberthunder.api.deps import get_actor
+from cyberthunder.api.util import require_actor
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.discovery.service import DiscoveryService, require_human, service_for
 
@@ -83,7 +83,7 @@ def overview(request: Request):
 
 
 @router.put("/scopes")
-def put_scopes(body: ScopesIn, request: Request, actor: str = Depends(get_actor)):
+def put_scopes(body: ScopesIn, request: Request, actor: str = Depends(require_actor)):
     actor = _human(actor)
     svc = _svc(request)
     saved = _call(lambda: svc.set_scopes([s.model_dump() for s in body.scopes], actor, body.reason))
@@ -91,7 +91,7 @@ def put_scopes(body: ScopesIn, request: Request, actor: str = Depends(get_actor)
 
 
 @router.post("/sweep", status_code=202)
-def post_sweep(body: SweepIn, request: Request, actor: str = Depends(get_actor)):
+def post_sweep(body: SweepIn, request: Request, actor: str = Depends(require_actor)):
     actor = _human(actor)
     svc = _svc(request)
     return _call(lambda: svc.sweep(scopes=body.scopes, mode=body.mode, actor=actor, background=True)).to_dict()
@@ -122,7 +122,7 @@ def get_asset(asset_id: str, request: Request):
 
 
 @router.post("/assets/{asset_id}/accept")
-def accept_asset(asset_id: str, body: AcceptIn, request: Request, actor: str = Depends(get_actor)):
+def accept_asset(asset_id: str, body: AcceptIn, request: Request, actor: str = Depends(require_actor)):
     actor = _human(actor)
     svc = _svc(request)
     return _call(lambda: svc.accept(asset_id, actor, name=body.name, asset_type=body.asset_type,
@@ -132,7 +132,7 @@ def accept_asset(asset_id: str, body: AcceptIn, request: Request, actor: str = D
 
 
 @router.post("/assets/{asset_id}/ignore")
-def ignore_asset(asset_id: str, body: IgnoreIn, request: Request, actor: str = Depends(get_actor)):
+def ignore_asset(asset_id: str, body: IgnoreIn, request: Request, actor: str = Depends(require_actor)):
     actor = _human(actor)
     svc = _svc(request)
     return _call(lambda: svc.ignore(asset_id, actor, body.reason)).to_dict()

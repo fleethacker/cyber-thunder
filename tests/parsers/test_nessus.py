@@ -114,3 +114,54 @@ def test_unknown_xref_keeps_its_kind(tmp_path):
         '</ReportHost></Report></NessusClientData_v2>', encoding="utf-8")
     (f,) = parse_nessus(p)
     assert f.ref_ids("other") == ["CERT:123456", "MS17-010"]
+
+
+_CM = "http://www.nessus.org/cm"
+
+
+def _compliance_export(tmp_path, items):
+    body = "".join(
+        f'<ReportItem port="0" svc_name="general" protocol="tcp" severity="{sev}" pluginID="21156" '
+        f'pluginName="Windows Compliance Checks" pluginFamily="Policy Compliance">'
+        f'<cm:compliance-check-name>{name}</cm:compliance-check-name>'
+        f'<cm:compliance-check-id>{cid}</cm:compliance-check-id>'
+        f'<cm:compliance-result>{result}</cm:compliance-result>'
+        f'<cm:compliance-reference>800-53|CM-6b.,CAT|II,CCI|CCI-000366,STIG-ID|{stig},Vuln-ID|{vid}'
+        f'</cm:compliance-reference></ReportItem>'
+        for sev, name, cid, result, stig, vid in items)
+    p = tmp_path / "audit.nessus"
+    p.write_text(f'<NessusClientData_v2 xmlns:cm="{_CM}"><Report name="Audit">'
+                 f'<ReportHost name="ws-1"><HostProperties><tag name="operating-system">Windows 11</tag>'
+                 f'</HostProperties>{body}</ReportHost></Report></NessusClientData_v2>', encoding="utf-8")
+    return p
+
+
+def test_compliance_items_one_finding_per_check(tmp_path):
+    p = _compliance_export(tmp_path, [
+        ("3", "WN11-SO-000010 - Guest account disabled", "aaa1", "FAILED", "WN11-SO-000010", "V-253434"),
+        ("3", "WN11-AC-000035 - Minimum password length", "bbb2", "FAILED", "WN11-AC-000035", "V-253302"),
+        ("0", "WN11-AC-000040 - Complexity", "ccc3", "PASSED", "WN11-AC-000040", "V-253303"),
+    ])
+    fs = by_key(parse_nessus(p, include_info=True))
+    assert set(fs) == {("ws-1", "WN11-SO-000010"), ("ws-1", "WN11-AC-000035"), ("ws-1", "WN11-AC-000040")}
+    guest = fs[("ws-1", "WN11-SO-000010")]
+    assert guest.status == Status.OPEN
+    assert guest.severity == Severity.MEDIUM
+    assert guest.group_id == "V-253434"
+    assert guest.title.startswith("WN11-SO-000010")
+    assert "WN11-SO-000010" in [r.id for r in guest.references]
+    assert "nessus:21156" not in [r.id for r in guest.references]
+    assert "CCI-000366" in guest.ref_ids("cci")
+    assert fs[("ws-1", "WN11-AC-000040")].status == Status.NOT_A_FINDING
+    # without include_info the passed (severity 0) check is skipped as before
+    assert len(parse_nessus(p)) == 2
+
+
+def test_out_of_range_severity_is_unknown_not_open(tmp_path):
+    p = tmp_path / "bad.nessus"
+    p.write_text('<NessusClientData_v2><Report name="r"><ReportHost name="h">'
+                 '<ReportItem port="22" protocol="tcp" severity="99" pluginID="1" pluginName="odd"/>'
+                 '</ReportHost></Report></NessusClientData_v2>', encoding="utf-8")
+    (f,) = parse_nessus(p)
+    assert f.severity == Severity.UNKNOWN
+    assert f.status != Status.OPEN

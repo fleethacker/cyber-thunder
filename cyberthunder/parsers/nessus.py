@@ -13,6 +13,12 @@ Mapping (one Finding per host + plugin):
   fix_ref   patch:<pluginID>   (a hint for the fix library; nothing is resolved or run here)
 A plugin that fires on several ports of one host is merged into one Finding (all ports listed in tags and
 evidence), because Finding ids are host + source + rule and must stay unique.
+
+Compliance (SCAP / audit file) items carry ``cm:compliance-*`` children and are one Finding per check:
+  rule_id   the STIG-ID from compliance-reference, else nessus:<pluginID>:<compliance-check-id>
+  status    compliance-result FAILED -> open, PASSED -> not_a_finding, anything else not_reviewed
+  refs      STIG-ID, Vuln-ID, Rule-ID and CCI from compliance-reference
+A Nessus severity outside 0..4 is recorded as unknown and not marked open.
 """
 from __future__ import annotations
 
@@ -28,6 +34,9 @@ MAX_EVIDENCE = 1000
 
 _STIG_SEV = {"I": "high", "II": "medium", "III": "low"}
 _NESSUS_SEV = {4: "high", 3: "high", 2: "medium", 1: "low", 0: "info"}
+_COMPLIANCE_STATUS = {"FAILED": "open", "PASSED": "not_a_finding"}
+# compliance-reference kinds whose values are cited as-is (they are self-describing identifiers)
+_COMPLIANCE_IDS = ("STIG-ID", "VULN-ID", "RULE-ID", "CCI")
 
 
 def _local(tag: str) -> str:
@@ -98,9 +107,28 @@ def _references(fields: dict) -> list[str]:
     return refs
 
 
-def _severity(fields: dict, nessus_sev: int) -> str:
+def _compliance_refs(text: str) -> list[tuple[str, str]]:
+    """``800-53|AC-2,CCI|CCI-000366,STIG-ID|WN11-SO-000010`` -> [(kind, value), ...].
+
+    A comma-separated piece without a ``|`` continues the previous value (some 800-53 values contain commas).
+    """
+    pairs: list[tuple[str, str]] = []
+    for piece in (text or "").split(","):
+        if "|" in piece:
+            kind, _, val = piece.partition("|")
+            pairs.append((kind.strip().upper(), val.strip()))
+        elif pairs and piece.strip():
+            kind, val = pairs[-1]
+            pairs[-1] = (kind, f"{val},{piece.strip()}")
+    return [(k, v) for k, v in pairs if k and v]
+
+
+def _severity(fields: dict, nessus_sev: int, compliance: list[tuple[str, str]] = ()) -> str:
     stig = _STIG_SEV.get(fields.get("stig_severity", "").strip().upper())
-    return stig or _NESSUS_SEV.get(nessus_sev, "info")
+    if not stig:
+        stig = next((_STIG_SEV.get(v.upper()) for k, v in compliance if k == "CAT" and v.upper() in _STIG_SEV),
+                    None)
+    return stig or _NESSUS_SEV.get(nessus_sev, "unknown")
 
 
 def _build(host: str, hostprops: dict, attrs: dict, fields: dict, scan_name: str, source: str,
@@ -117,13 +145,32 @@ def _build(host: str, hostprops: dict, attrs: dict, fields: dict, scan_name: str
     if fields.get("exploit_available", "").lower() == "true":
         tags.append("exploit_available")
     refs = _references(fields)
+    rule_id = f"nessus:{plugin}"
+    title = attrs.get("pluginName") or f"Nessus plugin {plugin}"
+    status = "open" if 0 < nsev <= 4 else "not_reviewed"
+    rule_version = group_id = None
+    compliance = _compliance_refs(fields.get("compliance-reference", ""))
+    is_compliance = any(k.startswith("compliance-") for k in fields)
+    if is_compliance:
+        for kind, val in compliance:
+            if kind in _COMPLIANCE_IDS and val not in refs:
+                refs.append(val)
+        rule_version = next((v for k, v in compliance if k == "STIG-ID"), None)
+        group_id = next((v for k, v in compliance if k == "VULN-ID"), None)
+        check_id = fields.get("compliance-check-id") or fields.get("compliance-check-name", "")
+        rule_id = rule_version or f"nessus:{plugin}:{check_id}"
+        title = fields.get("compliance-check-name") or title
+        status = _COMPLIANCE_STATUS.get(fields.get("compliance-result", "").strip().upper(), "not_reviewed")
+        if fields.get("compliance-info"):
+            description = _trim(fields["compliance-info"], MAX_DESCRIPTION)
+        if not fields.get("plugin_output") and fields.get("compliance-actual-value"):
+            evidence = f"{_trim(fields['compliance-actual-value'], MAX_EVIDENCE)} [{port_s}]"
     # make_finding only needs an id and an asset type, so a plain namespace stands in for an inventory Target:
     # the host in a scan export is not necessarily in the inventory yet.
     target = SimpleNamespace(id=host, asset_type=_asset_type(hostprops.get("operating-system", "")))
     f = make_finding(
-        target=target, source=source, rule_id=f"nessus:{plugin}",
-        title=attrs.get("pluginName") or f"Nessus plugin {plugin}", severity=_severity(fields, nsev),
-        status="open" if nsev > 0 else "not_reviewed",
+        target=target, source=source, rule_id=rule_id, title=title,
+        severity=_severity(fields, nsev, compliance), status=status, rule_version=rule_version, group_id=group_id,
         description=description, evidence=evidence, references=refs,
         fix_ref=f"patch:{plugin}", fix_text=fields.get("solution") or None,
         benchmark=f"ACAS (Nessus) {scan_name}".strip(), tags=tags, raw_ref=path)

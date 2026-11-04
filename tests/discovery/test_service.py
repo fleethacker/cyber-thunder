@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -71,7 +72,8 @@ def test_accept_creates_audited_target(ctx):
     svc, _ = _sim(ctx)
     sw = next(a for a in svc.list_assets("new") if a.address == "192.168.56.3")
     t = svc.accept(sw.id, "it1.jones", name="SW-SPARE-03", in_scope=True, reason="spare switch, now managed")
-    assert t.asset_type == "cisco_ios" and t.transport == "ssh" and t.port == 22
+    # the switch exists only in the emulator, so it becomes a simulated target, never a live ssh one
+    assert t.asset_type == "cisco_ios" and t.transport == "simulated" and t.simulated and t.port is None
     assert t.tags == ["discovered"] and t.in_scope and t.address == "192.168.56.3"
     assert ctx.inventory.get(t.id) is t
     assert any(x.id == t.id for x in type(ctx.inventory).load(ctx.store.targets).all())   # saved to disk
@@ -105,6 +107,57 @@ def test_accept_out_of_scope_and_refusals(ctx):
     t = svc.accept(pi.id, "it1.jones", asset_type="linux", in_scope=False, reason="lab pi, track only")
     assert not t.in_scope and len(ctx.inventory.all()) == before + 1
     assert "scope.change" not in _actions(ctx)
+    assert ctx.audit.verify().ok
+
+
+def test_accept_from_simulated_sweep_never_goes_live(ctx):
+    svc, _ = _sim(ctx)
+    sw = next(a for a in svc.list_assets("new") if a.address == "192.168.56.3")
+    for kind in ("ssh", "winrm", "fixture"):
+        with pytest.raises(ValueError, match="simulated"):
+            svc.accept(sw.id, "it1.jones", transport=kind, in_scope=True, reason="probe")
+    t = svc.accept(sw.id, "it1.jones", transport="simulated", username="admin", credential_ref="SW_PW",
+                   in_scope=True, reason="probe")
+    assert t.transport == "simulated" and t.simulated and t.username is None and t.credential_ref is None
+    assert ctx.audit.verify().ok
+
+
+def test_accept_credential_ref_is_a_name_not_a_path_or_process_variable(ctx, monkeypatch):
+    _inventory(ctx)
+    svc = DiscoveryService(ctx)
+    real = DiscoveredAsset(address="192.168.56.40", sources=["nmap"], open_ports=[OpenPort(22, "tcp", "ssh", "OpenSSH")])
+    assets, _ = svc.reconcile([real], [DiscoveryScope(cidr="192.168.56.0/24")], previous={})
+    svc._save_assets({a.id: a for a in assets})
+    aid = next(a.id for a in assets if a.address == "192.168.56.40")
+    monkeypatch.setenv("SOME_SECRET_TOKEN", "hunter2")
+    for ref in ("SOME_SECRET_TOKEN", "../../etc/shadow", r"C:\keys\id_rsa", "~/.ssh/id_rsa", ".hidden", "x" * 65):
+        with pytest.raises(ValueError, match="credential"):
+            svc.accept(aid, "it1.jones", asset_type="linux", credential_ref=ref, in_scope=True, reason="probe")
+    monkeypatch.setenv("CT_CRED_SOME_SECRET_TOKEN", "range-pw")      # the documented form is still fine
+    t = svc.accept(aid, "it1.jones", asset_type="linux", credential_ref="SOME_SECRET_TOKEN", in_scope=True,
+                   reason="probe")
+    assert t.transport == "ssh" and t.credential_ref == "SOME_SECRET_TOKEN" and not t.simulated
+
+
+def test_demo_load_then_simulated_sweep_knows_the_demo_targets(ctx):
+    from cyberthunder import demo
+    targets = demo.load(ctx, "it1.jones")
+    assert len(targets) == 5 and all(t.address is None for t in targets)
+    svc = DiscoveryService(ctx)
+    run = svc.sweep(mode="simulated", actor="it1.jones", background=False)
+    assert run.counts()["known"] == 5 and run.counts()["new"] == 2
+    known = {a.inventory_target_id for a in svc.list_assets("known")}
+    assert known == {t.id for t in targets}
+    assert sorted(a.address for a in svc.list_assets("new")) == ["192.168.56.3", "192.168.56.66"]
+    fs = svc.findings(run.id)
+    unknown = sorted(f.host for f in fs if f.rule_id == "discovery:unknown_asset")
+    assert unknown == ["discovered:192.168.56.3", "discovered:192.168.56.66"]
+    listener = [f for f in fs if f.rule_id == "discovery:new_listener"]
+    assert [f.host for f in listener] == ["sim-linux-01"]
+    key = json.loads((Path(__file__).resolve().parents[2] / "range" / "answer_key" / "discovery.json")
+                     .read_text(encoding="utf-8"))
+    for item in key["items"]:                                       # D1, D2 and D3
+        assert any(f.rule_id == item["check_id"] for f in fs), item["id"]
     assert ctx.audit.verify().ok
 
 

@@ -25,3 +25,9 @@ def state_dir(tmp_path, monkeypatch) -> Path:
     d = tmp_path / "state"
     d.mkdir()
     return d
+
+# The UDS deployment guard tests (tests/test_deploy.py, test_dev.py, test_existing.py) drive bash scripts through
+# fake tool shims with a Python shebang. Under Git Bash on Windows that shebang resolves to a path containing a
+# space ("C:\Program Files\..."), which bash cannot execute, so those modules only run on Linux and macOS.
+if sys.platform == "win32":
+    collect_ignore = ["test_deploy.py", "test_dev.py", "test_existing.py"]

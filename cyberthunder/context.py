@@ -11,7 +11,8 @@ from cyberthunder.audit.chain import AuditLog
 from cyberthunder.config import Settings
 from cyberthunder.control.approvals import ApprovalGate
 from cyberthunder.control.killswitch import KillSwitch
-from cyberthunder.control.policy import AutomationPolicy, load_policy, save_policy
+from cyberthunder.control.identity import normalize_actor, require_human
+from cyberthunder.control.policy import AutomationPolicy, load_policy, save_policy, signer_problem
 from cyberthunder.inventory.targets import Inventory, Target
 from cyberthunder.remediation.library import FixLibrary
 from cyberthunder.store import StateStore
@@ -26,7 +27,7 @@ class AppContext:
         self.store = StateStore(self.settings.state_dir)
         self.audit = AuditLog(self.store.audit_log, node=self.settings.node)
         self.killswitch = KillSwitch(self.store.root, self.audit)
-        self.gate = ApprovalGate(self.store.proposals, self.audit, self.killswitch)
+        self.gate = ApprovalGate(self.store.proposals, self.audit, self.killswitch, policy_path=self.store.policy)
         self.inventory = Inventory.load(self.store.targets)
         from cyberthunder.adapters import load_all
         self.adapters = load_all()
@@ -61,6 +62,16 @@ class AppContext:
         return self.adapters.get(target.asset_type)
 
     def save_policy(self, policy: AutomationPolicy, actor: str) -> AutomationPolicy:
+        try:
+            actor = require_human(actor)
+            why = signer_problem(policy)
+            if why:
+                raise PermissionError(why)
+        except PermissionError as e:
+            self.audit.append("policy.rejected", normalize_actor(actor) or "?",
+                              {"enabled": policy.enabled, "signed_by": policy.signed_by, "reason": str(e)},
+                              outcome="rejected")
+            raise
         self.policy = policy
         save_policy(self.store.policy, policy)
         self.audit.append("policy.update", actor, {"enabled": policy.enabled, "signed_by": policy.signed_by,

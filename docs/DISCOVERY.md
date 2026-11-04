@@ -17,6 +17,9 @@ Discovery never adds anything to the inventory and never changes scope by itself
 | Only `DiscoveryService.accept()` writes a discovered asset into the inventory | `service.py` |
 | Accept needs a named human actor (`agent`, `llm`, `system` refused), an explicit in-scope decision and a reason | `require_human`, `accept` |
 | Accept is audited as `inventory.add` (source `discovery`, asset, in_scope, reason) and, when in scope, `scope.change` `{target, before: null, after: true, reason}` | `accept` |
+| An asset from a simulated sweep is accepted only as a simulated target (transport `simulated`, no credentials); it never becomes a live ssh/winrm target at an emulator address | `accept` |
+| `credential_ref` is a short name resolved as `CT_CRED_<ref>`: paths and names of other process environment variables are refused | `accept` |
+| Accept refuses an asset whose address or MAC an inventory target already holds, names that target and links the asset to it | `accept` |
 | Sweeps run only inside saved scopes; public space needs `allow_public` and a reason | `DiscoveryScope.validate`, `_sweep_scopes` |
 | Commands come from fixed tables; addresses on an nmap command line come from validated scopes or nmap's own ping sweep | `sources/nmap.py`, `render()` |
 | Switches, clusters, domain controllers and hypervisors are asked only when they are in-scope inventory targets | `_inventory_sources` |
@@ -90,9 +93,20 @@ previous sweep:
 | `new` | answered, not in the inventory, not ignored | `discovery:unknown_asset`, high, T1200, T1046 |
 | consumer/IoT | printer or single-board computer present | `discovery:consumer_device`, medium, T1200 |
 | `known` + type changed | evidence says a different type than the inventory | `discovery:type_changed`, medium, T1036 |
-| `known` + new listener | a port open now that was closed in the previous sweep | `discovery:new_listener`, medium, T1571 |
-| `missing` | inventory target inside the swept scopes did not answer | `discovery:missing_asset`, low (informational), CCI-000366 |
+| `known` + new listener | a port open now that was closed in the previous sweep (also for `new` simulated assets, whose previous sweep is fixed) | `discovery:new_listener`, medium, T1571 |
+| `missing` | inventory target inside a scope that was actually swept did not answer | `discovery:missing_asset`, low (informational), CCI-000366 |
 | `ignored` | an operator marked it accounted for (audited, with reason) | none |
+
+One inventory target keeps one asset record: when a device first seen by address is later identified by
+its MAC (or goes missing after being seen by MAC), the older record is replaced, not left beside the new one.
+
+A run ends `finished` when every scope was swept cleanly and `partial` when one was not. If the nmap port
+phase fails or one host's XML cannot be read, the hosts the ping sweep reported are still kept and the
+scope is `partial`. If the liveness sweep itself fails (nmap error or timeout, no neighbor table in
+passive mode), the scope is `failed`: nobody in it is reported missing, because absence was never tested.
+Either way the reason is in the run's `errors`. A run still marked `running` whose process has exited
+(each sweep holds an OS lock on `runs/<id>.lock`) is closed as `failed` with an `interrupted` error and
+audited the next time the service starts.
 
 Devices that are not in the inventory are reported with host `discovered:<address>` and asset type
 `unknown`. The simulated enclave seeds a rogue Raspberry Pi, an unmanaged switch seen over CDP and a new
@@ -129,7 +143,11 @@ cyberthunder discover findings [--run-id ID]
 cyberthunder discover applicable --benchmark ID | --title TEXT | --product NAME
 ```
 
-`--actor` (or `CT_ACTOR`) names the operator, as for every other command.
+`discover sweep` always runs in the foreground and returns when the run ends (0 for `finished`, 1 for
+`partial` or `failed`); `--wait` is still accepted. A background thread would die with the CLI process
+and leave the run open.
+
+`--actor` (or `CT_ACTOR`) names the operator, as for every other command. It is a top-level option, so it goes before the subcommand: `cyberthunder --actor bob discover accept ...`.
 
 ## Assets page: Discovery panel
 

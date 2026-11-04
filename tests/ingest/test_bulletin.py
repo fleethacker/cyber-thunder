@@ -5,7 +5,7 @@ import json
 import pytest
 
 from cyberthunder.ingest.bulletin import BulletinError, match, parse_bulletin, rpm_vercmp, rpmvercmp
-from tests.ingest.conftest import INGEST_FIXTURES, write_collected
+from tests.ingest.conftest import INGEST_FIXTURES, add_targets, write_collected
 
 VULN = [{"name": "openssh", "epoch": None, "version": "8.7p1", "release": "34.el9", "arch": "x86_64"},
         {"name": "openssh-server", "epoch": "0", "version": "8.7p1", "release": "34.el9", "arch": "x86_64"},
@@ -74,6 +74,7 @@ def test_match_product_and_cpe():
 
 
 def test_ingest_bulletin_persists_scan_run(ctx):
+    add_targets(ctx, "web01", "web02")
     write_collected(ctx.store, "scan-old", "web01", VULN)
     write_collected(ctx.store, "scan-old", "web02", PATCHED)
     res = ctx.ingest.ingest_bulletin((INGEST_FIXTURES / "iavm_openssh.json").read_bytes(), actor="it1.jones")
@@ -101,6 +102,69 @@ def test_latest_collected_prefers_newest_run(ctx):
 
 
 def test_no_match_means_no_scan_run(ctx):
+    add_targets(ctx, "web02")
     write_collected(ctx.store, "scan-old", "web02", PATCHED)
     res = ctx.ingest.ingest_bulletin((INGEST_FIXTURES / "iavm_openssh.json").read_bytes())
     assert res["scan_id"] is None and res["findings"] == []
+
+
+OPENSSL_E1 = [{"name": "openssl", "epoch": "1", "version": "3.0.7", "release": "24.el9", "arch": "x86_64"}]
+
+
+def test_epochless_bulletin_matches_package_with_epoch():
+    b = parse_bulletin({"id": "2026-A-0200", "title": "OpenSSL", "cves": ["CVE-2026-0002"],
+                        "affected": [{"package": "openssl", "versions_below": "3.0.7-25.el9"}]})
+    cols = {"h": {"raw": {"packages": OPENSSL_E1}, "facts": {}}}
+    fs = match(b, cols)
+    assert [f.rule_id for f in fs] == ["iavm:2026-A-0200:openssl"]
+    patched = [dict(OPENSSL_E1[0], release="25.el9")]
+    assert match(b, {"h": {"raw": {"packages": patched}, "facts": {}}}) == []
+
+
+def test_bulletin_epoch_is_compared_when_stated():
+    b = parse_bulletin({"id": "2026-A-0201", "title": "OpenSSL", "cves": ["CVE-2026-0003"],
+                        "affected": [{"package": "openssl", "versions_below": "2:3.0.7-25.el9"}]})
+    assert len(match(b, {"h": {"raw": {"packages": OPENSSL_E1}, "facts": {}}})) == 1
+    b = parse_bulletin({"id": "2026-A-0202", "title": "OpenSSL", "cves": ["CVE-2026-0004"],
+                        "affected": [{"package": "openssl", "versions_below": "0:9.9-1"}]})
+    assert match(b, {"h": {"raw": {"packages": OPENSSL_E1}, "facts": {}}}) == []
+
+
+def test_cpe_uses_vendor_alias_and_version():
+    ubuntu = parse_bulletin({"id": "2026-A-0300", "title": "Ubuntu kernel", "cves": ["CVE-2026-0005"],
+                             "affected": [{"cpe": "cpe:/o:canonical:ubuntu_linux:22.04"}]})
+    rhel9 = parse_bulletin({"id": "2026-A-0301", "title": "RHEL 9", "cves": ["CVE-2026-0006"],
+                            "affected": [{"cpe": "cpe:2.3:o:redhat:enterprise_linux:9:*:*:*:*:*:*:*"}]})
+    cols = {"u22": {"facts": {"os_name": "Ubuntu", "os_version": "22.04"}, "raw": {}},
+            "u24": {"facts": {"os_name": "Ubuntu", "os_version": "24.04"}, "raw": {}},
+            "el8": {"facts": {"os_name": "Red Hat Enterprise Linux", "os_version": "8.10"}, "raw": {}},
+            "el9": {"facts": {"os_name": "Red Hat Enterprise Linux", "os_version": "9.4"}, "raw": {}}}
+    assert {f.host for f in match(ubuntu, cols)} == {"u22"}
+    assert {f.host for f in match(rhel9, cols)} == {"el9"}
+
+
+def test_bulletin_skips_hosts_out_of_scope(ctx):
+    add_targets(ctx, "web01", "web02")
+    write_collected(ctx.store, "scan-old", "web01", VULN)
+    write_collected(ctx.store, "scan-old", "web02", VULN)
+    ctx.inventory.remove("web01")
+    res = ctx.ingest.ingest_bulletin((INGEST_FIXTURES / "iavm_openssh.json").read_bytes())
+    assert res["hosts_affected"] == ["web02"] and res["hosts_checked"] == ["web02"]
+    rec = [r for r in ctx.audit.records() if r["action"] == "ingest.bulletin"][-1]
+    assert rec["details"]["skipped_out_of_scope"] == ["web01"]
+
+
+def test_bulletin_findings_survive_next_full_scan(ctx):
+    from cyberthunder import demo
+    demo.load(ctx, "it1.jones")
+    ctx.scanner.start(background=False)
+    res = ctx.ingest.ingest_bulletin((INGEST_FIXTURES / "iavm_openssh.json").read_bytes())
+    ids = {f["id"] for f in res["findings"]}
+    assert ids
+    run = ctx.scanner.start(background=False)
+    ctx.ingest.rematch_all(run.id)
+    current = {f.id for f in ctx.store.current_findings()}
+    assert ids <= current
+    rec = [r for r in ctx.audit.records() if r["action"] == "ingest.bulletin_rematch"][-1]
+    assert rec["details"]["scan_id"] == run.id and rec["details"]["findings"] >= len(ids)
+    assert ctx.audit.verify().ok

@@ -4,7 +4,7 @@ from cyberthunder.control.approvals import IllegalTransition, ProposalState
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.control.policy import AutomationPolicy, PolicyRule
 from cyberthunder.inventory.targets import ScopeViolation
-from cyberthunder.remediation.engine import EngineError
+from cyberthunder.remediation.engine import EngineError, fix_digest
 from cyberthunder.remediation.library import FixEntry
 
 from . import fakes
@@ -44,7 +44,8 @@ def test_propose_library_fix(make_ctx):
     assert p.fix_preview == fakes.CMD_ROOT_LOGIN
     assert "CAT II" in p.risk and HOST in p.risk and fakes.RULE_ROOT_LOGIN in p.risk
     assert fakes.STIG_ROOT_LOGIN in p.citations and len(p.citations) <= 8
-    meta = ctx.gate.get(p.id).history[0]["meta"]
+    meta = dict(ctx.gate.get(p.id).history[0]["meta"])
+    assert meta.pop("fix_sha256") == fix_digest(ctx.library.get(p.fix_ref))
     assert meta == {"risk_tags": ["disruption:low"], "severity": "medium", "asset_type": "linux"}
     # meta survives a reload of the gate store
     assert make_ctx().gate.get(p.id).history[0]["meta"]["severity"] == "medium"
@@ -69,8 +70,10 @@ def test_propose_dynamic_ssg_fix(make_ctx):
     p = ctx.engine.propose(f)
     assert p.fix_ref == "ssg:" + fakes.RULE_PASS_MAX
     entry = ctx.library.get(p.fix_ref)
-    assert entry.payload == fakes.CMD_PASS_MAX and entry.source == "ssg"
-    assert entry.before_state == {"files": ["/etc"]} and entry.verify == {"rule_ids": [fakes.RULE_PASS_MAX]}
+    assert entry.payload.startswith(f"# cyberthunder-fix: {p.fix_ref}\n") and entry.source == "ssg"
+    assert entry.payload.endswith(fakes.CMD_PASS_MAX)
+    # the files the script names, never the whole /etc directory
+    assert entry.before_state == {"files": [fakes.LOGIN_DEFS]} and entry.verify == {"rule_ids": [fakes.RULE_PASS_MAX]}
     assert "CCI-000199" in entry.citations
 
 
@@ -113,8 +116,9 @@ def test_policy_auto_approval(make_ctx):
 def test_policy_skipped_when_kill_switch_engaged(make_ctx):
     ctx = make_ctx(auto_propose=False)
     _policy(ctx)
+    found = scan(ctx).values()
     ctx.killswitch.engage(SAILOR, "drill")
-    created = ctx.engine.auto_propose(scan(ctx).values())
+    created = ctx.engine.auto_propose(found)
     assert created and all(ctx.gate.get(p.id).state is ProposalState.PROPOSED for p in created)
     assert len(audit(ctx, "policy.skipped")) == len(created)
     assert not audit(ctx, "policy.auto_approve")

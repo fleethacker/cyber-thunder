@@ -9,7 +9,8 @@ inventory, the standard demo set below) plus three seeded surprises that the ans
   D3  a new tcp/4444 listener on the first Linux host                new listener      discovery:new_listener
 
 Any inventory target with address 192.168.56.99 is never answered, so it is reported missing.
-The previous sweep of the simulated enclave is fixed (`baseline`), so the new listener shows every time.
+The previous sweep of the simulated enclave is fixed (`baseline`), so the new listener shows every time,
+including before demo load when the host is still an unknown asset.
 """
 from __future__ import annotations
 
@@ -105,9 +106,10 @@ class SimulatedSweep:
         self.baseline: dict[str, set[str]] = {}
         self._assets = self._build()
 
-    def _plan(self) -> list[tuple[str, str, str]]:
+    def _plan(self) -> list[tuple[str, str, str, str | None]]:
+        """(name, address, asset type, inventory target id) for each simulated host that answers."""
         if not self.targets:
-            return list(STANDARD_SET)
+            return [(name, addr, typ, None) for name, addr, typ in STANDARD_SET]
         def address_of(t) -> str | None:
             # adapters that reach a target by file or kubeconfig keep its address in options
             return t.address or (t.options or {}).get("address")
@@ -128,14 +130,17 @@ class SimulatedSweep:
                 while not addr or addr in used:
                     addr, extra = f"192.168.56.{extra}", extra + 1
                 used.add(addr)
-            plan.append((t.name, addr, t.asset_type))
+            plan.append((t.name, addr, t.asset_type, t.id))
         return plan
 
     def _build(self) -> list[DiscoveredAsset]:
         out: list[DiscoveredAsset] = []
         listener_placed = False
-        for name, addr, typ in self._plan():
+        for name, addr, typ, target_id in self._plan():
             a = _asset(name, addr, typ)
+            if target_id:
+                # demo targets have no address, so reconcile ties the answer back to the target by id
+                a.facts["simulated_target_id"] = target_id
             self.baseline[addr] = set(a.port_keys)
             if typ == "linux" and not listener_placed:
                 a.open_ports.append(NEW_LISTENER)

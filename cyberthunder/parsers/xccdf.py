@@ -15,6 +15,7 @@ from cyberthunder.findings.schema import (Finding, Reference, Severity, Status,
 
 
 _FIX_ATTRS = ("complexity", "disruption", "reboot", "strategy")
+_RE_GROUP_TAIL = re.compile(r"(?<![A-Za-z0-9])V-\d{4,7}$")
 _RE_SRG = re.compile(r"\bSRG-[A-Z]+-\d+(?:-[A-Z0-9]+-\d+)?\b")
 
 
@@ -81,13 +82,16 @@ class XccdfParse:
 
 def _parse_rule(rule: ET.Element, parents: dict) -> RuleMeta:
     rid = rule.get("id", "")
-    # Nearest enclosing Group carries the V-id in DISA content.
+    # Nearest enclosing Group carries the V-id in DISA content (``V-257985`` or, in XCCDF 1.2,
+    # ``xccdf_mil.disa.stig_group_V-257985``). SSG Groups are categories, not V-ids: those are ignored here and
+    # the V-id, if any, comes from the rule's references below.
     group_id = None
     srg = None
     p = parents.get(rule)
     while p is not None:
         if _local(p.tag) == "Group":
-            group_id = p.get("id")
+            gm = _RE_GROUP_TAIL.search(p.get("id") or "")
+            group_id = gm.group(0) if gm else None
             m = _RE_SRG.search(_text(_child(p, "title")))
             srg = m.group(0) if m else None
             break

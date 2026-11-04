@@ -26,22 +26,34 @@ Companion to [CONTEXT.md](CONTEXT.md). That file is the *what*; this is the *how
 
 ## 3. What exists now
 
+Built and merged on the integration branch:
+
 ```
-cyberthunder/findings/schema.py     Finding, Severity, Status, references, dump/load, summarize
-cyberthunder/parsers/xccdf.py       DISA XCCDF, SSG datastream, oscap results, ARF (namespace-agnostic)
-cyberthunder/parsers/cklb.py        STIG Viewer 3 / Evaluate-STIG CKLB
+cyberthunder/findings/schema.py     Finding, Severity, Status, references, citation extraction
+cyberthunder/parsers/               xccdf.py (DISA, SSG, oscap, ARF), cklb.py (Evaluate-STIG, STIG Viewer 3)
 cyberthunder/audit/chain.py         hash-chained JSONL + verify
-cyberthunder/control/killswitch.py  file / env / sentinel kill switch, guard() before every state change
-cyberthunder/control/approvals.py   PROPOSED→APPROVED→APPLYING→APPLIED→VERIFIED (+DENIED/FAILED/ROLLED_BACK)
-cyberthunder/cli.py                 cyberthunder parse | audit verify/tail | kill | proposals
-tests/                     27 unit tests, fixtures for both formats
-range/                     Rocky 9 build notes, seed_misconfig.sh, answer_key.json
-scripts/setup_dev.ps1      idempotent dev setup (Ollama, models, pip, vendor wheels)
+cyberthunder/control/               killswitch.py, approvals.py (state machine), policy.py (standing approval)
+cyberthunder/inventory/targets.py   Target, Inventory, scope guardrail
+cyberthunder/transport/             base contract, local, ssh, fixture (replay/record)
+cyberthunder/adapters/base.py       Adapter contract, registry, make_finding()
+cyberthunder/remediation/           library.py (FixEntry, FixLibrary), models.py; operator-initiated rollback
+cyberthunder/store.py, context.py, config.py, cli.py, api/ factory
+range/                              Rocky 9 notes, seed scripts per area, six answer keys in answer_key/
+scripts/setup_dev.ps1               idempotent dev setup (model server, models, pip, vendor wheels)
 ```
 
-Run: `python -m unittest discover -s tests` and `python -m cyberthunder parse tests/fixtures/*`.
+Also merged since: adapters (linux, cisco, kubernetes, containers, windows), transport/winrm, remediation/engine.py,
+scan.py, explain, ingest, report, discovery, the HTTP routes and the React UI. Answer keys:
+`range/answer_key/{linux,cisco_ios,kubernetes,containers,windows,discovery}.json`.
+
+Open: the discovery page in the UI is a placeholder, and the UI Diff view does not list every file a fix touches.
+The rehearsal in [DEMO.md](DEMO.md) is the end-to-end check.
+
+Run: `python -m pytest -q`, then follow the quick start in the README.
 
 ## 4. Schedule
+
+Status (Wed 4 Nov): kernel and modules merged and integrated; the full rehearsal is next. The blocks below are the original plan and stay as the order of work.
 
 ### Day 1 — Wed (after team formation, ~6 h)
 | Block | Deliverable | Owner |

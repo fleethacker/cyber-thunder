@@ -16,6 +16,7 @@ from cyberthunder import PRODUCT, __version__
 from cyberthunder.audit.chain import AuditLog, verify_file
 from cyberthunder.config import Settings
 from cyberthunder.control.approvals import IllegalTransition
+from cyberthunder.control.identity import require_human
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.findings.schema import Finding, dump_findings, summarize
 from cyberthunder.parsers.cklb import parse_cklb
@@ -43,7 +44,11 @@ def cmd_parse(a: argparse.Namespace) -> int:
     findings: list[Finding] = []
     for f in a.files:
         p = Path(f)
-        if p.suffix.lower() in {".cklb", ".json"}:
+        if p.suffix.lower() == ".nessus":
+            from cyberthunder.parsers.nessus import parse_nessus
+            got = parse_nessus(p, host=a.host)
+            print(f"[acas ] {p.name}: {len(got)} findings", file=sys.stderr)
+        elif p.suffix.lower() in {".cklb", ".json"}:
             got = parse_cklb(p, host=a.host)
             print(f"[cklb ] {p.name}: {len(got)} rules", file=sys.stderr)
         else:
@@ -54,6 +59,9 @@ def cmd_parse(a: argparse.Namespace) -> int:
         findings.extend(got)
     s = summarize(findings)
     print(json.dumps(s, indent=2))
+    if not findings:
+        print("no findings parsed from the given files", file=sys.stderr)
+        return 2
     if a.out:
         dump_findings(findings, a.out, meta={"inputs": a.files})
         print(f"wrote {a.out}", file=sys.stderr)
@@ -78,12 +86,17 @@ def cmd_audit(a: argparse.Namespace) -> int:
 
 def cmd_kill(a: argparse.Namespace) -> int:
     ctx = _ctx(a)
-    if a.sub == "engage":
-        ctx.killswitch.engage(a.actor, a.reason)
-    elif a.sub == "release":
-        ctx.killswitch.release(a.actor, a.reason)
-    print(json.dumps(ctx.killswitch.status(), indent=2))
-    return 0
+    try:
+        if a.sub == "engage":
+            ctx.killswitch.engage(a.actor, a.reason)
+        elif a.sub == "release":
+            ctx.killswitch.release(a.actor, a.reason)
+    except PermissionError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    st = ctx.killswitch.status()
+    print(json.dumps(st, indent=2))
+    return 2 if a.sub == "release" and st["engaged"] else 0
 
 
 def cmd_proposals(a: argparse.Namespace) -> int:
@@ -96,9 +109,9 @@ def cmd_proposals(a: argparse.Namespace) -> int:
         elif a.sub == "show":
             print(json.dumps(gate.get(a.id).to_dict(), indent=2))
         elif a.sub == "approve":
-            print(gate.approve(a.id, a.actor, a.note).state.value)
+            print(gate.approve(a.id, require_human(a.actor), a.note).state.value)
         elif a.sub == "deny":
-            print(gate.deny(a.id, a.actor, a.note).state.value)
+            print(gate.deny(a.id, require_human(a.actor), a.note).state.value)
     except (IllegalTransition, PermissionError, KillSwitchEngaged, KeyError) as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2

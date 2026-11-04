@@ -60,16 +60,23 @@ def cmd_add(a: argparse.Namespace) -> int:
     if any(t.id == a.id for t in ctx.inventory.all()):
         print(f"refused: target {a.id!r} already exists (use 'targets update')", file=sys.stderr)
         return 2
+    # a new target starts out of scope; bringing it in at add time is a scope change and needs a reason
+    in_scope = bool(a.in_scope) and not a.out_of_scope
+    if in_scope and not (a.reason or "").strip():
+        print("refused: --reason is required to add a target in scope", file=sys.stderr)
+        return 2
     try:
         t = Target(id=a.id, name=a.name or a.id, asset_type=a.type, transport=a.transport, address=a.address,
                    port=a.port, username=a.username, credential_ref=a.credential_ref, tags=list(a.tag or []),
-                   in_scope=not a.out_of_scope, options=_parse_options(a.option))
+                   in_scope=in_scope, options=_parse_options(a.option))
     except ValueError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2
     ctx.inventory.add(t)
     ctx.save_inventory(a.actor, "inventory.add", {"target": t.id, "asset_type": t.asset_type,
                                                   "transport": t.transport, "in_scope": t.in_scope})
+    if t.in_scope:
+        ctx.save_inventory(a.actor, "scope.change", {"target": t.id, "before": None, "after": True, "reason": a.reason})
     print(f"added {t.id} ({t.label})")
     return 0
 
@@ -88,7 +95,15 @@ def cmd_update(a: argparse.Namespace) -> int:
             changes["tags"] = list(a.tag)
         if a.option:
             changes["options"] = {**current.options, **_parse_options(a.option)}
+        if "transport" in changes and changes["transport"] != "simulated" and current.simulated:
+            changes["simulated"] = False      # a real transport means this is no longer an emulator
         old = {k: getattr(current, k) for k in changes}
+        # repointing an in-scope id at another host or transport changes what the scope check bounds
+        moved = sorted(k for k in ("address", "port", "transport") if k in changes and changes[k] != old[k])
+        if current.in_scope and moved and not (a.reason or "").strip():
+            print(f"refused: --reason is required to change {', '.join(moved)} of an in-scope target",
+                  file=sys.stderr)
+            return 2
         # build a throwaway copy first so a bad value cannot leave the live target half-changed
         Target.from_dict({**current.to_dict(), **changes})
         ctx.inventory.update(a.id, **changes)
@@ -99,6 +114,9 @@ def cmd_update(a: argparse.Namespace) -> int:
         print("nothing to change")
         return 0
     ctx.save_inventory(a.actor, "inventory.update", {"target": a.id, "before": old, "after": changes})
+    if current.in_scope and moved:
+        ctx.save_inventory(a.actor, "scope.change", {"target": a.id, "before": {k: old[k] for k in moved},
+                                                     "after": {k: changes[k] for k in moved}, "reason": a.reason})
     print(f"updated {a.id}: {', '.join(sorted(changes))}")
     return 0
 
@@ -215,7 +233,9 @@ def register_cli(subparsers) -> None:
     s.add_argument("--credential-ref", help="name of the CT_CRED_<ref> variable or a key file; never the secret")
     s.add_argument("--tag", action="append")
     s.add_argument("--option", action="append", metavar="KEY=VALUE")
-    s.add_argument("--out-of-scope", action="store_true", help="add it but do not allow it to be touched yet")
+    s.add_argument("--out-of-scope", action="store_true", help="add it out of scope (the default)")
+    s.add_argument("--in-scope", action="store_true", help="add it in scope (audited as a scope change)")
+    s.add_argument("--reason", help="required with --in-scope")
     s.set_defaults(fn=cmd_add)
 
     s = sub.add_parser("update", help="change fields of a target (scope changes use 'targets scope')")
@@ -229,6 +249,7 @@ def register_cli(subparsers) -> None:
     s.add_argument("--credential-ref")
     s.add_argument("--tag", action="append", help="replaces the tag list; repeat for several")
     s.add_argument("--option", action="append", metavar="KEY=VALUE", help="merged into the options")
+    s.add_argument("--reason", help="required to change address, port or transport of an in-scope target")
     s.set_defaults(fn=cmd_update)
 
     s = sub.add_parser("remove", help="remove a target")

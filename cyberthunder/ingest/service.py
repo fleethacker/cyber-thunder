@@ -126,36 +126,85 @@ class IngestService:
 
     # -- bulletins ---------------------------------------------------------------------------------
     def ingest_bulletin(self, data: bytes | str | Mapping, *, actor: str = "operator") -> dict:
-        from cyberthunder.scan import ScanRun, TargetScanResult
         b = bl.parse_bulletin(data)
-        collected = bl.latest_collected(self.store)
+        collected, stale = self._in_scope(bl.latest_collected(self.store))
         targets = {t.id: t for t in self.ctx.inventory.all()}
         findings = bl.match(b, collected, targets)
         hosts = bl.affected_hosts(findings)
-        scan_id = None
-        if findings:
-            now = utcnow()
-            scan_id = self.store.new_id("scan-")
-            for f in findings:
-                f.scan_id = scan_id
-            results = {}
-            for h in hosts:
-                n = sum(1 for f in findings if f.host == h)
-                results[h] = TargetScanResult(target_id=h, status="done", started_at=now, finished_at=now,
-                                              findings=n, open=n)
-            run = ScanRun(id=scan_id, targets=hosts, modules=["cve"], trigger="bulletin", requested_by=actor,
-                          status="done", started_at=now, finished_at=now, results=results,
-                          findings_count=len(findings), summary=summarize(findings))
-            self.store.save_scan_run(run.to_dict())
-            self.store.save_findings(scan_id, findings, meta={"trigger": "bulletin", "bulletin_id": b.id})
+        scan_id = self._save_bulletin_run(findings, actor, {"trigger": "bulletin", "bulletin_id": b.id})
         bl.save_bulletin(self.store, b, {"ingested_at": utcnow(), "ingested_by": actor, "hosts_affected": hosts,
                                          "hosts_checked": sorted(collected), "findings": len(findings),
                                          "scan_id": scan_id})
         self.audit.append("ingest.bulletin", actor, {"bulletin_id": b.id, "cves": b.cves, "hosts_checked": len(collected),
                                                      "hosts_affected": hosts, "findings": len(findings),
-                                                     "scan_id": scan_id}, subject=b.id)
+                                                     "scan_id": scan_id, "skipped_out_of_scope": stale},
+                          subject=b.id)
         return {"bulletin_id": b.id, "hosts_affected": hosts, "hosts_checked": sorted(collected),
                 "findings": [f.to_dict() for f in findings], "scan_id": scan_id}
+
+    def rematch_all(self, scan_id: str, *, actor: str = "scanner") -> dict:
+        """Re-run every stored bulletin against the inventories collected by scan_id.
+
+        Bulletins stay in force until the packages are patched: the current picture is the newest full scan
+        plus newer partial runs, so after each full scan the bulletins are matched again and saved as one
+        partial run (trigger 'bulletin'). Hosts that are no longer in scope are left out."""
+        collected: dict[str, dict] = {}
+        raw = self.store.scans_dir / scan_id / "raw"
+        if raw.is_dir():
+            for p in sorted(raw.glob("*/collected.json")):
+                try:
+                    collected[p.parent.name] = json.loads(p.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+        collected, stale = self._in_scope(collected)
+        stored = bl.list_bulletins(self.store)
+        if not stored or not collected:
+            return {"scan_id": None, "bulletins": [], "findings": 0, "hosts_affected": []}
+        targets = {t.id: t for t in self.ctx.inventory.all()}
+        findings = []
+        ids: list[str] = []
+        for doc in stored:
+            try:
+                b = bl.parse_bulletin(doc)
+            except bl.BulletinError:
+                continue
+            ids.append(b.id)
+            findings.extend(bl.match(b, collected, targets))
+        hosts = bl.affected_hosts(findings)
+        run_id = self._save_bulletin_run(findings, actor, {"trigger": "bulletin", "bulletin_ids": ids,
+                                                           "rematch_of": scan_id})
+        self.audit.append("ingest.bulletin_rematch", actor, {"scan_id": scan_id, "bulletins": ids,
+                                                             "hosts_checked": len(collected), "hosts_affected": hosts,
+                                                             "findings": len(findings), "run_id": run_id,
+                                                             "skipped_out_of_scope": stale}, subject=scan_id)
+        return {"scan_id": run_id, "bulletins": ids, "findings": len(findings), "hosts_affected": hosts}
+
+    def _in_scope(self, collected: Mapping[str, dict]) -> tuple[dict[str, dict], list[str]]:
+        """Split collected inventories into in-scope ones and the ids of stale, out-of-scope hosts."""
+        keep = {tid: c for tid, c in collected.items() if self.ctx.inventory.in_scope(tid)}
+        return keep, sorted(tid for tid in collected if tid not in keep)
+
+    def _save_bulletin_run(self, findings: list, actor: str, meta: dict) -> str | None:
+        """Persist bulletin findings as one partial scan run. No findings, no run."""
+        from cyberthunder.scan import ScanRun, TargetScanResult
+        if not findings:
+            return None
+        hosts = bl.affected_hosts(findings)
+        now = utcnow()
+        scan_id = self.store.new_id("scan-")
+        for f in findings:
+            f.scan_id = scan_id
+        results = {}
+        for h in hosts:
+            n = sum(1 for f in findings if f.host == h)
+            results[h] = TargetScanResult(target_id=h, status="done", started_at=now, finished_at=now,
+                                          findings=n, open=n)
+        run = ScanRun(id=scan_id, targets=hosts, modules=["cve"], trigger="bulletin", requested_by=actor,
+                      status="done", started_at=now, finished_at=now, results=results,
+                      findings_count=len(findings), summary=summarize(findings))
+        self.store.save_scan_run(run.to_dict())
+        self.store.save_findings(scan_id, findings, meta=meta)
+        return scan_id
 
     # -- history -----------------------------------------------------------------------------------
     def history(self) -> dict[str, Any]:

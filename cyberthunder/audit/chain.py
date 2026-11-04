@@ -2,7 +2,8 @@
 
 One JSON object per line. Each record carries the SHA-256 of the previous record and its own
 SHA-256 over its canonical JSON. Editing, deleting or reordering any line breaks verification
-from that point on. The agent writes here for every scan, finding, proposal, approval/denial,
+from that point on. Every append also writes the new head (seq, hash) to <log>.head, so removing records
+from the end of the log, which leaves a valid chain behind, is reported as TRUNCATED. The agent writes here for every scan, finding, proposal, approval/denial,
 apply, verify, rollback and kill-switch event (docs/CONTEXT.md section 5 guardrails).
 """
 from __future__ import annotations
@@ -59,6 +60,14 @@ def _file_lock(path: Path, timeout: float = 15.0):
             fh.close()
 
 
+file_lock = _file_lock     # shared with other stores that several processes write (proposals, inventory)
+
+
+def head_path(path: str | Path) -> Path:
+    p = Path(path)
+    return p.with_name(p.name + ".head")
+
+
 def canonical(obj: dict) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
@@ -75,11 +84,15 @@ class VerifyResult:
     head: str
     bad_seq: int | None = None
     reason: str | None = None
+    checkpoint: str | None = None      # head checkpoint state: matches | behind | missing | truncated
 
     def __str__(self) -> str:
+        cp = f", checkpoint {self.checkpoint}" if self.checkpoint else ""
         if self.ok:
-            return f"OK  {self.count} records, head {self.head[:16]}"
-        return f"TAMPERED at seq {self.bad_seq}: {self.reason} ({self.count} records read)"
+            return f"OK  {self.count} records, head {self.head[:16]}{cp}"
+        if self.checkpoint == "truncated":
+            return f"TRUNCATED: {self.reason} ({self.count} records read)"
+        return f"TAMPERED at seq {self.bad_seq}: {self.reason} ({self.count} records read){cp}"
 
 
 class AuditLog:
@@ -161,17 +174,40 @@ class AuditLog:
                 fh.flush()
                 os.fsync(fh.fileno())
             self._seq, self._head = rec["seq"], rec["hash"]
+            self._write_checkpoint(rec)
             return rec
+
+    def _write_checkpoint(self, rec: dict) -> None:
+        hp = head_path(self.path)
+        tmp = hp.with_name(hp.name + ".tmp")
+        tmp.write_text(json.dumps({"seq": rec["seq"], "hash": rec["hash"], "ts": rec["ts"]}), encoding="utf-8")
+        tmp.replace(hp)
 
     # -- verification --------------------------------------------------------
     def verify(self) -> VerifyResult:
         return verify_file(self.path)
 
 
+def _read_checkpoint(path: Path) -> dict | None:
+    hp = head_path(path)
+    if not hp.exists():
+        return None
+    try:
+        cp = json.loads(hp.read_text(encoding="utf-8"))
+        return {"seq": int(cp["seq"]), "hash": str(cp["hash"])}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"seq": -1, "hash": ""}
+
+
 def verify_file(path: str | Path) -> VerifyResult:
     path = Path(path)
     prev, count, expected_seq = GENESIS, 0, 1
+    cp = _read_checkpoint(path)
+    cp_seen: str | None = None          # hash of the record at the checkpoint's seq, when the log reaches it
     if not path.exists():
+        if cp is not None and cp["seq"] > 0:
+            return VerifyResult(False, 0, GENESIS, 1, f"log missing; checkpoint says {cp['seq']} records",
+                                checkpoint="truncated")
         return VerifyResult(True, 0, GENESIS)
     with path.open("r", encoding="utf-8") as fh:
         for raw in fh:
@@ -189,5 +225,19 @@ def verify_file(path: str | Path) -> VerifyResult:
                 return VerifyResult(False, count, prev, expected_seq, "prev_hash mismatch (record removed/reordered)")
             if record_hash(rec) != rec.get("hash"):
                 return VerifyResult(False, count, prev, expected_seq, "hash mismatch (record modified)")
+            if cp is not None and rec["seq"] == cp["seq"]:
+                cp_seen = rec["hash"]
             prev, expected_seq = rec["hash"], expected_seq + 1
-    return VerifyResult(True, count, prev)
+    if cp is None:
+        return VerifyResult(True, count, prev, checkpoint="missing")
+    if cp["seq"] < 0:
+        return VerifyResult(False, count, prev, None, "head checkpoint unreadable", checkpoint="truncated")
+    if cp["seq"] > count:
+        return VerifyResult(False, count, prev, count + 1,
+                            f"log ends at seq {count} but the head checkpoint is seq {cp['seq']} "
+                            f"(records removed from the end)", checkpoint="truncated")
+    if cp_seen != cp["hash"] and not (cp["seq"] == 0 and cp["hash"] == GENESIS):
+        return VerifyResult(False, count, prev, cp["seq"],
+                            f"record {cp['seq']} does not match the head checkpoint (tail replaced)",
+                            checkpoint="truncated")
+    return VerifyResult(True, count, prev, checkpoint="matches" if cp["seq"] == count else "behind")

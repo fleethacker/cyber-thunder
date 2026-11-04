@@ -20,8 +20,11 @@ before_state keys understood by LinuxAdapter.capture_before_state / rollback:
   sysctl     [keys]                       runtime value restored on rollback
   selinux    true                         runtime SELinux mode restored on rollback
   path_modes command                      prints "<mode> <path>" lines; modes are restored on rollback
-  packages   [names]                      reinstalled from the enclave mirror on rollback if they were present
-  subject    user | key | path | unit     what the hunt fix acts on (adds that file / unit to the capture)
+  path_root  dir                          rollback only restores path_modes entries at or under this dir
+  packages   [names]                      reinstalled (same NEVRA) from the enclave mirror on rollback if they
+                                          were present; a package dnf removed as a dependent is not captured
+  subject    user | key | path | unit     what the hunt fix acts on (adds that file / unit to the capture; a
+                                          unit's enabled/active state is captured and restored too)
   quarantine true                         the payload moves the subject to QUARANTINE_DIR; rollback removes the copy
 """
 from __future__ import annotations
@@ -229,7 +232,8 @@ def _native_before(r: NativeRule) -> dict:
     if f == "coredump":
         return {"files": ["/etc/systemd/coredump.conf"]}
     if f == "ww_dirs":
-        return {"path_modes": f"find {p['root']} -xdev -type d -perm -0002 -printf '%m %p\\n'"}
+        return {"path_modes": f"find {p['root']} -xdev -type d -perm -0002 -printf '%m %p\\n'",
+                "path_root": p["root"]}
     if f == "sudo_nopasswd":
         return {"files": ["/etc/sudoers"], "dirs": [{"dir": "/etc/sudoers.d", "pattern": "*"}]}
     return {}
@@ -343,7 +347,9 @@ HUNT_SPECS: dict[str, dict] = {
         "body": _QUARANTINE},
     "hunt:linux:disable_unit": {
         "title": "Stop, disable and mask a rogue systemd service (unit file kept in quarantine)",
-        "subject": "unit", "quarantine": True, "citations": ["T1543.002", "T1571"], "disruption": "low",
+        # stops a running service: medium, and named as a service change so standing approval excludes it
+        "subject": "unit", "quarantine": True, "citations": ["T1543.002", "T1571"], "disruption": "medium",
+        "restarts": ["(the flagged unit)"],
         "body": ('[[ "$arg" =~ ^[A-Za-z0-9@._-]+\\.service$ ]] || refuse "bad unit name"\n'
                  'f=/etc/systemd/system/$arg\n'
                  '[ -f "$f" ] && [ ! -L "$f" ] || refuse "$f is not a local unit file"\n'
@@ -391,7 +397,8 @@ def _hunt_entries() -> list[FixEntry]:
             fix_ref=ref, title=s["title"], asset_type="linux", applies_to=[ref], kind="script",
             payload=_hunt_payload(ref, _path_guard(tuple(s.get("allow", ()))) + s["body"]
                                   if s["subject"] == "path" else s["body"]),
-            disruption=s["disruption"], reversible=True, rollback_kind="restore_files", before_state=before,
+            disruption=s["disruption"], restarts_services=list(s.get("restarts", [])), reversible=True,
+            rollback_kind="restore_files", before_state=before,
             verify={"rule_ids": [ref], "subject": s["subject"]}, citations=s["citations"], source="hunt",
             notes="Acts on the one subject named by the finding; the subject is validated and passed as data."))
     for ref, s in HUNT_RUNBOOKS.items():

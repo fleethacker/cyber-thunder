@@ -32,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 SOURCE = "hunt"
 
 USER_WRITABLE = (
-    r"\users\\", r"\appdata\\", r"\temp\\", r"\tmp\\", r"\programdata\\", r"\windows\temp\\",
+    "\\users\\", "\\appdata\\", "\\temp\\", "\\tmp\\", "\\programdata\\", "\\windows\\temp\\",
     "%appdata%", "%localappdata%", "%temp%", "%tmp%", "%userprofile%", "%public%", "%programdata%",
 )
 ENCODED_RE = re.compile(r"(?i)(?:^|\s)-e(?:c|n[a-z]*)?\s+[A-Za-z0-9+/=]{20,}")

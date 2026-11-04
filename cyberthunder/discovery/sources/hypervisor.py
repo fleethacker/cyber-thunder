@@ -41,6 +41,8 @@ VMX_GUEST_OS = (
     (r"^other\d*x?linux|^linux", "Linux"),
     (r"^windows2019srvnext|^windows2022srv", "Windows Server 2022"),
     (r"^windows2019srv", "Windows Server 2019"),
+    (r"^windows9srv", "Windows Server 2016"),
+    (r"^windows8srv", "Windows Server 2012"),
     (r"^windows11", "Windows 11"),
     (r"^windows9", "Windows 10"),
 )

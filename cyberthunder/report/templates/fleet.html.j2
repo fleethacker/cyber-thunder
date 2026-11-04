@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ f.title or "Path to fleet" }}</title>
+<style>
+{% include "_style.css.j2" %}
+</style>
+</head>
+<body>
+<h1>{{ f.title or "Path to fleet" }}</h1>
+<p>{{ f.summary }}</p>
+<table>
+<tr><th>Mission owner</th><td>{{ f.mission_owner }}</td><th>Technical owner</th><td>{{ f.technical_owner }}</td></tr>
+<tr><th>Destination</th><td colspan="3">{{ f.destination }}</td></tr>
+<tr><th>Next experiment</th><td colspan="3">{{ f.next_experiment }}</td></tr>
+</table>
+<h2>Required resources</h2>
+<ul>{% for x in f.required_resources %}<li>{{ x }}</li>{% endfor %}</ul>
+<h2>30 / 60 / 90 / 180 days</h2>
+<table>
+<tr><th class="n">Day</th><th>Step</th></tr>
+{% for t in f.timeline %}
+<tr><td class="n">{{ t.day }}</td><td>{{ t.step }}</td></tr>
+{% endfor %}
+</table>
+<h2>Authorization path</h2>
+<ul>{% for x in f.authorization_path %}<li>{{ x }}</li>{% endfor %}</ul>
+<h2>Measures of success</h2>
+<ul>{% for x in f.measures_of_success %}<li>{{ x }}</li>{% endfor %}</ul>
+<h2>Guardrails</h2>
+<table>
+<tr><th>May</th><td>{{ f.guardrails.may }}</td></tr>
+<tr><th>Never</th><td>{{ f.guardrails.never }}</td></tr>
+<tr><th>Requires approval</th><td>{{ f.guardrails.requires_approval }}</td></tr>
+<tr><th>Logged</th><td>{{ f.guardrails.logged }}</td></tr>
+<tr><th>Stopped</th><td>{{ f.guardrails.stopped }}</td></tr>
+</table>
+<div class="foot">{% if node %}Node {{ node }}. {% endif %}{% if audit_head %}Audit head <code>{{ audit_head }}</code>. {% endif %}Source: docs/fleet.yaml.</div>
+</body>
+</html>

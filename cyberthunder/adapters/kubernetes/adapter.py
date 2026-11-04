@@ -19,7 +19,7 @@ from cyberthunder.remediation.library import FixEntry
 from cyberthunder.remediation.models import (ApplyResult, BeforeState, HealthCheck, HealthResult, RollbackResult,
                                              VerifyResult)
 
-from . import checks, fixes, hunt
+from . import checks, fixes, hunt, k3s
 from .kubectl import (KubectlTransport, ObjRef, heredoc, ref_from_finding, render, split_commands,
                       strip_server_fields)
 from .simulated import SimulatedClusterTransport
@@ -128,17 +128,59 @@ class KubernetesAdapter(Adapter):
                 p = workdir / f"configz_{name}.json"
                 p.write_text(r.stdout, encoding="utf-8")
                 col.artifacts[f"configz_{name}"] = str(p)
+        node_id = (target.options or {}).get("node_target")
+        if node_id:
+            self._collect_k3s_node(target, str(node_id), data, col)
         col.facts = self._facts(target, data.doc("version") or {}, data.doc("nodes") or {})
         col.raw["server_version"] = col.facts.os_version
         col.raw["node_count"] = col.facts.extra.get("node_count")
         return col
 
+    def node_transport(self, node_id: str):
+        """(node target, transport) for the k3s server node named by options.node_target. The node must be an
+        in-scope linux target in the inventory; the scope check runs here, before anything is sent to it."""
+        from cyberthunder.config import Settings
+        from cyberthunder.inventory.targets import Inventory
+        from cyberthunder.store import StateStore
+        from cyberthunder.transport.base import make_transport
+        settings = Settings.from_env()
+        node = Inventory.load(StateStore(settings.state_dir).targets).assert_in_scope(node_id)
+        if node.asset_type != "linux":
+            raise ValueError(f"node_target {node_id} is a {node.asset_type} target, not linux")
+        return node, make_transport(node, settings)
+
+    def _collect_k3s_node(self, target, node_id: str, data: checks.KubeData, col: Collected) -> None:
+        """Read the k3s control-plane flags from the server node (see k3s.py). Only the parsed component
+        flags are kept; the raw config file (which may hold the join token) is never written out."""
+        try:
+            node, nt = self.node_transport(node_id)
+        except Exception as e:  # noqa: BLE001  scope violation, unknown target, connect failure
+            col.errors.append(f"node_target {node_id}: {e}")
+            return
+        cfg = nt.run(k3s.READ_CONFIG, sudo=bool(getattr(node, "sudo", True)))
+        unit = nt.run(k3s.READ_EXECSTART)
+        if not cfg.ok:
+            col.errors.append(f"node_target {node_id}: {k3s.READ_CONFIG}: exit {cfg.exit_code}: "
+                              f"{(cfg.stderr or '').strip()[:200]}")
+        if not unit.ok:
+            col.errors.append(f"node_target {node_id}: {k3s.READ_EXECSTART}: exit {unit.exit_code}")
+        if not cfg.ok and not unit.ok:
+            return
+        try:
+            flags = k3s.effective_flags(cfg.stdout if cfg.ok else None, unit.stdout if unit.ok else None)
+        except ValueError as e:
+            col.errors.append(f"node_target {node_id}: {e}")
+            return
+        flags["node"] = (target.options or {}).get("node_name") or _node_for(data, node) or node_id
+        flags["node_target"] = node_id
+        col.raw[checks.K3S_FLAGS] = flags
+
     # -- detection ---------------------------------------------------------------------------------
     def check(self, target, collected: Collected) -> list[Finding]:
-        return _filter(checks.run_checks(target, collected), collected.rule_filter)
+        return _filter(fixes.point_at_applicable_fix(checks.run_checks(target, collected)), collected.rule_filter)
 
     def hunt(self, target, collected: Collected) -> list[Finding]:
-        return _filter(hunt.run_hunt(target, collected), collected.rule_filter)
+        return _filter(fixes.point_at_applicable_fix(hunt.run_hunt(target, collected)), collected.rule_filter)
 
     # -- remediation -------------------------------------------------------------------------------
     def fixes(self) -> list[FixEntry]:
@@ -296,6 +338,19 @@ def _filter(findings: list[Finding], rule_filter: list[str] | None) -> list[Find
         return findings
     keys = set(rule_filter)
     return [f for f in findings if f.rule_id in keys or f.rule_version in keys or any(r.id in keys for r in f.references)]
+
+
+def _node_for(data: checks.KubeData, node_target) -> str | None:
+    """The cluster node name matching the node target's name, hostname or address."""
+    names = {str(x).lower() for x in (getattr(node_target, "name", None), getattr(node_target, "id", None),
+                                      getattr(node_target, "host", None), getattr(node_target, "address", None)) if x}
+    for n in data.items("nodes"):
+        md = n.get("metadata", {})
+        cand = {str(md.get("name", "")).lower(), str((md.get("labels") or {}).get("kubernetes.io/hostname", "")).lower()}
+        cand |= {str(a.get("address", "")).lower() for a in (n.get("status") or {}).get("addresses", []) or []}
+        if names & (cand - {""}):
+            return md.get("name")
+    return None
 
 
 def _node_ready(node: dict) -> bool:

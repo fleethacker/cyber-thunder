@@ -46,6 +46,7 @@ def consume_simulate_verify_fail(ctx: "AppContext") -> bool:
     if not _read_flag(ctx):
         return False
     _write_flag(ctx, False)
+    ctx.audit.append("demo.simulate_verify_fail.consumed", "agent", {"armed": False})
     return True
 
 
@@ -73,17 +74,50 @@ def load(ctx: "AppContext", actor: str) -> list[Target]:
     return demo
 
 
+_OPEN = ("proposed", "approved")                   # not yet applied: cancelled when their host is reset
+_ON_HOST = ("applying", "applied", "verified", "failed")  # before-state was captured from the old host state
+
+
 def reset(ctx: "AppContext", actor: str) -> dict:
-    """Return every demo target to its seeded state. Result maps target id to True/False (False = no simulation)."""
+    """Return every in-scope demo target to its seeded state.
+
+    Result maps target id to True/False (False = no simulation, or skipped). A reset changes host state, so it
+    stops at the kill switch and never touches a target that is not in the inventory with in_scope set.
+    Proposals on a reset host that were not applied yet are cancelled; ones already applied are reported in
+    `stale_proposals`, because their captured before-state no longer matches the host.
+    """
+    ctx.killswitch.guard("demo.reset", actor)
     results: dict[str, bool] = {}
+    skipped: list[str] = []
     for adapter, t in _demo_targets(ctx):
+        if not ctx.inventory.in_scope(t.id):
+            results[t.id] = False
+            skipped.append(t.id)
+            continue
         try:
             results[t.id] = bool(adapter.reset_simulated(t, ctx.settings))
         except Exception as e:  # noqa: BLE001  - one broken emulator must not stop the others being reset
             results[t.id] = False
             ctx.audit.append("demo.reset.error", actor, {"target": t.id, "error": str(e)}, outcome="error", subject=t.id)
-    ctx.audit.append("demo.reset", actor, {"results": results})
-    return {"reset": results}
+    reset_ids = {tid for tid, ok in results.items() if ok}
+    cancelled: list[str] = []
+    stale: list[str] = []
+    for p in ctx.gate.list():
+        if p.host not in reset_ids:
+            continue
+        if p.state.value in _OPEN:
+            ctx.gate.cancel(p.id, actor, "demo reset returned the host to its seeded state")
+            cancelled.append(p.id)
+        elif p.state.value in _ON_HOST:
+            stale.append(p.id)
+    details: dict = {"results": results}
+    out: dict = {"reset": results}
+    for key, val in (("skipped_out_of_scope", skipped), ("cancelled_proposals", cancelled), ("stale_proposals", stale)):
+        if val:
+            details[key] = val
+            out[key] = val
+    ctx.audit.append("demo.reset", actor, details)
+    return out
 
 
 def status(ctx: "AppContext") -> dict:

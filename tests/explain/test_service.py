@@ -157,3 +157,39 @@ def test_real_local_model(state_dir):
     exp = ctx.explain.explain(ssh_root_finding())
     assert exp.citations and exp.risk
     assert ctx.audit.verify().ok
+
+
+def test_backend_raises_then_returns_non_string(ctx):
+    class Odd(FakeBackend):
+        def generate(self, prompt, *, json_mode=True, timeout=180):
+            self.prompts.append(prompt)
+            if len(self.prompts) == 1:
+                raise RuntimeError("model crashed")
+            return {"risk": "a"}
+
+    ctx.explain.backend = Odd([])
+    exp = ctx.explain.explain(ssh_root_finding())
+    assert exp.fallback and exp.attempts == 2 and exp.backend == "template"
+
+
+def test_invented_id_in_prose_retries_then_falls_back(ctx):
+    import json
+    bad = dict(json.loads(canned("valid")), risk="Exploited via CVE-2031-99999. Run rm -rf /etc/ssh now.")
+    ctx.explain.backend = FakeBackend([json.dumps(bad)])
+    exp = ctx.explain.explain(ssh_root_finding())
+    assert exp.fallback and exp.attempts == 2 and "CVE-2031-99999" not in exp.risk
+    assert "CVE-2031-99999" in exp.dropped_citations
+
+
+def test_cache_refreshes_when_finding_changes(ctx):
+    f1 = ssh_root_finding(severity="medium")
+    e1 = ctx.explain.explain(f1)
+    assert "CAT II" in e1.risk
+    assert ctx.explain.explain(f1).generated_at == e1.generated_at       # unchanged finding: cached
+    assert ctx.explain.plan_precompute([f1]) == []
+    f2 = ssh_root_finding(severity="high", evidence="PermitRootLogin yes (re-scanned)")
+    assert f2.id == f1.id
+    assert [f.id for f in ctx.explain.plan_precompute([f2])] == [f2.id]
+    e2 = ctx.explain.explain(f2)
+    assert "CAT I " in e2.risk and e2.fingerprint != e1.fingerprint
+    assert ctx.explain.plan_precompute([f2]) == []

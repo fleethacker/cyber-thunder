@@ -1,0 +1,43 @@
+# {{ f.title or "Path to fleet" }}
+
+{{ f.summary }}
+
+- **Mission owner:** {{ f.mission_owner }}
+- **Technical owner:** {{ f.technical_owner }}
+- **Destination:** {{ f.destination }}
+- **Next experiment:** {{ f.next_experiment }}
+
+## Required resources
+
+{% for x in f.required_resources %}
+- {{ x }}
+{% endfor %}
+
+## 30 / 60 / 90 / 180 days
+
+{% for t in f.timeline %}
+- **Day {{ t.day }}:** {{ t.step }}
+{% endfor %}
+
+## Authorization path
+
+{% for x in f.authorization_path %}
+- {{ x }}
+{% endfor %}
+
+## Measures of success
+
+{% for x in f.measures_of_success %}
+- {{ x }}
+{% endfor %}
+
+## Guardrails
+
+- **May:** {{ f.guardrails.may }}
+- **Never:** {{ f.guardrails.never }}
+- **Requires approval:** {{ f.guardrails.requires_approval }}
+- **Logged:** {{ f.guardrails.logged }}
+- **Stopped:** {{ f.guardrails.stopped }}
+
+---
+{% if node %}Node {{ node }}. {% endif %}{% if audit_head %}Audit head `{{ audit_head }}`. {% endif %}Source: docs/fleet.yaml.

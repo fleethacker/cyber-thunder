@@ -9,7 +9,7 @@
 tmp/
 
 # runtime state
-state/
+/state/
 *.audit.jsonl
 *.log
 findings*.json

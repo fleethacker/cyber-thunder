@@ -1,0 +1,44 @@
+# Path to fleet. Rendered by `cyberthunder report fleet`; edit this file, not the templates.
+title: Cyber Thunder - path to fleet
+summary: >-
+  Finds, explains and fixes misconfigurations and vulnerabilities on isolated, low-bandwidth networks.
+  Every change is approved by a Sailor, logged in a tamper-evident audit chain and reversible.
+  It calls the scanners the Navy already fields and turns their output into approved, verified fixes.
+mission_owner: NAVIFOR / Naval Network Warfare Command
+technical_owner: NIWC Atlantic
+destination: Information warfare training range first, then an afloat or shore enclave.
+next_experiment: >-
+  Run the full loop on the training range against its seeded hosts: ingest a STIG delta over the
+  emulated link, scan, approve fixes, verify, roll one back, and score detection against the answer key.
+required_resources:
+  - Training range access with the seeded Linux hosts and one network device
+  - IT and cyber warfare SME time to act as approver and judge (about 4 hours per week)
+  - Platform One Iron Bank onboarding for the container package
+  - DADMS registration sponsor from the owning program office
+timeline:
+  - day: 30
+    step: Mission owner confirms the target environment and names the approving Sailor role.
+  - day: 60
+    step: Test on the information warfare training range; collect time-to-remediation numbers and Sailor feedback.
+  - day: 90
+    step: Authorization path defined with the owning program (DADMS entry filed, ATO boundary agreed).
+  - day: 180
+    step: Limited deployment decision for one afloat or shore enclave.
+authorization_path:
+  - DADMS registration for the application and for each runtime dependency (see the friction log).
+  - Runtime dependencies ride on already approved platforms; nothing new is installed on the target hosts.
+  - Container packaging goes through Platform One Iron Bank.
+  - ATO is carried through the owning program; this tool does not seek its own.
+  - "Named gap: no approved offline model runtime exists today. Until one does, explanations fall back to deterministic templates that cite the same identifiers."
+measures_of_success:
+  - Share of seeded misconfigurations and intrusion indicators found
+  - Time from a new STIG or bulletin to a correct remediation plan
+  - Changes applied only with approval and rolled back cleanly when verification fails
+  - Works over the emulated low-bandwidth link
+  - Complete, verifiable audit trail
+guardrails:
+  may: Scan in-scope hosts, read configurations and logs, propose fixes, and apply fixes from the vetted library after a human approves.
+  never: Run commands written by a model, change anything without approval, touch a host outside the inventory, or delete logs or the audit trail.
+  requires_approval: Every state-changing action, one fix at a time, by a named human.
+  logged: Every scan, finding, proposal, approval or denial, apply, verify, rollback and kill switch event, hash-chained.
+  stopped: The kill switch (UI button, state file, CT_KILL or a KILL file) blocks every pending and future change at once.

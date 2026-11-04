@@ -5,6 +5,10 @@ Three independent ways to stop it, any one wins:
   2. env var     CT_KILL=1                                        (operator shell)
   3. sentinel    <state_dir>/KILL                                  (touch a file, no tooling needed)
 Every state-changing code path must call `guard()` immediately before acting.
+
+Only a named person may release the switch. Anyone, the machine included, may engage it: stopping is
+always allowed. A release that leaves the switch engaged (CT_KILL or the sentinel still set) is logged
+with outcome 'partial' and the reason it is still engaged.
 """
 from __future__ import annotations
 
@@ -13,6 +17,7 @@ import os
 from pathlib import Path
 
 from cyberthunder.audit.chain import AuditLog
+from cyberthunder.control.identity import normalize_actor, require_human
 from cyberthunder.findings.schema import utcnow
 
 
@@ -50,6 +55,12 @@ class KillSwitch:
         return bool(self.status()["engaged"])
 
     def engage(self, actor: str, reason: str = "") -> dict:
+        actor = normalize_actor(actor)
+        if not actor:
+            if self.audit is not None:
+                self.audit.append("killswitch.engage", "?", {"reason": reason, "refused": "no actor named"},
+                                  outcome="rejected")
+            raise PermissionError("an operator identity is required to engage the kill switch")
         data = {"engaged": True, "by": actor, "reason": reason, "at": utcnow()}
         self.state_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
         if self.audit is not None:
@@ -57,11 +68,25 @@ class KillSwitch:
         return data
 
     def release(self, actor: str, reason: str = "") -> dict:
+        try:
+            actor = require_human(actor)
+        except PermissionError as e:
+            if self.audit is not None:
+                self.audit.append("killswitch.release", normalize_actor(actor) or "?",
+                                  {"reason": reason, "refused": str(e)}, outcome="rejected")
+            raise
         data = {"engaged": False, "by": actor, "reason": reason, "at": utcnow()}
         self.state_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
         if self.sentinel.exists():
             self.sentinel.unlink()
-        if self.audit is not None:
+        st = self.status()
+        if st["engaged"]:
+            # the state file is cleared but another source still holds the switch; say so
+            data.update(engaged=True, via=st["via"])
+            if self.audit is not None:
+                self.audit.append("killswitch.release", actor, {"reason": reason, "still_engaged_via": st["via"]},
+                                  outcome="partial")
+        elif self.audit is not None:
             self.audit.append("killswitch.release", actor, {"reason": reason})
         return data
 
