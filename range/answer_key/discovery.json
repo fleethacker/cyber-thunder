@@ -1,0 +1,13 @@
+{
+  "target": "simulated enclave 192.168.56.0/24",
+  "seeded_by": "cyberthunder/discovery/simulated.py",
+  "purpose": "Score discovery: each item must surface as a finding with this check_id after a simulated sweep. Do not show to the model.",
+  "items": [
+    {"id": "D1", "kind": "rogue_device", "check_id": "discovery:unknown_asset", "address": "192.168.56.66",
+     "what": "Raspberry Pi (MAC b8:27:eb) with telnet and a web server, not in the inventory", "fix_ref": null},
+    {"id": "D2", "kind": "unmanaged_switch", "check_id": "discovery:unknown_asset", "address": "192.168.56.3",
+     "what": "Cisco WS-C2960X seen over CDP from the managed switch, not in the inventory", "fix_ref": null},
+    {"id": "D3", "kind": "new_listener", "check_id": "discovery:new_listener", "address": "first linux target",
+     "what": "tcp/4444 SimpleHTTPServer listening on the first Linux host since the previous sweep", "fix_ref": null}
+  ]
+}

@@ -1,0 +1,30 @@
+-------------------------
+Device ID: SW-SPARE-03
+Entry address(es):
+  IP address: 192.168.56.3
+Platform: cisco WS-C2960X-24TS-L,  Capabilities: Switch IGMP
+Interface: GigabitEthernet1/0/23,  Port ID (outgoing port): GigabitEthernet0/1
+Holdtime : 171 sec
+
+Version :
+Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M), Version 15.2(7)E8, RELEASE SOFTWARE (fc2)
+
+advertisement version: 2
+Native VLAN: 1
+Duplex: full
+Management address(es):
+  IP address: 192.168.56.3
+
+-------------------------
+Device ID: SEP001122334455
+Entry address(es):
+  IP address: 192.168.56.70
+Platform: Cisco IP Phone 8841,  Capabilities: Host Phone Two-port Mac Relay
+Interface: GigabitEthernet1/0/5,  Port ID (outgoing port): Port 1
+Holdtime : 133 sec
+
+Version :
+sip88xx.14-1-1-0001-136
+
+advertisement version: 2
+Duplex: full

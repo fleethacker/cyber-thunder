@@ -1,0 +1,6 @@
+[
+  {"match": "show cdp neighbors detail", "stdout": {"file": "cdp.txt"}, "exit": 0},
+  {"match": "show lldp neighbors detail", "stdout": "", "stderr": "% LLDP is not enabled", "exit": 1},
+  {"match": "show ip arp", "stdout": {"file": "arp.txt"}, "exit": 0},
+  {"match": "show mac address-table", "stdout": {"file": "mac.txt"}, "exit": 0}
+]

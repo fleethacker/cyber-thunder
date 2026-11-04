@@ -1,0 +1,7 @@
+.encoding = "UTF-8"
+displayName = "win11-lab"
+guestOS = "windows11-64"
+ethernet0.present = "TRUE"
+ethernet0.addressType = "static"
+ethernet0.address = "00:50:56:3f:00:11"
+firmware = "efi"

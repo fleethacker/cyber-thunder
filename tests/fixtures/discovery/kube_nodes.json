@@ -1,0 +1,28 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "metadata": {"name": "k3s-cp-01", "labels": {"node-role.kubernetes.io/control-plane": "true", "node-role.kubernetes.io/master": "true"}},
+      "status": {
+        "addresses": [{"type": "InternalIP", "address": "192.168.56.20"}, {"type": "Hostname", "address": "k3s-cp-01"}],
+        "conditions": [{"type": "Ready", "status": "True"}],
+        "nodeInfo": {"osImage": "Ubuntu 22.04.4 LTS", "kernelVersion": "5.15.0-105-generic", "kubeletVersion": "v1.29.4+k3s1",
+                     "containerRuntimeVersion": "containerd://1.7.15-k3s1", "operatingSystem": "linux", "architecture": "amd64"}
+      }
+    },
+    {
+      "metadata": {"name": "k3s-wk-01", "labels": {}},
+      "status": {
+        "addresses": [{"type": "InternalIP", "address": "192.168.56.21"}, {"type": "Hostname", "address": "k3s-wk-01"}],
+        "conditions": [{"type": "Ready", "status": "False"}],
+        "nodeInfo": {"osImage": "Rocky Linux 8.9 (Green Obsidian)", "kernelVersion": "4.18.0-513.5.1.el8_9.x86_64", "kubeletVersion": "v1.29.4+k3s1",
+                     "containerRuntimeVersion": "containerd://1.7.15-k3s1", "operatingSystem": "linux", "architecture": "amd64"}
+      }
+    },
+    {
+      "metadata": {"name": "no-address"},
+      "status": {"addresses": [{"type": "Hostname", "address": "no-address"}], "nodeInfo": {}}
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+[
+  {"IPAddress": "192.168.56.2", "LinkLayerAddress": "70-10-5C-AA-BB-01", "State": 4, "InterfaceAlias": "Ethernet0"},
+  {"IPAddress": "192.168.56.10", "LinkLayerAddress": "52-54-00-12-34-10", "State": 5, "InterfaceAlias": "Ethernet0"},
+  {"IPAddress": "192.168.56.88", "LinkLayerAddress": "00-00-00-00-00-00", "State": 0, "InterfaceAlias": "Ethernet0"},
+  {"IPAddress": "192.168.56.255", "LinkLayerAddress": "FF-FF-FF-FF-FF-FF", "State": 6, "InterfaceAlias": "Ethernet0"}
+]

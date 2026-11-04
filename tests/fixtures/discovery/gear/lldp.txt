@@ -1,0 +1,33 @@
+------------------------------------------------
+Local Intf: Gi1/0/10
+Chassis id: 5254.0012.3410
+Port id: 5254.0012.3410
+Port Description: eth0
+System Name: rocky9-app01
+
+System Description:
+Rocky Linux 9.4 (Blue Onyx) Linux 5.14.0-427.13.1.el9_4.x86_64 #1 SMP x86_64
+
+Time remaining: 101 seconds
+System Capabilities: S,R
+Enabled Capabilities: S
+Management Addresses:
+    IP: 192.168.56.10
+Auto Negotiation - supported, enabled
+
+------------------------------------------------
+Local Intf: Gi1/0/11
+Chassis id: 0015.5d38.0a11
+Port id: 0015.5d38.0a11
+System Name: WIN11-WS01
+
+System Description:
+Microsoft Windows 11 Enterprise
+
+Time remaining: 95 seconds
+System Capabilities: W
+Enabled Capabilities: W
+Management Addresses:
+    IP: 192.168.56.11
+
+Total entries displayed: 2

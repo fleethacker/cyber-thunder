@@ -1,0 +1,4 @@
+Total running VMs: 3
+C:\VMs\rocky9-lab\rocky9-lab.vmx
+C:\VMs\win11-lab\win11-lab.vmx
+C:\VMs\gone\gone.vmx

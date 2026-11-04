@@ -1,0 +1,6 @@
+[
+  {"Name": "rocky9-app01", "State": 2, "Generation": 2, "MAC": "00155D380A21", "IP": "192.168.56.21,fe80::215:5dff:fe38:a21"},
+  {"Name": "WIN11-WS02", "State": "Running", "Generation": 2, "MAC": "00155D380A12", "IP": "fe80::1c2:3:4:5,192.168.56.12"},
+  {"Name": "old-build-box", "State": 3, "Generation": 1, "MAC": "00155D380A99", "IP": ""},
+  {"Name": "lab-template", "State": "Off", "Generation": 2, "MAC": "", "IP": ""}
+]
