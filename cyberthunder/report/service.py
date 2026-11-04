@@ -97,7 +97,7 @@ class ReportService:
             return f"score-{scan_id or 'latest'}.json", json.dumps(self.score(scan_id), indent=2)
         raise ReportError(f"unknown report kind {kind!r}; expected one of {KINDS}")
 
-    def queue(self, kind: str, scan_id: str | None = None) -> dict:
+    def queue(self, kind: str, scan_id: str | None = None, host: str | None = None, *, actor: str = "report") -> dict:
         """Render a report and put it in the sync outbox so it goes out when the link comes back."""
         ing = getattr(self.ctx, "ingest", None)
         outbox = getattr(ing, "outbox", None) if ing is not None else None
@@ -119,7 +119,7 @@ class ReportService:
             elif pname in ("meta", "metadata"):
                 kwargs[pname] = {"report": kind, "scan_id": scan_id, "bytes": len(text.encode("utf-8"))}
             elif pname == "actor":
-                kwargs[pname] = "report"
+                kwargs[pname] = actor
             elif param.default is inspect.Parameter.empty and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY):
                 positional_free = False
         if not positional_free:

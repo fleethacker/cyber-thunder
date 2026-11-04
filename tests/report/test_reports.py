@@ -78,6 +78,7 @@ def test_commander_flags_a_broken_audit_chain(node):
 
 
 def test_commander_link_line_when_ingest_exists(node):
+    node.ingest = None
     assert "Link " not in svc(node).commander(SCAN, "md")
     node.ingest = SimpleNamespace(outbox=SimpleNamespace(pending=lambda: ["a", "b"]),
                                   link=SimpleNamespace(status=lambda: {"kbps": 28.8, "connected": False}))
@@ -242,6 +243,7 @@ def test_score_errors(node, tmp_path):
 
 # -- queue and CLI ----------------------------------------------------------------------------
 def test_queue_requires_an_outbox(node):
+    node.ingest = None
     with pytest.raises(ReportError, match="outbox is not available"):
         svc(node).queue("commander", SCAN)
 

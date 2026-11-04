@@ -23,6 +23,8 @@ ROUTE_MODULES = ("status", "targets", "scans", "findings", "proposals", "audit",
 def create_app(ctx: AppContext | None = None) -> FastAPI:
     app = FastAPI(title=PRODUCT, version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.state.ctx = ctx or AppContext()
+    from cyberthunder.api.errors import register_error_handlers
+    register_error_handlers(app)
 
     for name in ROUTE_MODULES:
         try:

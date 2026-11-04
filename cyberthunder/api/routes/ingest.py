@@ -16,6 +16,8 @@ Service methods used (first name found wins):
 """
 from __future__ import annotations
 
+import inspect
+
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -75,7 +77,13 @@ def put_link(body: LinkBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
     if not changes:
         raise ValueError("nothing to change: send kbps, latency_ms or connected")
     with feature("link emulation"):
-        return to_plain(call_first(svc, ("set_link", "update_link"), changes, actor=actor))
+        fn = getattr(svc, "set_link", None) or getattr(svc, "update_link", None)
+        if fn is None:
+            raise NotImplementedError
+        params = inspect.signature(fn).parameters
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            return to_plain(fn(actor=actor, **changes))        # IngestService.set_link(*, actor, **changes)
+        return to_plain(fn(changes, actor=actor))              # positional-changes style
 
 
 # -- STIG release deltas ---------------------------------------------------------------------------
@@ -157,7 +165,13 @@ def history(ctx=CtxDep) -> dict:
 def outbox(ctx=CtxDep) -> dict:
     svc = _svc(ctx, "outbox")
     with feature("outbox"):
-        return to_plain(call_first(svc, ("outbox", "outbox_state")))
+        ob = getattr(svc, "outbox", None)
+        if ob is None:
+            raise NotImplementedError
+        listing = ob.list() if callable(getattr(ob, "list", None)) else (ob() if callable(ob) else ob)
+        out = to_plain(listing) or {}
+        out["connected"] = bool(util.link_state(ctx).get("connected", False))
+        return out
 
 
 @router.post("/outbox/sync")
@@ -166,4 +180,7 @@ def outbox_sync(ctx=CtxDep, actor: str = ActorDep) -> dict:
     if not util.link_state(ctx).get("connected", False):
         raise HTTPException(409, "link is disconnected; the outbox syncs automatically on reconnect")
     with feature("outbox"):
+        ob = getattr(svc, "outbox", None)
+        if ob is not None and callable(getattr(ob, "sync", None)):
+            return to_plain(ob.sync(actor=actor))
         return to_plain(call_first(svc, ("sync", "sync_outbox", "flush"), actor=actor))

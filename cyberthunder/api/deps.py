@@ -11,6 +11,6 @@ def get_ctx(request: Request) -> AppContext:
 
 
 def get_actor(x_actor: str | None = Header(default=None)) -> str:
-    """Who is acting. Prototype identity: the X-Actor header set by the UI. Never 'agent' for human edges."""
-    actor = (x_actor or "").strip()
-    return actor or "operator"
+    """Who is acting. Prototype identity: the X-Actor header set by the UI. Empty when absent, so routes
+    that change state can refuse the request; read-only routes may fall back to 'operator' for their audit lines."""
+    return (x_actor or "").strip()

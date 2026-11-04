@@ -96,6 +96,17 @@ def status_for(exc: BaseException) -> tuple[int, str] | None:
         if isinstance(exc, FeatureUnavailable) or UNAVAILABLE in str(exc):
             return 501, str(exc)
         return 501, f"feature {UNAVAILABLE}" + (f" ({exc})" if str(exc) else "")
+    for dotted, code in (("cyberthunder.ingest.outbox.LinkDisconnected", 409),
+                         ("cyberthunder.remediation.engine.EngineError", 409),
+                         ("cyberthunder.ingest.service.IngestError", 400),
+                         ("cyberthunder.report.service.ReportError", 400)):
+        mod, _, name = dotted.rpartition(".")
+        try:
+            cls = getattr(__import__(mod, fromlist=[name]), name)
+        except Exception:  # noqa: BLE001  the module may not be installed on this node
+            continue
+        if isinstance(exc, cls):
+            return code, str(exc)
     if isinstance(exc, ValueError):
         return 400, str(exc) or "invalid value"
     return None

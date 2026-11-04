@@ -70,6 +70,6 @@ def demo_toggle(body: DemoToggleBody, ctx=CtxDep, actor: str = ActorDep) -> dict
     """Arm or disarm the forced verification failure for the next apply (demonstration control)."""
     demo = requires(util.demo_module(), "demo")
     with feature("demo verify-fail toggle"):
-        call_first(demo, ("set_simulate_verify_fail", "arm_simulate_verify_fail"), ctx,
+        call_first(demo, ("set_simulate_verify_fail_next", "set_simulate_verify_fail", "arm_simulate_verify_fail"), ctx,
                    body.simulate_verify_fail_next, actor=actor)
     return _status(ctx, demo)

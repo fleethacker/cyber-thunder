@@ -78,6 +78,8 @@ def _link_line(ctx: "AppContext") -> str | None:
         for name in ("status", "state"):
             attr = getattr(link, name, None)
             st = attr() if callable(attr) else attr
+            if st is not None and hasattr(st, "to_dict"):
+                st = st.to_dict()
             if isinstance(st, dict):
                 break
             st = None
@@ -89,7 +91,8 @@ def _link_line(ctx: "AppContext") -> str | None:
         for name in ("pending", "list"):
             fn = getattr(ob, name, None)
             if callable(fn):
-                waiting = len(list(fn()))
+                got = fn()
+                waiting = len(got.get("pending", [])) if isinstance(got, dict) else len(list(got))
                 break
         if waiting is None:
             waiting = len([p for p in ctx.store.outbox_dir.iterdir() if p.is_file()])
