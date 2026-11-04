@@ -27,6 +27,12 @@ python -m cyberthunder --actor sailor1 kill engage --reason "demo"
 python -m cyberthunder audit verify state/audit.jsonl
 ```
 
+## Cluster deployment
+
+Deploy UDS Core and Podinfo with `./deploy.sh`. See
+[UDS cluster deployment](docs/DEPLOYMENT.md) for macOS Podman, Linux,
+existing Kubernetes clusters, and the optional `./deploy.sh dev` identity setup.
+
 ## Layout
 
 | Path | Purpose |

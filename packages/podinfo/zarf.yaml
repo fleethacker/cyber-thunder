@@ -1,0 +1,37 @@
+kind: ZarfPackageConfig
+metadata:
+  name: podinfo
+  description: Podinfo with UDS ingress, SSO, and monitoring.
+  version: 0.0.1
+
+variables:
+  - name: DOMAIN
+    description: Domain used by UDS Core and Podinfo SSO.
+    default: uds.dev
+
+components:
+  - name: uds-integration
+    required: true
+    manifests:
+      - name: podinfo-uds-config
+        namespace: podinfo
+        files:
+          - namespace.yaml
+          - package.yaml
+    actions:
+      onDeploy:
+        after:
+          - description: Wait for UDS to configure the namespace before starting Podinfo.
+            cmd: ./zarf tools kubectl wait package/podinfo -n podinfo --for=jsonpath='{.status.phase}'=Ready --timeout=300s
+
+  - name: podinfo
+    required: true
+    charts:
+      - name: podinfo
+        version: 6.10.1
+        namespace: podinfo
+        url: oci://ghcr.io/stefanprodan/charts/podinfo
+        valuesFiles:
+          - values.yaml
+    images:
+      - ghcr.io/stefanprodan/podinfo:6.10.1

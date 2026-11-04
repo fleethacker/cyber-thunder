@@ -1,0 +1,40 @@
+kind: ZarfPackageConfig
+metadata:
+  name: identity-bootstrap
+  description: Reconcile the Cyber Thunder development SSO administrator.
+  version: 0.0.1
+
+variables:
+  - name: DEV_MODE
+    description: Enable local development identity changes.
+    default: "false"
+  - name: DOMAIN
+    default: uds.dev
+  - name: ADMIN_PASSWORD
+    sensitive: true
+    default: ""
+
+components:
+  - name: identity-bootstrap
+    required: true
+    files:
+      - source: scripts/ensure-user.sh
+        target: .build/deploy/identity-bootstrap/ensure-user.sh
+        executable: true
+      - source: scripts/ensure-admin.sh
+        target: .build/deploy/identity-bootstrap/ensure-admin.sh
+        executable: true
+    actions:
+      onDeploy:
+        defaults:
+          shell:
+            linux: bash
+            darwin: bash
+        after:
+          - description: Create the local development SSO administrator.
+            maxTotalSeconds: 180
+            mute: true
+            cmd: |
+              if [ "${ZARF_VAR_DEV_MODE}" = true ]; then
+                DEV_MODE="${ZARF_VAR_DEV_MODE}" DOMAIN="${ZARF_VAR_DOMAIN}" ADMIN_PASSWORD="${ZARF_VAR_ADMIN_PASSWORD}" ./.build/deploy/identity-bootstrap/ensure-user.sh
+              fi
