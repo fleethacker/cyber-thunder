@@ -160,6 +160,7 @@ checklist, path to fleet), `demo reset|run`.
 | Document | What it is |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | pipeline, contracts, guardrails, how to add an adapter |
+| [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |
 | [docs/API.md](docs/API.md) | HTTP API v1 |
 | [docs/UI.md](docs/UI.md) | screens and behaviour |
 | [docs/DEMO.md](docs/DEMO.md) | 10-minute demo runbook |
