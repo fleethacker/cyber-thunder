@@ -3,8 +3,8 @@
 import { Badge, Button, Card, Group, Paper, Progress, SegmentedControl, Select, SimpleGrid, Stack, Table, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconCloudUpload, IconDownload, IconSend } from '@tabler/icons-react';
-import { useState } from 'react';
-import { api, ApiError, errorText, url } from '../api/client';
+import { useState, useEffect } from 'react';
+import { api, ApiError, errorText, url, request } from '../api/client';
 import { ErrorBox, Loading, Mono, PageTitle } from '../components/common';
 import { fmtBytes, fmtSeconds, fmtTime } from '../lib/format';
 import { useAsync } from '../lib/hooks';
@@ -120,6 +120,15 @@ export default function Reports() {
   const [queueing, setQueueing] = useState<string | null>(null);
   const targets = useAsync(async () => (await api.targets()).targets, []);
   const [frameKey, setFrameKey] = useState(0);
+  const [html, setHtml] = useState<string>('');
+  useEffect(() => {
+    let alive = true;
+    setHtml('');
+    request<string>('GET', DOC_PATH[doc], { query: { format: 'html' } })
+      .then((h) => { if (alive) setHtml(h); })
+      .catch((e) => { if (alive) setHtml(`<p style="font-family:sans-serif;color:#b00020;padding:16px">${errorText(e)}</p>`); });
+    return () => { alive = false; };
+  }, [doc, frameKey]);
 
   const queue = async (kind: 'commander' | 'poam' | 'checklist') => {
     setQueueing(kind);
@@ -154,7 +163,7 @@ export default function Reports() {
           <iframe
             key={`${doc}-${frameKey}`}
             title={doc}
-            src={url(DOC_PATH[doc], { format: 'html' })}
+            srcDoc={html}
             sandbox=""
             style={{ width: '100%', height: 640, border: '1px solid var(--mantine-color-default-border)', borderRadius: 8, background: 'white' }}
           />
