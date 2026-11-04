@@ -27,26 +27,28 @@ stream the UI tails.
 | Path | Responsibility | State |
 |---|---|---|
 | `cyberthunder/findings/schema.py` | `Finding`, `Severity`, `Status`, `Reference`, citation extraction (STIG/CCI/CCE/CVE/ATT&CK/IAVM) | built |
-| `cyberthunder/parsers/` | `xccdf.py` (DISA, SSG, oscap results, ARF), `cklb.py` (Evaluate-STIG, STIG Viewer 3), `nessus.py` (ACAS exports), `trivy.py`, `bulletin.py` (IAVM/CVE bulletins) | xccdf, cklb built |
+| `cyberthunder/parsers/` | `xccdf.py` (DISA, SSG, oscap results, ARF), `cklb.py` (Evaluate-STIG, STIG Viewer 3), `nessus.py` (ACAS exports), `trivy.py`, `bulletin.py` (IAVM/CVE bulletins) | built |
 | `cyberthunder/audit/chain.py` | append-only hash-chained JSONL + verifier | built |
 | `cyberthunder/control/` | `killswitch.py`, `approvals.py` (proposal state machine), `policy.py` (standing approval) | built |
 | `cyberthunder/inventory/targets.py` | `Target`, `Inventory`, scope guardrail (`assert_in_scope`) | built |
-| `cyberthunder/transport/` | `base.py` contract + factory, `local.py`, `ssh.py`, `fixture.py` (replay/record), `winrm.py` | winrm pending |
+| `cyberthunder/transport/` | `base.py` contract + factory, `local.py`, `ssh.py`, `fixture.py` (replay/record), `winrm.py` | built |
 | `cyberthunder/adapters/base.py` | `Adapter` contract, `registry`, `make_finding()` | built |
-| `cyberthunder/adapters/linux/` | OpenSCAP + native STIG checks, hunt, Trivy CVEs, SSG fix library, simulated host | planned |
-| `cyberthunder/adapters/cisco/` | IOS/IOS-XE config rules (NDM/RTR STIG), config-snippet fixes, runbook or SSH push, `configure replace` rollback | planned |
-| `cyberthunder/adapters/kubernetes/` | cluster/workload checks (Kubernetes STIG + CIS), manifest fixes, kubeconfig transport, simulated cluster | planned |
-| `cyberthunder/adapters/containers/` | docker/podman inspect checks, image CVEs via Trivy JSON | planned |
-| `cyberthunder/adapters/windows/` | Evaluate-STIG/PowerSTIG CKLB ingestion, PowerShell hunt (JSON), registry/policy fixes with export-based rollback | planned |
+| `cyberthunder/adapters/linux/` | OpenSCAP + native STIG checks, hunt, Trivy CVEs, SSG fix library, simulated host | built; `options.benchmark_path` and `options.profile` run a DISA datastream through oscap instead of the SSG autodetect |
+| `cyberthunder/adapters/cisco/` | IOS/IOS-XE config rules (NDM/RTR STIG), config-snippet fixes, runbook or SSH push, `configure replace` rollback | built |
+| `cyberthunder/adapters/kubernetes/` | cluster/workload checks (Kubernetes STIG + CIS), manifest fixes, kubeconfig transport, simulated cluster | built |
+| `cyberthunder/adapters/containers/` | docker/podman inspect checks, image CVEs via Trivy JSON | built |
+| `cyberthunder/adapters/windows/` | Evaluate-STIG/PowerSTIG CKLB ingestion, PowerShell hunt (JSON), registry/policy fixes with export-based rollback | built; `options.scap_datastream` and `options.scap_profile` run the DISA benchmark through the OVAL evaluator in `cyberthunder/scap/`, and benchmark results win when native checks cover the same rule |
+| `cyberthunder/scap/` | DISA SCAP datastream loader, OVAL 5.11 evaluator for the Windows test types, collection plan rendered as one PowerShell pass, benchmark results to findings, `scap info|plan|eval|subset` | built |
+| `cyberthunder/discovery/` | scoped sweeps (nmap, neighbours, kube, AD, hypervisors), device typing, propose-only inventory, rogue and missing-asset findings | built |
 | `cyberthunder/remediation/library.py` | `FixEntry`, `FixLibrary` (resolve finding → vetted fix) | built |
 | `cyberthunder/remediation/models.py` | `BeforeState`, `ApplyResult`, `VerifyResult`, `HealthResult`, `RollbackResult` | built |
-| `cyberthunder/remediation/engine.py` | propose / execute (apply→verify→auto-rollback) / rollback / diff | skeleton |
-| `cyberthunder/scan.py` | `ScanRun`, `Scanner` (collect + detect per target, persist, audit, auto-propose, precompute) | skeleton |
-| `cyberthunder/explain/` | local-model client (Ollama / OpenAI-compatible / template), prompt, citation validator, cache, precompute | skeleton |
-| `cyberthunder/ingest/` | STIG release delta, compression + link emulation, IAVM/CVE bulletin matching, outbox (sync on reconnect) | planned |
-| `cyberthunder/report/` | commander one-pager, POA&M CSV, CKLB write-back, path-to-fleet, friction log, answer-key score | planned |
-| `cyberthunder/api/` | FastAPI app factory, `routes/<area>.py`, SSE audit stream, static UI | factory built |
-| `cyberthunder/ui/` | React + TypeScript + Mantine single-page app, built to `ui/dist` and served offline | planned |
+| `cyberthunder/remediation/engine.py` | propose / execute (apply→verify→auto-rollback) / rollback / diff | built |
+| `cyberthunder/scan.py` | `ScanRun`, `Scanner` (collect + detect per target, persist, audit, auto-propose, precompute) | built |
+| `cyberthunder/explain/` | local-model client (Ollama / OpenAI-compatible / template), prompt, citation validator, cache, precompute | built |
+| `cyberthunder/ingest/` | STIG release delta, compression + link emulation, IAVM/CVE bulletin matching, outbox (sync on reconnect) | built; `ingest/content/` pulls what the inventory needs from the public DISA index when the link is up and writes a manifest plus folder import for disconnected sites |
+| `cyberthunder/report/` | commander one-pager, POA&M CSV, CKLB write-back, path-to-fleet, friction log, answer-key score | built |
+| `cyberthunder/api/` | FastAPI app factory, `routes/<area>.py`, SSE audit stream, static UI | built |
+| `cyberthunder/ui/` | React + TypeScript + Mantine single-page app, built to `ui/dist` and served offline | built |
 | `cyberthunder/store.py` | on-disk state layout | built |
 | `cyberthunder/context.py` | `AppContext`: wires everything; CLI and API share it | built |
 | `cyberthunder/cli.py` | `cyberthunder <cmd>`; modules add commands via `register_cli(subparsers)` | built |

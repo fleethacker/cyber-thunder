@@ -35,6 +35,7 @@ def test_plan(state_dir, capsys):
     assert _run(state_dir, "plan", str(FIXTURE), "--rule", "WN11-UR-000010") == 0
     d = json.loads(capsys.readouterr().out)
     assert d["rules"] == 1 and d["plan"] == {"schema": 1, "secedit": True}
+    assert _run(state_dir, "plan", str(FIXTURE), "--rule", "WN11-XX-0") == 2
 
 
 def test_subset(state_dir, tmp_path, capsys):

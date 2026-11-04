@@ -98,6 +98,9 @@ def cmd_plan(a: argparse.Namespace) -> int:
     except KeyError as e:
         print(str(e).strip("'\""), file=sys.stderr)
         return 2
+    if a.rule and not rules:
+        print("no rule in the benchmark matches " + ", ".join(a.rule), file=sys.stderr)
+        return 2
     plan = build_plan(ds, rules)
     print(json.dumps({"rules": len(rules), "summary": plan.summary(), "plan": plan.to_params(),
                       "unplanned": plan.unplanned}, indent=1))

@@ -48,6 +48,7 @@ hosts; the first run against a real range host is the next step.
 | Remediation engine (apply, verify, auto-rollback) | `cyberthunder/remediation/engine.py` | built |
 | Scan orchestration | `cyberthunder/scan.py` | built |
 | Linux, Cisco, Kubernetes, container, Windows adapters | `cyberthunder/adapters/<type>/` | built |
+| DISA SCAP benchmarks run by the tool itself (OVAL evaluator for Windows, DISA datastreams through oscap on Linux) | `cyberthunder/scap/` | built |
 | Local-model explanations with citation validation | `cyberthunder/explain/` | built |
 | STIG delta ingest, link emulation, outbox | `cyberthunder/ingest/` | built |
 | Reports (one-pager, POA&M, checklist, path to fleet) | `cyberthunder/report/` | built |
@@ -160,6 +161,7 @@ checklist, path to fleet), `demo reset|run`.
 | Document | What it is |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | pipeline, contracts, guardrails, how to add an adapter |
+| [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |
 | [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |
 | [docs/API.md](docs/API.md) | HTTP API v1 |
 | [docs/UI.md](docs/UI.md) | screens and behaviour |
@@ -167,6 +169,7 @@ checklist, path to fleet), `demo reset|run`.
 | [docs/SUBMISSION.md](docs/SUBMISSION.md) | portal submission draft |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | working in this repo |
 | [docs/PLAN.md](docs/PLAN.md), [docs/CONTEXT.md](docs/CONTEXT.md) | build plan and event context |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | UDS cluster deployment: macOS, Linux, and Windows through WSL2 |
 | [range/README.md](range/README.md) | local range, link emulation, answer keys |
 
 ## Guardrails (enforced in code)

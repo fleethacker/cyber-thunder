@@ -129,8 +129,9 @@ def seed_state() -> dict:
         "rdp": {"enabled": True, "key_last_write": _iso(now - timedelta(days=200))},
         "files": {},
         "applied": [],
-        # Read only by the SCAP benchmark evaluation (scap_sim.py). Everything here is compliant; the
-        # benchmark's failures on this host are the same six answer-key misconfigurations.
+        # Read only by the SCAP benchmark evaluation (scap_sim.py). Everything here is compliant, so the
+        # 25-rule fixture benchmark fails exactly the six answer-key misconfigurations; the full Windows 11
+        # benchmark also reports open rules for registry values this sparse simulated registry does not carry.
         "rights": {
             "SeNetworkLogonRight": ["*S-1-5-32-544", "*S-1-5-32-555"],
             "SeInteractiveLogonRight": ["*S-1-5-32-544", "*S-1-5-32-545"],
