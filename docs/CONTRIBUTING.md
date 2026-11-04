@@ -60,3 +60,35 @@ git config core.hooksPath .githooks
 Follow [ARCHITECTURE.md](ARCHITECTURE.md) section 6: adapter package, asset type, collect plus pure detection
 methods, fix entries with before-state, verify and rollback, optional simulated transport, tests, fixtures,
 seeds and an answer-key file under `range/answer_key/<type>.json`.
+
+## Backups and restore
+
+Keep a complete copy of the repository somewhere other than GitHub (an external drive, the team share, a second
+cloud). Two files cover it: a git bundle holds every branch and commit, and a zip holds the working tree for anyone
+without git. Run from the repository root; both commands are safe to repeat.
+
+```bash
+git bundle create ../cyber-thunder-$(date +%F)-full-history.bundle --all
+```
+
+```bash
+git bundle verify ../cyber-thunder-$(date +%F)-full-history.bundle
+```
+
+On Windows, zip the folder with Explorer or PowerShell's `Compress-Archive`, leaving out `node_modules`, `.git`,
+`__pycache__` and any `state` directory. The bundle already carries the history.
+
+To rebuild a working repository from the bundle on any machine with git:
+
+```bash
+git clone cyber-thunder-YYYY-MM-DD-full-history.bundle cyber-thunder
+```
+
+Then point it back at the shared remote when one exists:
+
+```bash
+git remote set-url origin https://github.com/fleethacker/cyber-thunder.git
+```
+
+Untracked material is not in the bundle: the STIG downloads under `range/downloads/` (public, re-downloadable
+from public.cyber.mil), local model files, and anything under `state/`.

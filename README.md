@@ -12,11 +12,30 @@ every action lands in a hash-chained audit log.
 Built for the Department of the Navy hackathon in Norfolk (FLEETHACKER, 4-6 Nov 2026), use case
 *Autonomous Cyber Defender*. Deterministic tools detect; a local model only explains; a human decides.
 
+## What it looks like
+
+The decision queue: each card answers what is wrong, why it matters (with citations), what will change, what could
+break, and how to undo it. The kill switch and the audit-chain badge are on every screen.
+
+![Decision queue](docs/images/decisions.jpg)
+
+Discovery proposes what it found on the enclave; a named person accepts a device into scope, with a reason, or ignores it.
+
+![Assets and discovery](docs/images/assets-discovery.jpg)
+
+Every action, including refusals and blocks, lands in the hash-chained audit trail, streamed live.
+
+![Audit trail](docs/images/audit.jpg)
+
+Reports replace the paperwork: commander one-pager, POA&M, checklist, path to fleet, and the detection score against the range answer keys.
+
+![Reports](docs/images/reports.jpg)
+
 ## Status
 
 Every module below is built and merged; the rehearsal in [DEMO](docs/DEMO.md) runs the pipeline end to end on
-the simulated range. Open items: the Assets page has a placeholder for discovery (use the CLI or the API, see
-[DISCOVERY](docs/DISCOVERY.md)), and the UI Diff view does not show every file a fix touches.
+the simulated range. Live transports (SSH, WinRM, kubectl) have been exercised through recordings and simulated
+hosts; the first run against a real range host is the next step.
 
 | Module | Path | Status |
 |---|---|---|
@@ -34,6 +53,7 @@ the simulated range. Open items: the Assets page has a placeholder for discovery
 | Reports (one-pager, POA&M, checklist, path to fleet) | `cyberthunder/report/` | built |
 | HTTP API | `cyberthunder/api/` | built |
 | Web UI | `cyberthunder/ui/` | built |
+| Asset discovery (scoped sweeps, device typing, propose-only inventory, rogue devices) | `cyberthunder/discovery/` | built |
 | Local range and answer keys | `range/` | built (six answer keys) |
 
 ## Quick start
@@ -164,6 +184,11 @@ checklist, path to fleet), `demo reset|run`.
 Deploy UDS Core and Podinfo with `./deploy.sh`. See
 [UDS cluster deployment](docs/DEPLOYMENT.md) for macOS Podman, Linux,
 existing Kubernetes clusters, and the optional `./deploy.sh dev` identity setup.
+
+## Keeping a complete local copy
+
+GitHub is the shared copy, not the only one. Before a demo or at the end of a day, make a bundle with the whole
+history and a plain zip of the working tree; see [CONTRIBUTING](docs/CONTRIBUTING.md#backups-and-restore).
 
 ## Git
 
