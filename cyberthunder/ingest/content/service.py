@@ -163,6 +163,9 @@ class ContentService:
         url = ix.APEX_URL
         if source == "live":
             self._refuse_if_down("content.check", actor)
+            if self.ctx.killswitch.is_engaged():
+                self.audit.append("content.check", actor, {"reason": "kill switch engaged"}, outcome="blocked")
+                raise _ingest_error("the kill switch is engaged; content checks are stopped")
             t0 = time.monotonic()
             try:
                 res = self._fetch_live()
@@ -321,12 +324,32 @@ class ContentService:
                         f["state"] = p["state"]
                     save()
 
+                polled = [0.0]
+
+                def stop() -> str | None:
+                    now = time.monotonic()
+                    if now - polled[0] < 0.5:
+                        return None
+                    polled[0] = now
+                    if self.ctx.killswitch.is_engaged():
+                        return "kill switch engaged"
+                    if not self._link().connected:
+                        return "link went down; pull again when it is back"
+                    return None
+
                 entry = fx.entry_from_item(item)
                 t0 = time.monotonic()
                 try:
                     res = fx.download(self.client, entry, staging, link=self._link(), max_bytes=self.max_bytes,
                                       pace=job["pace"], progress=progress, quarantine_dir=self.store.quarantine_dir,
-                                      timeout=self.timeout)
+                                      timeout=self.timeout, stop=stop)
+                except fx.Stopped as e:
+                    f.update(state="stopped", error=str(e))
+                    job["state"] = "stopped"
+                    self.audit.append("content.fetch", actor, {"url": entry.url, "bytes": f["bytes"],
+                                                               "seconds": round(time.monotonic() - t0, 3)},
+                                      outcome="blocked", subject=entry.filename)
+                    continue
                 except fx.Quarantined as e:
                     f.update(state="quarantined", error=str(e))
                     self.audit.append("content.quarantine", actor, {"url": entry.url, "seconds":

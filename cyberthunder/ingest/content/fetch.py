@@ -54,6 +54,10 @@ class SizeCapExceeded(ContentError):
     pass
 
 
+class Stopped(ContentError):
+    """The caller asked the download to stop (kill switch, link down). The .part is kept for a resume."""
+
+
 class Quarantined(ContentError):
     def __init__(self, msg: str, *, path: Path, filename: str | None = None):
         super().__init__(msg, filename=filename)
@@ -83,8 +87,14 @@ class FetchResult:
 def disk_name(filename: str) -> str:
     """The file name used on disk: basename only, nothing a shell or a path could misread."""
     base = Path(str(filename).replace("\\", "/")).name
-    safe = re.sub(r"[^A-Za-z0-9._+-]+", "_", base).strip("._")
-    return safe[:200] or "download"
+    safe = re.sub(r"[^A-Za-z0-9._+-]+", "_", base).strip("._")[:200] or "download"
+    if safe.split(".", 1)[0].upper() in _WINDOWS_RESERVED:
+        safe = "_" + safe                  # CON.zip, NUL.xml and the like open a device on Windows
+    return safe
+
+
+_WINDOWS_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+                               *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))})
 
 
 # -- integrity ------------------------------------------------------------------------------------
@@ -149,6 +159,8 @@ def check_file(path: str | Path, kind: str | None = None, *, filename: str | Non
                     m = _pick_member(zf)
                 except BenchmarkError as e:
                     raise ValueError(str(e)) from None
+                if m.file_size > MAX_MEMBER_BYTES:
+                    raise ValueError(f"{m.filename} is {m.file_size} bytes uncompressed; refusing")
                 root = _xml_root(zf.read(m))
                 if root != "Benchmark":
                     raise ValueError(f"{m.filename} is not an XCCDF benchmark (root {root})")
@@ -222,8 +234,11 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
              max_bytes: int = DEFAULT_MAX_BYTES, pace: bool = False,
              progress: Callable[[dict], None] | None = None, quarantine_dir: str | Path | None = None,
              retries: int = 2, timeout: float | None = None, expected_sha256: str | None = None,
-             sleep: Callable[[float], None] = time.sleep) -> FetchResult:
-    """Fetch entry.url into dest_dir and verify it. See the module docstring for the steps."""
+             sleep: Callable[[float], None] = time.sleep,
+             stop: Callable[[], str | None] | None = None) -> FetchResult:
+    """Fetch entry.url into dest_dir and verify it. See the module docstring for the steps.
+
+    `stop` is polled between chunks; a non-empty answer ends the download with Stopped and keeps the .part."""
     client = as_client(opener)
     if isinstance(entry, dict):
         entry = Entry.from_dict(entry) if "host" in entry else _entry_from_item(entry)
@@ -287,7 +302,7 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
         _write_meta(meta_p, url, etag, total)
         try:
             n = _get(client, url, part, headers, have=have, total=total, max_bytes=max_bytes, link=link, pace=pace,
-                     report=report, timeout=timeout, sleep=sleep)
+                     report=report, timeout=timeout, sleep=sleep, stop=stop)
             requests += 1
             if n.get("resumed"):
                 resumed = True
@@ -343,7 +358,7 @@ def _write_meta(p: Path, url: str, etag: str | None, total: int | None) -> None:
 
 
 def _get(client: ContentClient, url: str, part: Path, headers: dict, *, have: int, total: int | None, max_bytes: int,
-         link: LinkState | None, pace: bool, report, timeout, sleep) -> dict:
+         link: LinkState | None, pace: bool, report, timeout, sleep, stop=None) -> dict:
     try:
         status, h, resp = client.open("GET", url, headers=headers, timeout=timeout)
     except ContentNetworkError as e:
@@ -394,6 +409,11 @@ def _get(client: ContentClient, url: str, part: Path, headers: dict, *, have: in
                     fh.write(chunk[: max(0, max_bytes - (done - len(chunk)))])
                     raise SizeCapExceeded(f"{url}: more than {max_bytes} bytes")
                 fh.write(chunk)
+                if stop is not None:
+                    why = stop()
+                    if why:
+                        fh.flush()
+                        raise Stopped(f"{url}: stopped after {done} bytes ({why})", resumable=False)
                 if rate:
                     # time already spent, counting the sleeps themselves (a test clock does not advance)
                     spent = max(time.monotonic() - t0, slept)
@@ -431,4 +451,4 @@ def _entry_from_item(item: dict) -> Entry:
 entry_from_item = _entry_from_item
 
 __all__ = ["download", "check_file", "disk_name", "find_datastream", "quarantine", "sha256_file", "FetchResult",
-           "ContentError", "SizeCapExceeded", "Quarantined", "ContentNetworkError", "entry_from_item"]
+           "ContentError", "SizeCapExceeded", "Stopped", "Quarantined", "ContentNetworkError", "entry_from_item"]

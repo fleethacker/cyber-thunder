@@ -81,6 +81,12 @@ class ContentClient:
                                  f"({', '.join(sorted(self.allowed_hosts))})")
         if p.username or p.password:
             raise HostNotAllowed("refusing a URL with embedded credentials")
+        try:
+            port = p.port
+        except ValueError:
+            raise HostNotAllowed(f"refusing {url!r}: the port does not parse") from None
+        if port is not None and port != 443 and host in ALLOWED_HOSTS:
+            raise HostNotAllowed(f"refusing {url!r}: the DoD content hosts are reached on port 443 only")
         return url
 
     # -- requests -------------------------------------------------------------------------------

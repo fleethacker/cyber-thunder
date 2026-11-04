@@ -282,3 +282,9 @@ def test_cli_entry_point_help():
     r = subprocess.run([sys.executable, "-m", "cyberthunder", "ingest", "--help"], capture_output=True, text=True,
                        cwd=str(ROOT), timeout=60)
     assert r.returncode == 0 and "fetch-manifest" in r.stdout and "import-dir" in r.stdout
+
+
+def test_live_check_refused_while_the_kill_switch_is_engaged(node):
+    node.killswitch.engage("it2.smith", "drill")
+    with pytest.raises(IngestError, match="kill switch"):
+        node.ingest.check_updates("it2.smith")

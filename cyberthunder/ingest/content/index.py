@@ -163,7 +163,7 @@ def entry_from_record(rec: dict) -> Entry | None:
     types = [t for t in types if t]
     return Entry(filename=filename, url=link, host=(parts.hostname or "").lower(), title=clean_text(rec.get("FileName")),
                  kind=info["kind"], product_key=info["product_key"], version=info["version"],
-                 version_label=info["version_label"], sunset=any(t.lower() == "sunset" for t in types),
+                 version_label=info["version_label"], sunset=any("sunset" in t.lower() for t in types),
                  upload_date=clean_text(rec.get("UploadDate")) or None, download_types=types,
                  name=clean_text(rec.get("Name")) or None)
 

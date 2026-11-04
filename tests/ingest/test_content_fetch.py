@@ -167,3 +167,31 @@ def test_disk_name_is_safe():
     assert fx.disk_name("U_Splunk_Enterprise_8-x_for Linux_V2R3_STIG.zip") == "U_Splunk_Enterprise_8-x_for_Linux_V2R3_STIG.zip"
     assert fx.disk_name("../../etc/passwd") == "passwd"
     assert fx.disk_name("..\\..\\x.zip") == "x.zip"
+
+
+def test_stop_hook_ends_a_download_and_keeps_the_part(tmp_path, file_server, stig_bytes):
+    url = file_server.add(NAME, stig_bytes)
+    calls = []
+
+    def stop():
+        calls.append(1)
+        return "kill switch engaged" if len(calls) >= 2 else None
+
+    with pytest.raises(fx.Stopped, match="kill switch"):
+        fx.download(loopback_client(), entry(url), tmp_path / "out", sleep=no_sleep, stop=stop)
+    part = tmp_path / "out" / (NAME + ".part")
+    assert 0 < part.stat().st_size < len(stig_bytes)
+    assert not (tmp_path / "out" / NAME).exists()
+
+
+def test_production_client_refuses_other_ports():
+    c = ContentClient(opener=object())
+    c.check_url("https://dl.dod.cyber.mil:443/x.zip")
+    for u in ("https://dl.dod.cyber.mil:8443/x.zip", "https://www.cyber.mil:80/x", "https://www.cyber.mil:abc/"):
+        with pytest.raises(HostNotAllowed):
+            c.check_url(u)
+
+
+def test_disk_name_avoids_windows_device_names():
+    assert fx.disk_name("CON.zip") == "_CON.zip" and fx.disk_name("../nul") == "_nul"
+    assert fx.disk_name("U_RHEL_9_V2R10_STIG.zip") == "U_RHEL_9_V2R10_STIG.zip"

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -110,7 +111,16 @@ class ContentStore:
             self.state.write_json(self.job_path(job["id"]), job)
 
     def load_job(self, job_id: str) -> dict | None:
-        return self.state.read_json(self.job_path(job_id))
+        # The pull thread replaces this file several times a second; on Windows a read that lands on the
+        # replace fails for a moment, so retry briefly instead of answering 500 to a polling client.
+        for attempt in range(20):
+            try:
+                return self.state.read_json(self.job_path(job_id))
+            except (PermissionError, ValueError):
+                if attempt == 19:
+                    raise
+                time.sleep(0.05)
+        return None
 
     def jobs(self) -> list[dict]:
         out = [self.state.read_json(p) for p in self.jobs_dir.glob("*.json")] if self.jobs_dir.is_dir() else []

@@ -62,7 +62,7 @@ no matching entry, sunset release, superseded release, or a file on a host outsi
   `<state>/content/quarantine/` with a `.why.json` note.
 - Nothing downloaded is executed or imported. Zips are opened with `zipfile`; XML is parsed with
   ElementTree; no file name from inside an archive is used as a path.
-- The kill switch stops pulls: a new pull is refused and a running one stops before the next file.
+- The kill switch stops checks and pulls: a new check or pull is refused, and a running pull stops within about half a second, mid-file, keeping the .part so a later pull resumes it. A link that goes down mid-file stops the pull the same way.
 
 ## What is logged
 
