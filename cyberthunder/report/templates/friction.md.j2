@@ -1,0 +1,16 @@
+# Friction log
+
+{{ entries | length }} entries: {% for k, v in counts.items() %}{{ k }} {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
+
+
+{% for e in entries %}
+## {{ e.id }} ({{ e.area }})
+
+- **What:** {{ e.what }}
+- **Impact:** {{ e.impact }}
+- **Workaround:** {{ e.workaround }}
+- **Ask:** {{ e.ask }}
+
+{% endfor %}
+---
+{% if node %}Node {{ node }}. {% endif %}{% if audit_head %}Audit head `{{ audit_head }}`. {% endif %}Source: docs/friction.yaml.

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Friction log</title>
+<style>
+{% include "_style.css.j2" %}
+</style>
+</head>
+<body>
+<h1>Friction log</h1>
+<p class="meta">{{ entries | length }} entries: {% for k, v in counts.items() %}{{ k }} {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+<table>
+<tr><th>ID</th><th>Area</th><th>What</th><th>Impact</th><th>Workaround</th><th>Ask</th></tr>
+{% for e in entries %}
+<tr><td>{{ e.id }}</td><td>{{ e.area }}</td><td>{{ e.what }}</td><td>{{ e.impact }}</td><td>{{ e.workaround }}</td><td>{{ e.ask }}</td></tr>
+{% endfor %}
+</table>
+<div class="foot">{% if node %}Node {{ node }}. {% endif %}{% if audit_head %}Audit head <code>{{ audit_head }}</code>. {% endif %}Source: docs/friction.yaml.</div>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "title": "rhel-01",
+  "id": "11111111-1111-1111-1111-111111111111",
+  "cklb_version": "1.0",
+  "active": true,
+  "mode": 2,
+  "has_path": true,
+  "target_data": {"target_type": "Computing", "host_name": "rhel-01", "ip_address": "10.0.0.5", "comments": "reviewer note"},
+  "stigs": [{
+    "stig_name": "Red Hat Enterprise Linux 9 STIG",
+    "display_name": "Red Hat Enterprise Linux 9",
+    "stig_id": "RHEL_9_STIG",
+    "release_info": "Release: 3",
+    "rules": [
+      {"group_id": "V-257777", "rule_id": "SV-257777r925318_rule", "rule_id_src": "SV-257777r925318_rule", "rule_version": "RHEL-09-255045", "rule_title": "Root login", "severity": "high", "status": "not_reviewed", "finding_details": "", "comments": "reviewer text"},
+      {"group_id": "V-257778", "rule_id": "SV-257778r925319_rule", "rule_id_src": "SV-257778r925319_rule", "rule_version": "RHEL-09-255040", "rule_title": "Empty passwords", "severity": "high", "status": "not_reviewed", "finding_details": "", "comments": ""},
+      {"group_id": "V-999999", "rule_id": "SV-999999r1_rule", "rule_id_src": "SV-999999r1_rule", "rule_version": "RHEL-09-999999", "rule_title": "Untouched rule", "severity": "low", "status": "not_reviewed", "finding_details": "keep", "comments": "keep"}
+    ]
+  }]
+}

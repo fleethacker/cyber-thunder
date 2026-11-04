@@ -1,0 +1,68 @@
+# Cyber Thunder - Commander one-pager
+
+Unit / enclave: **{{ r.node }}** | Date: {{ r.date }} | Scan: `{{ r.scan_id }}` ({{ r.trigger }})
+Audit chain: {% if r.audit.ok %}intact{% else %}**BROKEN: {{ r.audit.detail }}**{% endif %}, {{ r.audit.count }} records, head `{{ r.audit.head }}`
+
+**BLUF.** {% for s in r.bluf %}{{ s }} {% endfor %}
+
+
+## Open findings by host
+
+{% if r.by_host %}
+| Host | CAT I | CAT II | CAT III | Total open | Intrusion indicators |
+|---|---:|---:|---:|---:|---:|
+{% for row in r.by_host %}
+| {{ row.host }} | {{ row.high }} | {{ row.medium }} | {{ row.low }} | {{ row.total }} | {{ row.hunt }} |
+{% endfor %}
+{% else %}
+No open findings.
+{% endif %}
+
+## Intrusion indicators
+
+{% if r.hunt %}
+| Host | Indicator | ATT&CK |
+|---|---|---|
+{% for h in r.hunt %}
+| {{ h.host }} | {{ h.title }} | {{ h.attack | join(", ") or "-" }} |
+{% endfor %}
+{% else %}
+None found by the hunt checks in this scan.
+{% endif %}
+
+## Decisions
+
+Pending {{ r.decisions.proposed }} | Approved {{ r.decisions.approved }} | Applied {{ r.decisions.applied }} | Verified {{ r.decisions.verified }} | Rolled back {{ r.decisions.rolled_back }} | Denied {{ r.decisions.denied }}
+
+{% if r.verified %}
+| Verified change | Host | Approved by | Verified at (UTC) |
+|---|---|---|---|
+{% for v in r.verified %}
+| {{ v.title }} | {{ v.host }} | {{ v.decided_by or "-" }} | {{ v.verified_at or "-" }} |
+{% endfor %}
+{% else %}
+No verified changes yet.
+{% endif %}
+
+## Top risks
+
+{% for t in r.top %}
+{{ loop.index }}. **{{ t.cat }}** {{ t.host }}: {{ t.title }}. {{ t.risk or "No explanation generated yet." }} [{{ t.citations | join(", ") }}]
+{% else %}
+No open findings to rank.
+{% endfor %}
+{% if r.link %}
+
+## Link and outbox
+
+{{ r.link }}
+{% endif %}
+
+## Next actions
+
+{% for a in r.next_actions %}
+- {{ a }}
+{% endfor %}
+
+---
+Reproduce: `{{ r.command }}`

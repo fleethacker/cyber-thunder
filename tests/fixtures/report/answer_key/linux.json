@@ -1,0 +1,12 @@
+{
+  "target": "rhel-01",
+  "items": [
+    {"id": "M1", "kind": "misconfig", "check_id": "RHEL-09-255045", "what": "PermitRootLogin yes", "fix_ref": "ssg:sshd_disable_root_login"},
+    {"id": "M2", "kind": "misconfig", "detector": "openscap", "stig_id": "RHEL-09-255040", "what": "PermitEmptyPasswords yes", "fix_ref": "ssg:sshd_disable_empty_passwords"},
+    {"id": "M3", "kind": "misconfig", "check_id": "RHEL-09-232245", "what": "/etc/shadow mode 0644", "fix_ref": "ssg:file_permissions_etc_shadow"},
+    {"id": "M6", "kind": "misconfig", "detector": "openscap", "stig_id": "RHEL-09-232xxx", "what": "world-writable dir", "fix_ref": "ssg:dir_perms"},
+    {"id": "V1", "kind": "vuln", "check_id": "CVE-2026-1111", "what": "vulnerable openssl", "fix_ref": "pkg:openssl"},
+    {"id": "I1", "kind": "intrusion", "detector": "hunt.accounts", "what": "second uid-0 user", "fix_ref": "hunt:remove_duplicate_uid0"},
+    {"id": "I3", "kind": "intrusion", "check_id": "T1053.003", "what": "cron beacon", "fix_ref": "hunt:remove_cron_entry"}
+  ]
+}

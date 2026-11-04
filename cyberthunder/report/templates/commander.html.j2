@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Commander one-pager - {{ r.node }} - {{ r.scan_id }}</title>
+<style>
+{% include "_style.css.j2" %}
+</style>
+</head>
+<body>
+<h1>Cyber Thunder - Commander one-pager</h1>
+<p class="meta">Unit / enclave: <b>{{ r.node }}</b> | Date: {{ r.date }} | Scan: <code>{{ r.scan_id }}</code> ({{ r.trigger }}) |
+ Audit chain: {% if r.audit.ok %}<span class="ok">intact</span>{% else %}<span class="bad">BROKEN: {{ r.audit.detail }}</span>{% endif %},
+ {{ r.audit.count }} records, head <code>{{ r.audit.head }}</code></p>
+
+<div class="bluf"><b>BLUF.</b> {% for s in r.bluf %}{{ s }} {% endfor %}</div>
+
+<h2>Open findings by host</h2>
+{% if r.by_host %}
+<table>
+<tr><th>Host</th><th class="n">CAT I</th><th class="n">CAT II</th><th class="n">CAT III</th><th class="n">Total open</th><th class="n">Intrusion indicators</th></tr>
+{% for row in r.by_host %}
+<tr><td>{{ row.host }}</td><td class="n">{{ row.high }}</td><td class="n">{{ row.medium }}</td><td class="n">{{ row.low }}</td><td class="n">{{ row.total }}</td><td class="n">{{ row.hunt }}</td></tr>
+{% endfor %}
+</table>
+{% else %}
+<p>No open findings.</p>
+{% endif %}
+
+<h2>Intrusion indicators</h2>
+{% if r.hunt %}
+<table>
+<tr><th>Host</th><th>Indicator</th><th>ATT&amp;CK</th></tr>
+{% for h in r.hunt %}
+<tr><td>{{ h.host }}</td><td>{{ h.title }}</td><td>{{ h.attack | join(", ") or "-" }}</td></tr>
+{% endfor %}
+</table>
+{% else %}
+<p>None found by the hunt checks in this scan.</p>
+{% endif %}
+
+<h2>Decisions</h2>
+<p>Pending {{ r.decisions.proposed }} | Approved {{ r.decisions.approved }} | Applied {{ r.decisions.applied }} |
+ Verified {{ r.decisions.verified }} | Rolled back {{ r.decisions.rolled_back }} | Denied {{ r.decisions.denied }}</p>
+{% if r.verified %}
+<table>
+<tr><th>Verified change</th><th>Host</th><th>Approved by</th><th>Verified at (UTC)</th></tr>
+{% for v in r.verified %}
+<tr><td>{{ v.title }}</td><td>{{ v.host }}</td><td>{{ v.decided_by or "-" }}</td><td>{{ v.verified_at or "-" }}</td></tr>
+{% endfor %}
+</table>
+{% else %}
+<p>No verified changes yet.</p>
+{% endif %}
+
+<h2>Top risks</h2>
+{% if r.top %}
+<ul>
+{% for t in r.top %}
+<li><b>{{ t.cat }}</b> {{ t.host }}: {{ t.title }}. {% if t.risk %}{{ t.risk }}{% else %}<i>No explanation generated yet.</i>{% endif %}
+ [{{ t.citations | join(", ") }}]</li>
+{% endfor %}
+</ul>
+{% else %}
+<p>No open findings to rank.</p>
+{% endif %}
+{% if r.link %}
+<h2>Link and outbox</h2>
+<p>{{ r.link }}</p>
+{% endif %}
+
+<h2>Next actions</h2>
+<ul>
+{% for a in r.next_actions %}
+<li>{{ a }}</li>
+{% endfor %}
+</ul>
+
+<div class="foot">Reproduce: <code>{{ r.command }}</code><br>
+Every claim above comes from scanner output, the approval log or the audit chain. No change is made without a named human approving it.</div>
+</body>
+</html>
