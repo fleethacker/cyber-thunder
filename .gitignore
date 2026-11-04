@@ -48,3 +48,7 @@ ssg-*-ds.xml
 node_modules/
 cyberthunder/ui/.vite/
 cyberthunder/ui/*.local
+
+# UDS deployment outputs
+.build/
+*.tar.zst

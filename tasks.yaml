@@ -1,0 +1,37 @@
+tasks:
+  - name: package
+    description: Validate and build the Podinfo package.
+    actions:
+      - description: Create the build directory.
+        cmd: mkdir -p .build
+      - description: Validate the Podinfo package.
+        cmd: uds zarf dev lint packages/podinfo
+      - description: Build the Podinfo package.
+        cmd: uds zarf package create packages/podinfo --architecture ${UDS_ARCH} --output .build --confirm
+  - name: build
+    description: Build the Podinfo package and the combined k3d demo bundle.
+    actions:
+      - task: package
+      - description: Validate the development identity package.
+        cmd: uds zarf dev lint packages/identity-bootstrap
+      - description: Build the development identity package.
+        cmd: uds zarf package create packages/identity-bootstrap --architecture ${UDS_ARCH} --output .build --confirm
+      - description: Build the k3d, init, Core, and Podinfo bundle.
+        cmd: uds create bundles/k3d-demo --architecture ${UDS_ARCH} --output .build --confirm
+
+  - name: build-existing
+    description: Build Core and Podinfo for an existing Kubernetes cluster.
+    actions:
+      - task: package
+      - description: Build the init, Core, and Podinfo bundle.
+        cmd: uds create bundles/existing-cluster --architecture ${UDS_ARCH} --output .build --confirm
+
+  - name: deploy
+    description: Build, deploy, and verify a new cyber-thunder cluster.
+    actions:
+      - cmd: ./deploy.sh
+
+  - name: verify
+    description: Verify the existing cyber-thunder deployment.
+    actions:
+      - cmd: ./scripts/verify.sh
