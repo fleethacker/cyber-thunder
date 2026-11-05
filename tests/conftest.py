@@ -18,6 +18,26 @@ def fixtures_dir() -> Path:
     return FIXTURES
 
 
+@pytest.fixture(autouse=True)
+def _explanation_worker_lifecycle(monkeypatch, request):
+    """Attribute leaked explanation workers to their owning test and stop them before the next test."""
+    from cyberthunder.explain.worker import ExplainWorker
+
+    created = []
+    original = ExplainWorker.__init__
+
+    def track(worker, *args, **kwargs):
+        original(worker, *args, **kwargs)
+        created.append(worker)
+
+    monkeypatch.setattr(ExplainWorker, "__init__", track)
+    yield
+    leaked = [worker for worker in created if worker.alive]
+    for worker in leaked:
+        worker.stop(timeout=5)
+    assert not leaked, f"{request.node.nodeid} left {len(leaked)} explanation worker(s) running; shut them down explicitly"
+
+
 # Every test that takes a state directory runs once per document backend (json files, sqlite); the backend
 # reaches AppContext, StateStore and CLI subprocesses through CT_STATE_BACKEND. CT_STATE_BACKENDS=json narrows
 # a local run to one backend; the gate runs both.

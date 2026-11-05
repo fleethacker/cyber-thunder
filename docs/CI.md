@@ -46,6 +46,8 @@ skips are acceptable. Another test cannot consume an unused allowance.
 Unhandled background thread exceptions fail both ordinary pytest and the CI
 runner. Scan tests that do not exercise explanations disable precomputation;
 worker tests explicitly start, wait for, and stop their workers.
+The shared fixture also fails the test that leaves an explanation worker running
+and stops that worker before later tests install their own network guards.
 
 New skips, changed reasons, duplicate skips, teardown skips, xfail/xpass,
 deselection and collection skips fail the job. Files matching pytest's normal

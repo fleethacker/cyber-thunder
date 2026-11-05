@@ -245,4 +245,4 @@ def make_ctx(state_dir):
     from cyberthunder.config import Settings
     from cyberthunder.context import AppContext
     state_dir.mkdir(parents=True, exist_ok=True)
-    return AppContext(Settings.from_env(state_dir=str(state_dir)))
+    return AppContext(Settings.from_env(state_dir=str(state_dir), explain_precompute=False, llm_backend="template"))

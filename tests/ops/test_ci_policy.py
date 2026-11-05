@@ -86,6 +86,24 @@ def test_background():
     assert "background work failed" in result.stdout
 
 
+def test_leaked_explanation_worker_fails_its_own_test(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
+    result, report = run_suite(tmp_path, {
+        "tests/test_backends.py": "def test_backend(state_dir):\n    assert state_dir.is_dir()\n",
+        "tests/test_worker.py": '''from cyberthunder.explain.worker import ExplainWorker
+from cyberthunder.findings.schema import Finding
+def test_leaked_worker(state_dir):
+    worker = ExplainWorker(lambda finding: None)
+    worker.submit(Finding(host="fixture", source="test", rule_id="rule", title="test", severity="low", status="open"))
+    assert worker.wait_idle(timeout=2)
+''',
+    }, conftest=(ROOT / "tests/conftest.py").read_text(encoding="utf-8"))
+    assert result.returncode == report["exit_code"] == 1, result.stdout + result.stderr
+    assert report["outcomes"]["teardown:failed"] == 2
+    assert "test_leaked_worker[json] left 1 explanation worker(s) running" in result.stdout
+    assert "test_leaked_worker[sqlite] left 1 explanation worker(s) running" in result.stdout
+
+
 @pytest.mark.parametrize("source, diagnostic", [
     ("import pytest\n@pytest.mark.skip(reason='new dependency')\ndef test_new(): pass\n", "Unexpected skip"),
     ("import pytest\npytest.skip('module unavailable', allow_module_level=True)\n", "Collection skipped"),
