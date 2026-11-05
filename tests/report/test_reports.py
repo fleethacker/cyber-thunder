@@ -293,7 +293,10 @@ def test_friction_log(node, fmt):
 def test_friction_yaml_is_valid():
     from cyberthunder.report.friction import AREAS, load_friction
     entries = load_friction(None)
-    assert len(entries) == 8 and {e["area"] for e in entries} <= set(AREAS)
+    ids = [e["id"] for e in entries]
+    assert len(ids) == len(set(ids))
+    assert {"F9", "F10", "F11"} <= set(ids)  # identity, offline policy and range access gaps
+    assert {e["area"] for e in entries} <= set(AREAS)
 
 
 def test_site_docs_override_repo_docs(node):

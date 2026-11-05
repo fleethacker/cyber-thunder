@@ -117,7 +117,7 @@ If `docs/friction.yaml` is not yet present on the branch, collect the entries fi
 
 | Requirement | Answer |
 |---|---|
-| Runs offline | Yes; the only model is local; the UI is served from the bundle with no external requests |
+| Runs offline | Local-model or template mode is available and the UI is bundled. PR #20 also adds an optional cloud-generated cluster description; leave that option disabled for disconnected operation |
 | Humans keep authority | Approval gate on every change |
 | Cites sources | Every finding and explanation cites STIG, CCI, CVE, IAVM or ATT&CK identifiers |
 | Auditable actions | Hash-chained log |

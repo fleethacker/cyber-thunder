@@ -255,5 +255,3 @@ def build_coverage(ctx, benchmark_dir: str | None = None) -> dict:
             "benchmarks": benchmark_rows(documents, [c for c in catalogs if c.asset_type in loaded], entries),
             "fix_library": inventories, "library_entries": sum(i["entries"] for i in inventories),
             "errors": errors}
-
-
