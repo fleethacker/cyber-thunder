@@ -23,8 +23,15 @@ python3 -m http.server 8790 --bind 127.0.0.1 --directory showcase/fleethacker-de
 Open <http://127.0.0.1:8790>. Select **Start briefing** for presentation mode. Left and right arrow keys
 navigate the slides; Escape closes the briefing. The workflow tabs also support arrow-key navigation.
 
-Changes to `dist/` do not automatically update the embedded standalone HTML. Re-export that file when
-changing the presentation or its assets.
+After changing `dist/` or its assets, regenerate the standalone HTML and offline ZIP from the repository
+root:
+
+```bash
+python3 showcase/fleethacker-demo/tools/export-demo.py
+```
+
+The export embeds each image once, including the supplied CyberThunder branding, and includes the original
+screenshots and artwork in the ZIP. ZIP archives remain local build outputs.
 
 ## Screenshot provenance
 
