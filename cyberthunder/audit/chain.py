@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Iterator
 
 from cyberthunder.findings.schema import utcnow
+from cyberthunder.state.json_files import replace_file
 
 GENESIS = "0" * 64
 
@@ -181,7 +182,7 @@ class AuditLog:
         hp = head_path(self.path)
         tmp = hp.with_name(hp.name + ".tmp")
         tmp.write_text(json.dumps({"seq": rec["seq"], "hash": rec["hash"], "ts": rec["ts"]}), encoding="utf-8")
-        tmp.replace(hp)
+        replace_file(tmp, hp)              # a verifier may be reading the checkpoint at this moment (Windows)
 
     # -- verification --------------------------------------------------------
     def verify(self) -> VerifyResult:

@@ -13,6 +13,7 @@ Nothing is ever executed from PROPOSED. The agent/LLM can only create proposals;
 from __future__ import annotations
 
 import json
+import os
 import threading
 import uuid
 from contextlib import contextmanager
@@ -25,6 +26,7 @@ from cyberthunder.control.identity import (MACHINE_ACTORS, POLICY_PREFIX, is_mac
                                            normalize_actor, require_human)
 from cyberthunder.control.killswitch import KillSwitch
 from cyberthunder.findings.schema import utcnow
+from cyberthunder.state.json_files import replace_file
 
 
 class ProposalState(str, Enum):
@@ -52,6 +54,7 @@ TRANSITIONS: dict[ProposalState, set[ProposalState]] = {
 }
 GUARDED = {ProposalState.APPLYING, ProposalState.ROLLED_BACK}      # edges that touch host state
 HUMAN_ONLY = {ProposalState.APPROVED, ProposalState.DENIED}         # edges only a human may take
+TERMINAL = {"denied", "cancelled", "verified", "rolled_back"}      # states that end a proposal's life
 AGENT_ACTORS = set(MACHINE_ACTORS)       # bare machine names; identity.require_human is the full check
 EDGE_OUTCOME = {ProposalState.FAILED: "failed", ProposalState.ROLLED_BACK: "reverted"}
 
@@ -150,10 +153,10 @@ class ApprovalGate:
 
     def _save(self, items: list[Proposal] | None = None) -> None:
         self.store.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.store.with_suffix(".tmp")
+        tmp = self.store.with_name(f"{self.store.name}.{os.getpid()}.tmp")   # never shared with another process
         rows = [p.to_dict() for p in (items if items is not None else self._items.values())]
         tmp.write_text(json.dumps(rows, indent=2), encoding="utf-8")
-        tmp.replace(self.store)
+        replace_file(tmp, self.store)      # another process may be reading the file at this moment (Windows)
         self._sig = self._file_sig()
 
     def get(self, pid: str) -> Proposal:
@@ -167,10 +170,19 @@ class ApprovalGate:
             return [p for p in self._items.values() if state is None or p.state == state]
 
     # -- lifecycle -----------------------------------------------------------
-    def propose(self, *, actor: str = "agent", meta: dict | None = None, **kwargs) -> Proposal:
+    def propose(self, *, actor: str = "agent", meta: dict | None = None, one_live_per_finding: bool = False,
+                **kwargs) -> Proposal:
         """Create a proposal. `meta` (risk tags, severity, asset type) rides in the first history entry and
-        in the audit record so the approver's view and the log carry the same facts."""
+        in the audit record so the approver's view and the log carry the same facts. With
+        `one_live_per_finding`, a proposal that is still live for the same finding is returned instead of a
+        second one being created; the check runs under the cross-process lock, so two workers proposing for
+        the same finding at the same moment end up with one proposal between them."""
         with self._locked():
+            if one_live_per_finding and kwargs.get("finding_id"):
+                live = [p for p in self._items.values()
+                        if p.finding_id == kwargs["finding_id"] and p.state.value not in TERMINAL]
+                if live:
+                    return live[-1]
             p = Proposal(**kwargs)
             entry = {"ts": p.created_at, "state": p.state.value, "actor": actor, "note": None}
             if meta:
