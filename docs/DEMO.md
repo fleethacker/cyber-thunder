@@ -230,6 +230,49 @@ python -m cyberthunder report commander
 Say: "Risk in terms a commander and a system owner can act on. Reports queue offline and sync when the link
 returns. The one-page path to fleet names the owner and the 30, 60, 90, 180 day plan."
 
+## Demonstrating against the real VM range
+
+Everything above runs against the simulated range (the default; the header badge reads `simulated`). To put
+the same demo on the real Rocky 9 VM, build and seed it first ([range/README.md](../range/README.md) and
+[range/vmware/README.md](../range/vmware/README.md)), then:
+
+1. Revert the VM to its seeded state and boot it headless:
+
+```bash
+vmrun -T ws revertToSnapshot C:\VM\acd-target-01\acd-target-01.vmx seeded
+```
+
+```bash
+vmrun -T ws start C:\VM\acd-target-01\acd-target-01.vmx nogui
+```
+
+2. In a scratch `CT_STATE_DIR`, register the three real targets (the exact `targets add` commands are under
+   [First real-host run](../range/README.md#first-real-host-run-from-the-laptop)), then start the server:
+
+```bash
+python -m cyberthunder serve
+```
+
+Open <http://127.0.0.1:8000>. The inventory now lists `acd-target-01`, `acd-containers` and `acd-k3s` with
+no `simulated` badge; the chain, link and model badges in the header are the same as in the simulated demo.
+
+What differs from the script above (the panels and the talking points are otherwise identical):
+
+- **Step 3, scan.** The Linux target runs real OpenSCAP on the VM, so the scan takes a few minutes rather
+  than seconds; Findings fill in the same way. On the Reports page the detection score reads 28 of 28 across
+  the three built targets (Linux 12, containers 6, Kubernetes 10).
+- **Step 2, discovery.** The sweep is simulated by default. On the enclave, add the VM's subnet as a scope
+  and sweep it for a real rogue-device story, or keep the simulated sweep.
+- **Steps 6-8, apply / verify / rollback.** These run over SSH on the real host: the before-state is captured
+  and restored on the VM, and `audit verify` covers the real changes. The forced-failure control and the
+  kill switch behave exactly as in the simulated run.
+- **Link throttling is real here.** `sudo bash range/link_emulate.sh on 56 500` shapes the VM's NIC with
+  `tc`/`netem`; set the same numbers in Cyber Thunder so its reported sizes and times match the wire
+  ([range/README.md](../range/README.md#low-bandwidth-link-emulation)).
+
+Between rehearsals, revert the VM to `seeded` again and reset the laptop side by pointing `CT_STATE_DIR` at a
+fresh directory.
+
 ## Reset procedure
 
 Between rehearsals, and after step 10 (the audit file was edited, so that state is not trustworthy):
