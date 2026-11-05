@@ -58,8 +58,10 @@ To inspect a particular directory instead of those default sources:
 python -m cyberthunder report coverage --benchmark-dir /path/to/xml-content --format html
 ```
 
-The override is CLI-only. The HTTP endpoint cannot select arbitrary filesystem
-paths. Import/extract ZIP files through the existing Content updates workflow;
+The override is CLI-only and cannot be combined with `--queue`; use `--out` to
+export selected content. Queued coverage reports use the node's default content
+sources. The HTTP endpoint cannot select arbitrary filesystem paths.
+Import/extract ZIP files through the existing Content updates workflow;
 coverage reads XML, deduplicates identical files by SHA-256 and lists unreadable
 or malformed sources as errors. Different releases remain separate. A manual
 benchmark borrows SCAP eligibility only from a matching benchmark ID and release.

@@ -32,6 +32,8 @@ def _emit(text: str, out: str | None) -> None:
 
 def cmd_report(a: argparse.Namespace) -> int:
     try:
+        if a.kind == "coverage" and a.queue and a.benchmark_dir:
+            raise ReportError("coverage: --benchmark-dir cannot be combined with --queue; use --out to export selected content")
         svc = _service(a)
         kind = a.kind
         if a.queue:

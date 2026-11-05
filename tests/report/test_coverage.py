@@ -190,3 +190,13 @@ def test_generated_validation_matrix_and_readme_agree():
     result = subprocess.run([sys.executable, "scripts/validation_status.py", "--check"],
                             cwd=ROOT, text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_custom_content_is_not_silently_replaced_when_queueing(tmp_path):
+    state = tmp_path / "state"
+    result = subprocess.run([sys.executable, "-m", "cyberthunder", "--state-dir", str(state),
+                             "report", "coverage", "--queue", "--benchmark-dir", str(tmp_path)],
+                            cwd=ROOT, text=True, capture_output=True, timeout=60)
+    assert result.returncode == 2
+    assert "use --out" in result.stderr
+    assert not (state / "outbox").exists()
