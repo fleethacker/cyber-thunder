@@ -61,7 +61,16 @@ the upload envelope is 413; storage unavailability is 503. The existing actor de
 missing or reserved actor headers. JSON server-path requests and unknown or duplicate multipart fields
 are rejected. Uploads never cause arbitrary server-path reads or persist an original upload in state.
 
-Use the returned scan ID with existing readers:
+Default readers show the current picture: the latest full baseline plus newer partial imports, preserving
+unrelated baseline findings and hosts. Import-only nodes also retain earlier observations as described below.
+
+```text
+GET /api/v1/findings
+GET /api/v1/reports/poam.csv
+GET /api/v1/reports/commander?format=md
+```
+
+Use an explicit scan ID to read that historical run alone:
 
 ```text
 GET /api/v1/scans/<scan_id>
@@ -69,6 +78,15 @@ GET /api/v1/findings?scan_id=<scan_id>
 GET /api/v1/reports/poam.csv?scan_id=<scan_id>
 GET /api/v1/reports/commander?format=md&scan_id=<scan_id>
 ```
+
+The findings response labels these modes with `view: "current"` or `view: "scan"`. For compatibility,
+the top-level `scan_id` in the default response remains the baseline anchor returned by `latest_scan_id()`;
+it does not claim that every finding came from that run. Each finding retains its actual producing
+`scan_id`. With an explicit scan ID, the top-level ID identifies exactly the requested historical run.
+Report scan labels and baseline run metadata likewise identify the anchor for the current picture;
+explicit-ID reports restrict their findings to that one run. Omit `--scan-id` for current CLI reports;
+passing the displayed baseline ID selects its historical findings. The command printed in a default
+commander report likewise omits `--scan-id`, so it regenerates the current view.
 
 ## Overlay, provenance and repeat policy
 
@@ -119,12 +137,6 @@ source host names, scanner policy credentials or plugin output. Parser and file 
 
 ## Shared interface needs and current limits
 
-- Default readers currently bypass overlays: `api/util.py:list_findings` and
-  `report/onepager.py:resolve_scan` turn an omitted scan ID into `latest_scan_id()` and then call
-  `load_findings(sid)`. After a full baseline exists, this reads only the full run. Their owners need to
-  call `load_findings()` when no scan ID was supplied, retaining `load_findings(scan_id)` for explicit
-  history requests. Until that change lands, use the returned import `scan_id` to view imported results
-  through those endpoints. On an import-only node the default views already show the imported picture.
 - Persistence uses public `save_findings`, `save_scan_run`, `load_scan_run`, `list_scan_runs`, and
   `load_findings` methods, so scan documents can live in either backend. No new metadata JSON path is
   assumed to be routed into SQLite. The import lock and temporary parser file remain ordinary files.

@@ -1,6 +1,8 @@
 """Real import service and existing findings/report routes, using fixture input only."""
 from __future__ import annotations
 
+import csv
+import io
 import json
 from pathlib import Path
 from unittest.mock import Mock
@@ -54,7 +56,7 @@ def upload(client, data=None, mapping=None, headers=None, **extra):
 
 def seed_full(ctx):
     finding = Finding(host="other", source="hunt", rule_id="prior-observation", title="Existing risk",
-                      severity="high", status="open")
+                      severity="high", status="open", scan_id="baseline")
     ctx.store.save_findings("baseline", [finding])
     ctx.store.save_scan_run(ScanRun(id="baseline", targets=["other"], status="done",
                                    started_at="2020-01-01T00:00:00+00:00").to_dict())
@@ -96,18 +98,48 @@ def test_fixture_import_visible_in_existing_findings_and_reports(scanner_client,
     assert not (ctx.store.ingest_dir / "uploads").exists()
 
 
-def test_existing_full_picture_is_preserved_and_named_import_is_readable(scanner_client, ctx):
+def test_default_findings_and_reports_overlay_import_and_preserve_explicit_history(scanner_client, ctx):
     prior = seed_full(ctx)
+    baseline_run = ctx.store.load_scan_run("baseline")
+    baseline_findings = [f.to_dict() for f in ctx.store.load_findings("baseline")]
     response = upload(scanner_client)
     assert response.status_code == 200
     sid = response.json()["scan_id"]
-    current = ctx.store.current_findings()
-    assert len(current) == 6 and prior.id in {f.id for f in current}
-    named = scanner_client.get("/api/v1/findings", params={"scan_id": sid}).json()
-    assert named["total"] == 5
-    report = scanner_client.get("/api/v1/reports/poam.csv", params={"scan_id": sid})
-    assert report.status_code == 200 and "CVE-2017-0144" in report.text
-    assert ctx.store.load_findings("baseline")[0].id == prior.id
+    imported = ctx.store.load_findings(sid)
+    imported_ids = {f.id for f in imported}
+    current_ids = imported_ids | {prior.id}
+    for params, expected_ids, anchor, view in (
+        ({}, current_ids, "baseline", "current"),
+        ({"scan_id": "baseline"}, {prior.id}, "baseline", "scan"),
+        ({"scan_id": sid}, imported_ids, sid, "scan"),
+    ):
+        found = scanner_client.get("/api/v1/findings", params=params)
+        assert found.status_code == 200
+        body = found.json()
+        assert body["scan_id"] == anchor and body["view"] == view
+        assert body["total"] == body["summary"]["total"] == len(expected_ids)
+        assert {f["id"] for f in body["findings"]} == expected_ids
+        for f in body["findings"]:
+            assert f["scan_id"] == ("baseline" if f["id"] == prior.id else sid)
+        report = scanner_client.get("/api/v1/reports/poam.csv", params=params)
+        assert report.status_code == 200
+        rows = list(csv.DictReader(io.StringIO(report.text)))
+        assert {row["Finding ID"] for row in rows} == expected_ids
+        assert {row["Host"] for row in rows} == {f["host"] for f in body["findings"]}
+        assert ("CVE-2017-0144" in report.text) == bool(imported_ids & expected_ids)
+        for fmt in ("md", "html"):
+            commander = scanner_client.get("/api/v1/reports/commander", params=dict(params, format=fmt))
+            assert commander.status_code == 200
+            assert f"{len(expected_ids)} open finding(s)" in commander.text
+            assert ("Existing risk" in commander.text) == (prior.id in expected_ids)
+            assert ("workstation" in commander.text) == bool(imported_ids & expected_ids)
+            assert ("--scan-id" in commander.text) == bool(params)
+    filtered = scanner_client.get("/api/v1/findings", params={"source": "acas", "limit": 2}).json()
+    assert filtered["view"] == "current" and filtered["total"] == 5 and len(filtered["findings"]) == 2
+    assert filtered["summary"]["total"] == 6
+    assert set(filtered["summary"]["hosts"]) == {"other", "server", "workstation"}
+    assert ctx.store.load_scan_run("baseline") == baseline_run
+    assert [f.to_dict() for f in ctx.store.load_findings("baseline")] == baseline_findings
 
 
 def test_repeat_upload_is_idempotent_with_different_filename(scanner_client, ctx):
