@@ -8,8 +8,8 @@ serves it with the Python API on port 8000. It runs as UID/GID 10001.
 With a running Docker daemon, replace the example registry with yours:
 
 ```sh
-docker build -t registry.example.com/team/cyberthunder:0.2.1 .
-docker push registry.example.com/team/cyberthunder:0.2.1
+docker build -t registry.example.com/team/cyberthunder:0.2.2 .
+docker push registry.example.com/team/cyberthunder:0.2.2
 ```
 
 Change `image` in `deploy/kubernetes/cyberthunder.yaml` to that published image.
@@ -20,8 +20,8 @@ reference it in the pod specification. Build for the cluster node architecture
 For a local k3d cluster, you can instead use:
 
 ```sh
-docker build -t cyberthunder:0.2.1 .
-k3d image import cyberthunder:0.2.1 -c cyber-thunder
+docker build -t cyberthunder:0.2.2 .
+k3d image import cyberthunder:0.2.2 -c cyber-thunder
 ```
 
 ## Deploy and open
@@ -39,8 +39,9 @@ kubectl -n cyberthunder port-forward service/cyberthunder 8000:80
 Open http://localhost:8000 (API status: `/api/v1/status`, docs: `/api/docs`).
 The Service is internal. Add your cluster's authenticated TLS ingress before
 exposing it to other users; these manifests do not configure authentication.
-For a UDS cluster, configure a UDS Package for ingress and permitted network
-traffic separately; these manifests are independent of the existing UDS bundle.
+For a UDS cluster, deploy the [Cyber Thunder Zarf package](../../packages/cyberthunder/README.md)
+instead. It includes authenticated ingress at `https://cyberthunder.<domain>`
+with Keycloak SSO and access restricted to `/UDS Core/Admin`.
 
 ## State and configuration
 
