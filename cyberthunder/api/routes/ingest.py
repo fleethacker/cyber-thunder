@@ -1,4 +1,4 @@
-"""Ingest over the constrained link (STIG release deltas, IAVM/CVE bulletins), link emulation and the
+"""Ingest over the constrained link (STIG release deltas, IAVM/CVE bulletins), link controls and the
 sync-on-reconnect outbox. The work is done by ctx.ingest; these routes validate input and shape output.
 
 Uploads are read with a small standard-library multipart reader (no extra dependency) and saved under
@@ -97,18 +97,18 @@ async def _read_upload(request: Request, ctx, *, json_ok: bool) -> tuple[Path | 
 # -- link -------------------------------------------------------------------------------------
 @router.get("/ingest/link")
 def get_link(ctx=CtxDep) -> dict:
-    svc = _svc(ctx, "link emulation")
-    with feature("link emulation"):
+    svc = _svc(ctx, "link controls")
+    with feature("link controls"):
         return to_plain(call_first(svc, ("link_state", "get_link", "link")))
 
 
 @router.put("/ingest/link")
 def put_link(body: LinkBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
-    svc = _svc(ctx, "link emulation")
+    svc = _svc(ctx, "link controls")
     changes = body.model_dump(exclude_none=True)
     if not changes:
-        raise ValueError("nothing to change: send kbps, latency_ms or connected")
-    with feature("link emulation"):
+        raise ValueError("nothing to change: send an explicit link control")
+    with feature("link controls"):
         fn = getattr(svc, "set_link", None) or getattr(svc, "update_link", None)
         if fn is None:
             raise NotImplementedError
@@ -116,6 +116,11 @@ def put_link(body: LinkBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
         if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
             return to_plain(fn(actor=actor, **changes))        # IngestService.set_link(*, actor, **changes)
         return to_plain(fn(changes, actor=actor))              # positional-changes style
+
+
+@router.post("/ingest/link/probe")
+def probe_link(ctx=CtxDep, actor: str = ActorDep) -> dict:
+    return _svc(ctx).link.probe(actor=actor)
 
 
 # -- STIG release deltas ---------------------------------------------------------------------------
@@ -205,6 +210,8 @@ def outbox(ctx=CtxDep) -> dict:
         for key in ("pending", "synced"):
             out[key] = [_outbox_entry(e) for e in (out.get(key) or [])]
         out["connected"] = bool(util.link_state(ctx).get("connected", False))
+        out["link"] = util.link_state(ctx)
+        out["transfer_kind"] = "local_move"
         return out
 
 
@@ -214,7 +221,9 @@ def _outbox_entry(e: Any) -> Any:
         return e
     e = dict(e)
     e.setdefault("created_at", e.get("enqueued_at"))
-    e.setdefault("seconds", e.get("transfer_seconds"))
+    e["seconds"] = None  # Historical model estimates were never measured transfers.
+    e.setdefault("test_estimate_seconds", e.get("transfer_seconds"))
+    e.setdefault("transfer_kind", "legacy_local_move")
     e.setdefault("synced_at", None)
     e.setdefault("id", e.get("name"))
     return e

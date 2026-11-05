@@ -86,8 +86,6 @@ def _link_line(ctx: "AppContext") -> str | None:
                 break
             st = None
         st = st or {}
-        kbps = st.get("kbps", ctx.settings.link_kbps)
-        connected = st.get("connected", ctx.settings.link_connected)
         waiting = None
         ob = getattr(ing, "outbox", None)
         for name in ("pending", "list"):
@@ -98,9 +96,16 @@ def _link_line(ctx: "AppContext") -> str | None:
                 break
         if waiting is None:
             waiting = len([p for p in ctx.store.outbox_dir.iterdir() if p.is_file()])
-        state = "connected" if connected else "disconnected"
-        return (f"Link {state} at {kbps:g} kbps. Outbox: {waiting} item(s) waiting to sync"
-                f"{' (will send on reconnect)' if not connected and waiting else ''}.")
+        state = st.get("reachability", "unknown")
+        rate = st.get("observed_kbps")
+        rate_text = f"Observed application rate {rate:g} kbps" if rate is not None else "Observed application rate unknown"
+        observed = st.get("rate_observation")
+        if observed and rate is not None:
+            rate_text += f" from {observed['endpoint']} at {observed['at']}"
+        if st.get("mode") == "test":
+            rate_text = f"TEST estimate: {st.get('kbps')} kbps, {st.get('latency_ms')} ms configured delay"
+        return (f"Link: {state}. {rate_text}; physical bandwidth and latency unknown. "
+                f"Outbox: {waiting} item(s) queued for local staging; network delivery is not implemented.")
     except Exception as e:  # noqa: BLE001  - a broken link module must not stop the report
         return f"Link and outbox status unavailable: {e}"
 

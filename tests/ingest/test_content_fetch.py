@@ -37,7 +37,7 @@ def no_sleep(_s):
 def test_full_download_with_estimate_and_progress(tmp_path, file_server, stig_bytes):
     url = file_server.add(NAME, stig_bytes)
     seen = []
-    link = LinkState(kbps=56.0, latency_ms=500)
+    link = LinkState(mode="test", kbps=56.0, latency_ms=500)
     res = fx.download(loopback_client(), entry(url), tmp_path / "out", link=link, progress=seen.append, sleep=no_sleep)
     out = tmp_path / "out" / NAME
     assert out.read_bytes() == stig_bytes and res.bytes == len(stig_bytes)
@@ -157,7 +157,7 @@ def test_scap_benchmark_checked_for_a_datastream(tmp_path, file_server):
 def test_pace_sleeps_to_the_link_rate(tmp_path, file_server, stig_bytes):
     url = file_server.add(NAME, stig_bytes)
     slept = []
-    fx.download(loopback_client(), entry(url), tmp_path / "out", link=LinkState(kbps=8000.0, latency_ms=0), pace=True,
+    fx.download(loopback_client(), entry(url), tmp_path / "out", link=LinkState(mode="test", kbps=8000.0, latency_ms=0), pace=True,
                 sleep=slept.append)
     # 8000 kbps = 1 MB/s; the whole file should be held to roughly its size in seconds
     assert sum(slept) == pytest.approx(len(stig_bytes) / 1_000_000, rel=0.5)

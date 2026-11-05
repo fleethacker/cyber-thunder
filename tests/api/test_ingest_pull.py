@@ -63,7 +63,7 @@ def test_updates_before_any_check(api):
     body = r.json()
     assert body["checked_at"] is None
     assert {r["filename"] for r in body["updates"]} == {STIG, SCAP}
-    assert body["index_estimate"]["seconds"] > 0 and body["connected"] is True
+    assert body["index_estimate"]["seconds"] is None and body["connected"] is True
 
 
 def test_check_pull_job_content(api, ctx):

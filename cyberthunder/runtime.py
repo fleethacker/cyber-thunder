@@ -73,6 +73,15 @@ class RuntimeTasks:
         bootstrap_cluster_target(self.ctx)
         self._start_interval("content-updates", self.ctx.settings.content_check_interval_s, self._check_content)
         self._start_interval("scan", self.ctx.settings.scan_interval_s, self._scan_inventory)
+        self._start_interval("link-probe", 5, self._probe_link)
+
+    def _probe_link(self) -> None:
+        ingest = getattr(self.ctx, "ingest", None)
+        if ingest is not None:
+            state = ingest.link.state()
+            if (state.probe_enabled and not self.ctx.killswitch.is_engaged() and not state.offline_override
+                    and not (state.mode == "test" and not state.test_connected)):
+                ingest.link.probe(actor=self.ctx.settings.scheduler_actor, background=True)
 
     def stop(self) -> None:
         self._stop.set()

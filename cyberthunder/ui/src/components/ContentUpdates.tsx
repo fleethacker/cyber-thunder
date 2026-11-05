@@ -1,6 +1,7 @@
 import { Accordion, Alert, Badge, Button, Checkbox, FileInput, Group, Paper, Progress, Stack, Switch, Table, Text, TextInput } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useEffect, useRef, useState } from 'react';
+import { linkLabel } from '../lib/linkPresentation';
 import { api, errorText } from '../api/client';
 import type { ContentUploadResult, ImportDirResult, PullDelta, PullJob, StigLibrary } from '../api/types';
 import { fmtBytes, fmtSeconds, fmtZonedTime } from '../lib/format';
@@ -53,7 +54,7 @@ function JobProgress({ job }: { job: PullJob }) {
             {f.datastream_path && <Text size="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>Datastream: {f.datastream_path}</Text>}</Table.Td>
           <Table.Td miw={160}><Progress value={pct} size="sm" color={STATE_COLOR[f.state]} animated={f.state === 'downloading'} aria-label={`${f.filename} transfer progress`} />
             <Text size="xs" mt={4}>{fmtBytes(f.bytes)} / {fmtBytes(f.total)}</Text>
-            {!!f.estimate_seconds && <Text size="xs" c="dimmed">About {fmtSeconds(f.estimate_seconds)} at the link rate</Text>}</Table.Td>
+            {!!f.estimate_seconds && <Text size="xs" c="dimmed">Test estimate: {fmtSeconds(f.estimate_seconds)} at the configured test rate</Text>}</Table.Td>
           <Table.Td><Badge size="xs" color={STATE_COLOR[f.state]} variant="light">{f.state}</Badge></Table.Td>
         </Table.Tr>;
       }} />
@@ -151,7 +152,7 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh }: {
     {error && <ErrorBox error={error} />}
     <Paper withBorder p="md" radius="md">
       <Stack gap="sm">
-        <Group justify="space-between"><Text fw={700}>Matching updates ({updates.length})</Text><Badge variant="light" color={connected ? 'teal' : 'orange'}>{connected ? 'Link connected' : 'Link disconnected'}</Badge></Group>
+        <Group justify="space-between"><Text fw={700}>Matching updates ({updates.length})</Text><Badge variant="light" color={connected ? 'teal' : 'orange'}>{linkLabel(status?.link)}</Badge></Group>
         <Text size="sm" c="dimmed">Based on saved products and types in the {library.catalog.source === 'snapshot' ? 'snapshot' : 'last live index'}. Select files explicitly to download.</Text>
         <LibraryTable rows={updates} label="matching updates" empty={library.selection.wanted.length ? 'No newer releases are listed for your saved selections. This does not establish freshness beyond the index shown above.' : 'No files match your saved selections. Choose products and content types in Update selections.'}
           searchText={(r) => `${r.filename} ${r.product_key} ${r.version_label} ${kindLabel(r.kind)}`}
@@ -165,10 +166,10 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh }: {
           </Table.Tr>} />
         <Group>
           <Button loading={busy === 'pull'} disabled={selectionBlocked || !connected || !selected.length} onClick={() => void act('pull', async () => {
-            setNewJob(await api.pullUpdates({ filenames: selected.filter((name) => updates.some((r) => r.filename === name)), pace }));
+            setNewJob(await api.pullUpdates({ filenames: selected.filter((name) => updates.some((r) => r.filename === name)), pace: pace && status?.link.mode === 'test' }));
             await onRefresh();
           })}>Download selected ({selected.length})</Button>
-          <Switch label="Pace downloads to the link rate" checked={pace} disabled={blocked} onChange={(e) => setPace(e.currentTarget.checked)} />
+          <Switch label="Pace downloads to the configured TEST rate" checked={pace && status?.link.mode === 'test'} disabled={blocked || status?.link.mode !== 'test'} onChange={(e) => setPace(e.currentTarget.checked)} />
         </Group>
         {!connected && <Text size="sm" c="orange">Use a manifest and local import while disconnected.</Text>}
         {library.selection.skipped.length > 0 && <Accordion variant="contained"><Accordion.Item value="skipped"><Accordion.Control>Unmatched or skipped ({library.selection.skipped.length})</Accordion.Control><Accordion.Panel>

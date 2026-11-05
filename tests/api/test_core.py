@@ -19,7 +19,8 @@ def test_status_reads_link_file_and_outbox_dir(client, ctx):
     ctx.store.write_json(ctx.store.link_state, {"kbps": 9.6, "connected": False})
     (ctx.store.outbox_dir / "commander.html").write_text("x", encoding="utf-8")
     st = client.get(f"{API}/status").json()
-    assert st["link"]["kbps"] == 9.6 and st["link"]["connected"] is False
+    assert st["link"]["kbps"] is None and st["link"]["connected"] is False
+    assert st["link"]["offline_override"] is True
     assert st["outbox"]["pending"] == 1
 
 

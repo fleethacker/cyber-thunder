@@ -75,7 +75,15 @@ class ContentService:
     def client(self) -> ContentClient:
         if self._client is None:
             self._client = ContentClient(timeout=self.timeout)
+        self._client.observer = self.ingest.link.observe
+        self._client.before_request = self._network_guard
+        self._client.test_mode = lambda: self._link().mode == "test"
         return self._client
+
+    def _network_guard(self):
+        self.ingest.ctx.killswitch.guard("content.network", "content")
+        if not self._link().connected:
+            raise LinkDisconnected("network attempt blocked by link state")
 
     @client.setter
     def client(self, value: ContentClient | None) -> None:
@@ -229,7 +237,7 @@ class ContentService:
         if source == "live":
             self._head_sizes(sel.updates, actor)
         known = [r.get("expected_bytes") for r in sel.updates]
-        est = round(sum(transfer_seconds(n, link) for n in known if n), 3) if any(known) else None
+        est = round(sum(transfer_seconds(n, link) for n in known if n), 3) if any(known) and link.mode == "test" else None
         wire = int(stats.get("wire_bytes") or 0)
         report = {"checked_at": utcnow(), "checked_by": actor, "source": source, "url": url,
                   "index_entries": len(entries), "index_bytes": int(stats.get("bytes") or 0), "index_wire_bytes": wire,
@@ -286,6 +294,8 @@ class ContentService:
 
     def pull(self, actor: str, *, filenames: list[str] | None = None, all_matching: bool = False, pace: bool = False,
              background: bool = True) -> dict:
+        if pace and self._link().mode != "test":
+            raise ValueError("pacing requires explicit link test mode")
         self._refuse_if_down("content.fetch", actor)
         if self.ctx.killswitch.is_engaged():
             self.audit.append("content.fetch", actor, {"reason": "kill switch engaged"}, outcome="blocked")
@@ -377,6 +387,8 @@ class ContentService:
                     polled[0] = now
                     if self.ctx.killswitch.is_engaged():
                         return "kill switch engaged"
+                    if job["pace"] and self._link().mode != "test":
+                        return "test emulation disabled"
                     if not self._link().connected:
                         return "link went down; pull again when it is back"
                     return None

@@ -170,7 +170,9 @@ def test_commander_link_line_when_ingest_exists(node):
     node.ingest = SimpleNamespace(outbox=SimpleNamespace(pending=lambda: ["a", "b"]),
                                   link=SimpleNamespace(status=lambda: {"kbps": 28.8, "connected": False}))
     md = svc(node).commander(SCAN, "md")
-    assert "Link disconnected at 28.8 kbps. Outbox: 2 item(s) waiting to sync (will send on reconnect)." in md
+    assert "Observed application rate unknown" in md
+    assert "2 item(s) queued for local staging" in md
+    assert "28.8 kbps" not in md
 
 
 # -- audit ----------------------------------------------------------------------------------

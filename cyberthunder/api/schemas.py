@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 SCAN_TRIGGERS = ("manual", "scheduled", "stig_delta", "bulletin", "verify", "demo")
 
@@ -70,9 +70,14 @@ class EvaluateBody(BaseModel):
 
 
 class LinkBody(BaseModel):
-    kbps: float | None = Field(default=None, gt=0)
-    latency_ms: int | None = Field(default=None, ge=0)
-    connected: bool | None = None
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    mode: Literal["production", "test"] | None = None
+    kbps: float | None = Field(default=None, gt=0, le=1000000)
+    latency_ms: int | None = Field(default=None, ge=0, le=60000, strict=True)
+    connected: StrictBool | None = None
+    offline_override: StrictBool | None = None
+    probe_enabled: StrictBool | None = None
+    probe_endpoint: Literal["https://www.cyber.mil/", "https://dl.dod.cyber.mil/"] | None = None
 
 
 class PathBody(BaseModel):

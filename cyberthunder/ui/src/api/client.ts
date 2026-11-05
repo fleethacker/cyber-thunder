@@ -162,6 +162,7 @@ export const api = {
   evaluatePolicy: (proposal_id: string) => post<PolicyDecision>('/policy/evaluate', { proposal_id }),
 
   link: () => get<LinkState>('/ingest/link'),
+  probeLink: () => post<unknown>('/ingest/link/probe'),
   putLink: (l: Partial<LinkState>) => put<LinkState>('/ingest/link', l),
   ingestStig: (file: File) => {
     const form = new FormData();

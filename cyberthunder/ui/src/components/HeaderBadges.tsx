@@ -2,6 +2,7 @@
 import { Badge, Tooltip } from '@mantine/core';
 import { IconCpu, IconLink, IconLinkOff, IconShieldCheck, IconShieldX } from '@tabler/icons-react';
 import { short } from '../lib/format';
+import { linkLabel, rateLabel } from '../lib/linkPresentation';
 import { useAppState } from '../state/AppState';
 
 export function ChainBadge() {
@@ -32,15 +33,15 @@ export function LinkBadge() {
   if (!link) return <Badge color="gray" variant="light" size="lg">Link: unknown</Badge>;
   const pending = status?.outbox?.pending ?? 0;
   return (
-    <Tooltip label={`latency ${link.latency_ms} ms · outbox ${pending} pending`} withArrow>
+    <Tooltip label={`${rateLabel(link)} · physical latency unknown · ${pending} queued`} withArrow>
       <Badge
-        color={link.connected ? 'teal' : 'orange'}
+        color={link.reachability === 'unknown' ? 'gray' : link.connected ? 'teal' : 'orange'}
         variant="light"
         size="lg"
         tt="none"
         leftSection={link.connected ? <IconLink size={14} /> : <IconLinkOff size={14} />}
       >
-        {link.connected ? 'Connected' : 'Disconnected'} · {link.kbps} kbps · {pending} queued
+        {linkLabel(link)} · {pending} queued
       </Badge>
     </Tooltip>
   );

@@ -61,7 +61,8 @@ def test_check_updates_live(node, served):
     assert sorted(u["filename"] for u in rep["updates"]) == sorted([SCAP, STIG])
     sizes = {u["filename"]: u["expected_bytes"] for u in rep["updates"]}
     assert sizes[STIG] == served["stig"].stat().st_size
-    assert rep["estimate_seconds_at_link"] > 0 and rep["index_estimate_seconds"] > 0
+    assert rep["estimate_seconds_at_link"] is None and rep["index_estimate_seconds"] is None
+    assert any(row["application_bytes"] > 0 and row["success"] for row in node.ingest.link.state().observations)
     assert node.ingest.last_update_check()["checked_at"] == rep["checked_at"]
     last = node.store.read_json(node.store.root / "content" / "last_check.json")
     assert last["wanted_count"] == 2 and last["new_count"] == 2 and "gzip" in last and last["index_bytes"] > 0
@@ -204,6 +205,7 @@ def test_import_dir_without_a_lock_uses_the_integrity_checks(ctx, tmp_path):
 
 
 def test_reconnect_runs_a_check_after_the_outbox_flush(node):
+    node.settings.content_check_on_reconnect = True
     node.ingest.set_link(actor="it2.smith", connected=False)
     node.ingest.outbox.enqueue("report", "r1.json", b"{}")
     node.ingest.set_link(actor="it2.smith", connected=True)
@@ -223,6 +225,7 @@ def test_reconnect_check_can_be_turned_off(node):
 
 
 def test_reconnect_auto_pull(node):
+    node.settings.content_check_on_reconnect = True
     node.settings.content_auto_pull = True
     node.ingest.set_link(actor="it2.smith", connected=False)
     node.ingest.set_link(actor="it2.smith", connected=True)

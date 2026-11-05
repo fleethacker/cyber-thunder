@@ -481,14 +481,8 @@ def link_state(ctx: "AppContext") -> dict:
             return to_plain(call_first(svc, ("link_state", "get_link", "link")))
         except Exception as e:  # noqa: BLE001  fall back to the file
             log.debug("ingest link state unavailable: %s", e)
-    s = ctx.settings
-    st = {"kbps": s.link_kbps, "latency_ms": s.link_latency_ms, "connected": s.link_connected}
-    try:
-        saved = ctx.store.read_json(ctx.store.link_state, {}) or {}
-        st.update({k: saved[k] for k in ("kbps", "latency_ms", "connected") if k in saved})
-    except (OSError, ValueError) as e:
-        log.debug("link state file unreadable: %s", e)
-    return st
+    from cyberthunder.ingest.link import Link
+    return Link(ctx.store, ctx.settings).state().to_dict()
 
 
 def outbox_pending(ctx: "AppContext") -> int:
