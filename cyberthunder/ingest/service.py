@@ -111,9 +111,18 @@ class IngestService:
 
     # -- STIG releases -----------------------------------------------------------------------------
     def ingest_stig(self, path_or_bytes: str | Path | bytes, filename: str | None = None, *,
-                    old: str | Path | None = None, actor: str = "operator", method: str | None = None) -> dict:
+                    old: str | Path | None = None, actor: str = "operator", method: str | None = None,
+                    receipt_source: str = "local") -> dict:
         """Diff a new STIG release against the catalog copy (or `old`), store the delta, make the new release
         the catalog copy, and report sizes and transfer time at the current link."""
+        # All entry points share one writer lock, including uploads, pulls and CLI imports.
+        with self.store.files.lock("stig-catalog"):
+            return self._ingest_stig(path_or_bytes, filename, old=old, actor=actor, method=method,
+                                     receipt_source=receipt_source)
+
+    def _ingest_stig(self, path_or_bytes: str | Path | bytes, filename: str | None = None, *,
+                     old: str | Path | None = None, actor: str = "operator", method: str | None = None,
+                     receipt_source: str = "local") -> dict:
         tmpdir: Path | None = None
         try:
             if isinstance(path_or_bytes, (bytes, bytearray)):
@@ -142,7 +151,7 @@ class IngestService:
                         "link": state.to_dict()}
             catalog = dl.apply(report, new_path, self.store)
             extra = {"filename": filename, "sizes": sizes, "transfer": transfer, "catalog_path": str(catalog),
-                     "full_import": prev is None}
+                     "full_import": prev is None, "receipt_source": receipt_source}
             self.store.write_json(dl.deltas_dir(self.store) / f"{report.id}.json", dict(report.to_dict(), **extra))
         finally:
             if tmpdir is not None:

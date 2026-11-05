@@ -4,6 +4,7 @@ import { Shell } from './components/Shell';
 import Assets from './pages/Assets';
 import Audit from './pages/Audit';
 import Commander from './pages/Commander';
+import Content from './pages/Content';
 import Decisions from './pages/Decisions';
 import Findings from './pages/Findings';
 import Mission from './pages/Mission';
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/findings" element={<Findings />} />
         <Route path="/assets" element={<Assets />} />
         <Route path="/scans" element={<Scans />} />
+        <Route path="/content" element={<Content />} />
         <Route path="/audit" element={<Audit />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/settings" element={<Settings />} />

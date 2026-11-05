@@ -6,7 +6,9 @@ Audit chain: {% if r.audit.ok %}intact{% else %}**BROKEN: {{ r.audit.detail }}**
 **BLUF.** {% for s in r.bluf %}{{ s }} {% endfor %}
 
 
-## Open findings by host
+## Open findings requiring action by host
+
+Excludes verified changes and active review suppressions. Original scanner observations and all suppressed findings remain in the evidence below.
 
 {% if r.by_host %}
 | Host | CAT I | CAT II | CAT III | Total open | Intrusion indicators |
@@ -15,7 +17,7 @@ Audit chain: {% if r.audit.ok %}intact{% else %}**BROKEN: {{ r.audit.detail }}**
 | {{ row.host }} | {{ row.high }} | {{ row.medium }} | {{ row.low }} | {{ row.total }} | {{ row.hunt }} |
 {% endfor %}
 {% else %}
-No open findings.
+No open findings requiring action. Unchecked results and errors still need investigation.
 {% endif %}
 
 ## Intrusion indicators
@@ -27,7 +29,7 @@ No open findings.
 | {{ h.host }} | {{ h.title }} | {{ h.attack | join(", ") or "-" }} |
 {% endfor %}
 {% else %}
-None found by the hunt checks in this scan.
+No unsuppressed open intrusion indicators in the available observations; this is not proof of absence.
 {% endif %}
 
 {% if r.discovery %}
@@ -66,6 +68,7 @@ No verified changes yet.
 
 {% for t in r.top %}
 {{ loop.index }}. **{{ t.cat }}** {{ t.host }}: {{ t.title }}. {{ t.risk or "No explanation generated yet." }} [{{ t.citations | join(", ") }}]
+   Scanner status: {{ t.assurance.status }}; confidence: **{{ t.assurance.confidence.grade }}** - {{ t.assurance.confidence.reason | md_cell }}; review: {{ t.assurance.review.disposition }}. Reviewer identity: {{ t.assurance.identity_label }}.
 {% else %}
 No open findings to rank.
 {% endfor %}
@@ -94,6 +97,8 @@ Native and SCAP counts overlap. Linux SCAP needs external OpenSCAP and host appl
 {% if r.coverage.errors %}
 Coverage inventory is incomplete; see that report's errors.
 {% endif %}
+
+{% include "_assurance.md.j2" %}
 
 ## Next actions
 

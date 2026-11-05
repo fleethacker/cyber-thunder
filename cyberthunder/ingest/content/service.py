@@ -136,13 +136,37 @@ class ContentService:
 
     def _select(self, entries: list[ix.Entry], *, include_automation: bool = False,
                 include_compilation: bool = False, products: Iterable[str] = ()):
-        return select(entries, self.ctx.inventory.all(), self._collected(), self.store.records(),
-                      include_automation=include_automation, include_compilation=include_compilation,
-                      extra_products=products, allowed_hosts=self.client.allowed_hosts,
-                      allow_http=self.client.allow_http)
+        prefs = self.preferences()
+        inventory = self.ctx.inventory.all() if prefs["mode"] == "inventory" else []
+        extra = list(products) + (prefs["products"] if prefs["mode"] == "selected" else [])
+        selection = select(entries, inventory, self._collected(), self.store.records(),
+                           include_automation=include_automation, include_compilation=include_compilation,
+                           extra_products=extra, allowed_hosts=self.client.allowed_hosts,
+                           allow_http=self.client.allow_http, content_kinds=prefs["kinds"])
+        last = self.store.last_check() or {}
+        heads = {(r["filename"], r.get("url")): r for r in last.get("updates", [])}
+        for row in selection.updates:
+            head = heads.get((row["filename"], row.get("url")), {})
+            row.update({k: head[k] for k in ("expected_bytes", "expected_etag", "last_modified") if k in head})
+        return selection
 
-    def _head_sizes(self, rows: list[dict]) -> None:
+    def preferences(self) -> dict:
+        from cyberthunder.ingest.content.library import ContentLibrary
+        return ContentLibrary(self).preferences()
+
+    def library(self) -> dict:
+        from cyberthunder.ingest.content.library import ContentLibrary
+        return ContentLibrary(self).view()
+
+    def save_preferences(self, changes: dict, actor: str) -> dict:
+        from cyberthunder.ingest.content.library import ContentLibrary
+        return ContentLibrary(self).save_preferences(changes, actor)
+
+    def _head_sizes(self, rows: list[dict], actor: str) -> None:
         for r in rows[:MAX_HEADS]:
+            self.ctx.killswitch.guard("content.check", actor)
+            if not self._link().connected:
+                raise LinkDisconnected("link disconnected during the content check")
             try:
                 status, h, _ = self.client.request("HEAD", r["url"], timeout=self.timeout, max_bytes=0)
             except ContentNetworkError:
@@ -155,6 +179,25 @@ class ContentService:
 
     def check_updates(self, actor: str, *, source: str = "live", include_automation: bool = False,
                       include_compilation: bool = False, products: Iterable[str] = ()) -> dict:
+        from cyberthunder.ingest.content.library import ContentLibrary
+        library = ContentLibrary(self)
+        live = (source or "live").lower() == "live"
+        started = utcnow()
+        if live:
+            library.record_check(started, "running")
+        try:
+            result = self._check_updates(actor, source=source, include_automation=include_automation,
+                                         include_compilation=include_compilation, products=products)
+        except Exception as exc:
+            if live:
+                library.record_check(started, "failed", str(exc))
+            raise
+        if live:
+            library.record_check(started, "success")
+        return result
+
+    def _check_updates(self, actor: str, *, source: str = "live", include_automation: bool = False,
+                       include_compilation: bool = False, products: Iterable[str] = ()) -> dict:
         source = (source or "live").lower()
         if source not in ("live", "snapshot"):
             raise ValueError("source must be 'live' or 'snapshot'")
@@ -184,7 +227,7 @@ class ContentService:
         sel = self._select(entries, include_automation=include_automation, include_compilation=include_compilation,
                            products=products)
         if source == "live":
-            self._head_sizes(sel.updates)
+            self._head_sizes(sel.updates, actor)
         known = [r.get("expected_bytes") for r in sel.updates]
         est = round(sum(transfer_seconds(n, link) for n in known if n), 3) if any(known) else None
         wire = int(stats.get("wire_bytes") or 0)
@@ -216,9 +259,10 @@ class ContentService:
     # -- pull -------------------------------------------------------------------------------------
     def _resolve(self, filenames: list[str] | None, all_matching: bool, actor: str) -> list[dict]:
         if all_matching:
-            lc = self.store.last_check() or self.check_updates(actor)
-            held = {r.get("filename") for r in self.store.records()}
-            return [dict(r) for r in lc.get("updates") or [] if r.get("filename") not in held]
+            if self.store.last_check() is None:
+                self.check_updates(actor)
+            entries, _ = self.catalog_entries()
+            return self._select(entries).updates
         if not filenames:
             raise ValueError("name the files to pull, or pull all matching updates")
         entries, _ = self.catalog_entries()
@@ -400,8 +444,8 @@ class ContentService:
         if path.resolve() != dest.resolve():
             os.replace(path, dest)
         ingest: dict[str, Any] = {}
-        if entry.kind == "manual_stig":
-            rep = self.ingest.ingest_stig(dest, actor=actor)
+        if entry.kind in ("manual_stig", "srg"):
+            rep = self.ingest.ingest_stig(dest, actor=actor, receipt_source=source)
             ingest.update(delta_id=rep["id"], catalog_path=rep.get("catalog_path"),
                           delta={"id": rep["id"], "benchmark_id": rep.get("benchmark_id"),
                                  "old_release": rep.get("old_release"), "new_release": rep.get("new_release"),
@@ -413,9 +457,21 @@ class ContentService:
                "version": list(entry.version) if entry.version else None, "version_label": entry.version_label,
                "upload_date": entry.upload_date, "sha256": sha256, "etag": etag, "bytes": size, "url": entry.url,
                "fetched_at": utcnow(), "fetched_by": actor, "source": source, "ingest": ingest}
-        return self.store.put(rec)
+        rec["title"] = entry.title
+        saved = self.store.put(rec)
+        from cyberthunder.ingest.content.library import ContentLibrary
+        ContentLibrary(self).record_transfer(source, saved["fetched_at"])
+        return saved
 
     def _extract_datastream(self, zpath: Path, entry: ix.Entry) -> Path:
+        if not zipfile.is_zipfile(zpath):
+            product = fx.disk_name(entry.product_key or "unknown")
+            out = self.store.scap_dir / product / (fx.disk_name(Path(entry.filename).stem) + ".xml")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            tmp = out.with_name(out.name + ".tmp")
+            shutil.copyfile(zpath, tmp)
+            os.replace(tmp, out)
+            return out
         with zipfile.ZipFile(zpath) as zf:
             m = fx.find_datastream(zf)
             product = fx.disk_name(entry.product_key or "unknown")
@@ -468,6 +524,9 @@ class ContentService:
         return dict(doc, path=str(out), sha256=digest)
 
     def import_dir(self, path: str | Path, actor: str) -> dict:
+        from cyberthunder.control.identity import require_human
+        actor = require_human(actor)
+        self.ctx.killswitch.guard("content.import", actor)
         src = Path(path)
         if not src.is_dir():
             raise ValueError(f"no such folder on this node: {src}")
@@ -485,6 +544,7 @@ class ContentService:
         staging.mkdir(parents=True, exist_ok=True)
         imported, refused, skipped = [], [], []
         for p in sorted(src.iterdir()):
+            self.ctx.killswitch.guard("content.import", actor)
             if not p.is_file() or p.name == LOCK_NAME or p.name.endswith((".part", ".part.json", ".why.json")) \
                     or p.name == MANIFEST_NAME:
                 continue
@@ -501,6 +561,15 @@ class ContentService:
                 entry = ix.Entry(filename=p.name, url="", host="", title=p.name, kind=parsed["kind"],
                                  product_key=parsed["product_key"], version=parsed["version"],
                                  version_label=parsed["version_label"])
+            if info is None and entry.kind == "other" and p.suffix.lower() == ".xml":
+                from cyberthunder.ingest.content.uploads import MAX_UPLOAD_BYTES, import_content
+                try:
+                    with p.open("rb") as source:
+                        data = source.read(MAX_UPLOAD_BYTES + 1)
+                    imported.append(import_content(self, data, p.name, actor)["record"])
+                except ValueError as exc:
+                    refused.append({"filename": p.name, "reason": str(exc)})
+                continue
             work = staging / fx.disk_name(entry.filename)
             shutil.copyfile(p, work)
             digest = fx.sha256_file(work)
@@ -534,8 +603,9 @@ class ContentService:
     # -- reconnect --------------------------------------------------------------------------------
     def on_reconnect(self, actor: str) -> dict:
         out: dict[str, Any] = {}
-        check = bool(_setting(self.settings, "content_check_on_reconnect", True))
-        auto = bool(_setting(self.settings, "content_auto_pull", False))
+        prefs = self.preferences()
+        check = prefs["check_on_reconnect"]
+        auto = prefs["auto_pull"]
         if not check and not auto:
             return {"content_check": "off"}
 

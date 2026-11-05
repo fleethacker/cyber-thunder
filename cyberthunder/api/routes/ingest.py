@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from cyberthunder.api import util
 from cyberthunder.api.errors import MappedRoute, feature, requires, unavailable
@@ -249,11 +249,78 @@ class ImportDirBody(BaseModel):
     path: str
 
 
+class ContentPreferencesBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["inventory", "selected"]
+    products: list[str] = Field(max_length=1000)
+    kinds: list[Literal["manual_stig", "srg", "scap_benchmark"]] = Field(max_length=3)
+    check_on_reconnect: StrictBool
+    auto_pull: StrictBool
+    revision: int = Field(ge=0, strict=True)
+
+
 def _content_svc(ctx):
     svc = _svc(ctx, "content updates")
     if not callable(getattr(svc, "check_updates", None)):
         raise unavailable("content updates")
     return svc
+
+
+@router.get("/ingest/library")
+def content_library(ctx=CtxDep) -> dict:
+    return to_plain(_content_svc(ctx).content.library())
+
+
+@router.put("/ingest/library/preferences")
+def content_preferences(body: ContentPreferencesBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    from cyberthunder.ingest.content.library import PreferenceConflict
+    try:
+        return _content_svc(ctx).content.save_preferences(body.model_dump(), actor)
+    except PreferenceConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.post("/ingest/content/upload", status_code=201)
+async def upload_content(request: Request, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    from email import policy
+    from email.parser import BytesParser
+    from starlette.concurrency import run_in_threadpool
+    from cyberthunder.ingest.content.uploads import MAX_UPLOAD_BYTES, import_content
+    svc = _content_svc(ctx)
+    ctx.killswitch.guard("content.upload", actor)
+    limit = MAX_UPLOAD_BYTES + 65536
+    length = request.headers.get("content-length")
+    if length is not None:
+        if not length.isascii() or not length.isdigit() or len(length) > 12:
+            raise ValueError("invalid Content-Length")
+        if int(length) > limit:
+            raise HTTPException(413, "content upload exceeds 32 MiB")
+    content_type = request.headers.get("content-type", "")
+    if not content_type.lower().startswith("multipart/form-data;") or any(c in content_type for c in "\r\n"):
+        raise ValueError("upload one file using multipart/form-data")
+    try:
+        prefix = ("Content-Type: " + content_type + "\r\nMIME-Version: 1.0\r\n\r\n").encode("ascii")
+    except UnicodeEncodeError:
+        raise ValueError("invalid multipart Content-Type") from None
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > limit:
+            raise HTTPException(413, "content upload exceeds 32 MiB")
+    message = BytesParser(policy=policy.default).parsebytes(prefix + body)
+    parts = list(message.iter_parts())
+    if message.defects or len(parts) != 1 or parts[0].is_multipart() or parts[0].defects:
+        raise ValueError("upload exactly one file in a valid multipart body")
+    part = parts[0]
+    filename = part.get_filename()
+    if part.get_param("name", header="content-disposition") != "file" or not filename:
+        raise ValueError("the upload must use a file field with a filename")
+    payload = part.get_payload(decode=True)
+    if not payload:
+        raise ValueError("the uploaded file is empty")
+    if len(payload) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "content upload exceeds 32 MiB")
+    return to_plain(await run_in_threadpool(import_content, svc.content, payload, filename, actor))
 
 
 @router.get("/ingest/updates")
@@ -263,6 +330,10 @@ def get_updates(ctx=CtxDep) -> dict:
                                                  "skipped": []}
     last["index_estimate"] = svc.content.index_estimate()
     last["connected"] = bool(util.link_state(ctx).get("connected", False))
+    entries, source = svc.content.catalog_entries()
+    selected = svc.content._select(entries).to_dict()
+    last.update(selected, selection_source=source, wanted_count=len(selected["wanted"]),
+                new_count=len(selected["updates"]))
     return last
 
 

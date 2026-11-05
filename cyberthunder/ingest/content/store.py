@@ -21,7 +21,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.store import StateStore
 
 RECORD_KEYS = ("filename", "product_key", "kind", "version", "version_label", "sha256", "etag", "bytes", "url",
-               "fetched_at", "fetched_by", "source", "ingest", "upload_date", "disk_name")
+               "fetched_at", "fetched_by", "source", "ingest", "upload_date", "disk_name", "title",
+               "benchmark_id", "benchmark_release")
 
 
 class ContentStore:
@@ -76,7 +77,7 @@ class ContentStore:
     def put(self, record: dict) -> dict:
         rec = {k: record.get(k) for k in RECORD_KEYS}
         rec["ingest"] = dict(record.get("ingest") or {})
-        with self._lock:
+        with self.state.files.lock("content-index"), self._lock:
             doc = self.state.read_json(self.index_path, {}) or {}
             files = doc.setdefault("files", {})
             files[rec["filename"]] = rec

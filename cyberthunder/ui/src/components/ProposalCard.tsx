@@ -1,13 +1,15 @@
 // One decision. Answers the five questions in plain words:
 // what is wrong, why it matters, what will change, could it break something, how to undo.
-import { Badge, Button, Card, Checkbox, Divider, Group, Stack, Text, Title, Tooltip } from '@mantine/core';
+import { Alert, Badge, Button, Card, Checkbox, Divider, Group, Stack, Text, Title, Tooltip } from '@mantine/core';
 import { IconArrowBackUp, IconCheck, IconChecklist, IconPlayerPlay, IconX } from '@tabler/icons-react';
 import type { ReactNode } from 'react';
 import type { ProposalPlus } from '../api/types';
 import { fmtAgo, label } from '../lib/format';
+import { isSuppressed } from '../lib/findingAssurance';
 import { ApplyTimeline } from './ApplyTimeline';
 import { CitationChips } from './CitationChips';
 import { DiffButton } from './ProposalDiff';
+import { PreviewButton } from './ProposalPlan';
 import { RiskTagsForFix } from './FixPanel';
 import { AssetIcon, CodeBlock, Collapsible, Mono, SeverityBadge, SimulatedBadge, StateBadge } from './common';
 
@@ -56,6 +58,7 @@ export function ProposalCard({
   const citations = Array.from(new Set([...(ex?.citations ?? []), ...p.citations]));
   const ruleIds = [f?.rule_version, f?.rule_id].filter(Boolean) as string[];
   const auto = (p.decided_by ?? '').startsWith('policy:');
+  const suppressed = isSuppressed(f?.review);
 
   return (
     <Card
@@ -143,6 +146,10 @@ export function ProposalCard({
         <ApplyTimeline proposal={p} />
 
         <Divider />
+        {suppressed && <Alert color="orange" title="Apply blocked by human review">
+          <Text size="sm">{f?.review?.current?.reason || 'An active dismissal applies to the current evidence.'}</Text>
+          <Text size="sm">Open Finding detail to review the evidence and recorded decision.</Text>
+        </Alert>}
         <Group gap="sm">
           {p.state === 'proposed' && (
             <>
@@ -151,7 +158,7 @@ export function ProposalCard({
             </>
           )}
           {p.state === 'approved' && (
-            <Button size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} onClick={() => actions.apply(p)}>Apply</Button>
+            <Button size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={suppressed} onClick={() => actions.apply(p)}>Apply</Button>
           )}
           {p.state === 'applying' && <Button size="md" loading variant="light">Applying</Button>}
           {(p.state === 'applied' || p.state === 'verified') && (
@@ -160,6 +167,7 @@ export function ProposalCard({
           {p.state === 'applied' && fix?.kind === 'runbook' && actions.verify && (
             <Button size="md" color="teal" variant="light" leftSection={<IconChecklist size={18} />} loading={busy} onClick={() => actions.verify?.(p)}>Verify</Button>
           )}
+          <PreviewButton proposalId={p.id} busy={busy} />
           <DiffButton proposalId={p.id} state={p.state} />
           <Button size="md" variant="subtle" onClick={() => actions.openFinding(p.finding_id)}>Finding detail</Button>
         </Group>

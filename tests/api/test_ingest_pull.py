@@ -61,7 +61,8 @@ def test_updates_before_any_check(api):
     r = api.get(f"{API}/ingest/updates")
     assert r.status_code == 200
     body = r.json()
-    assert body["checked_at"] is None and body["updates"] == []
+    assert body["checked_at"] is None
+    assert {r["filename"] for r in body["updates"]} == {STIG, SCAP}
     assert body["index_estimate"]["seconds"] > 0 and body["connected"] is True
 
 

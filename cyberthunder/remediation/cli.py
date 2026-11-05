@@ -50,6 +50,17 @@ def cmd_propose(a: argparse.Namespace) -> int:
 
 
 def cmd_apply(a: argparse.Namespace) -> int:
+    if getattr(a, "plan", False):
+        if getattr(a, "simulate_verify_fail", False):
+            print("refused: --plan cannot be combined with --simulate-verify-fail", file=sys.stderr)
+            return 2
+        try:
+            result = _ctx(a).engine.plan(a.proposal_id, actor=a.actor)
+        except REFUSALS as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0
     ctx = _ctx(a)
     start = len(ctx.audit)
     try:
@@ -119,6 +130,8 @@ def register_cli(subparsers) -> None:
 
     p = subparsers.add_parser("apply", help="apply an APPROVED proposal: before-state, apply, verify, auto-rollback")
     p.add_argument("proposal_id")
+    p.add_argument("--plan", action="store_true",
+                   help="emit a static JSON preview of stored fix metadata; never access the target or execute")
     p.add_argument("--simulate-verify-fail", action="store_true",
                    help="demonstration only: force verification to fail so the automatic rollback runs (audited)")
     p.set_defaults(fn=cmd_apply)

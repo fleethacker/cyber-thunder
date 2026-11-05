@@ -104,8 +104,12 @@ def _local(tag: str) -> str:
 
 
 def _xml_root(data: bytes) -> str:
+    class NoDTD(ET.TreeBuilder):
+        def doctype(self, name, pubid, system):
+            raise ValueError("DTD and entity declarations are not permitted")
+
     try:
-        root = ET.fromstring(data)
+        root = ET.fromstring(data, parser=ET.XMLParser(target=NoDTD()))
     except ET.ParseError as e:
         raise ValueError(f"XML does not parse: {e}") from None
     return _local(root.tag)
@@ -128,12 +132,24 @@ def check_file(path: str | Path, kind: str | None = None, *, filename: str | Non
     kind = kind or parse_filename(name)["kind"]
     checked: list[str] = []
     out: dict[str, Any] = {"checked": checked}
+    if name.lower().endswith(".xml"):
+        if p.stat().st_size > MAX_MEMBER_BYTES:
+            raise ValueError("XML exceeds the size limit")
+        root = _xml_root(p.read_bytes())
+        allowed = ("Benchmark", "data-stream-collection") if kind in ("scap_benchmark", "other") else ("Benchmark",)
+        if root not in allowed:
+            raise ValueError(f"not an XCCDF benchmark or SCAP datastream (root {root})")
+        checked.append(f"xml:{root}")
+        if root == "Benchmark":
+            parsed = parse_xccdf(p)
+            if not parsed.benchmark_id or not parsed.rules:
+                raise ValueError("XML has no benchmark id or no rules")
+            out.update(benchmark_id=parsed.benchmark_id, rules=len(parsed.rules))
+            checked.append("xccdf")
+        return out
     is_zip = name.lower().endswith(".zip") or kind in ("manual_stig", "scap_benchmark", "srg", "automation",
                                                       "compilation")
     if not is_zip:
-        if kind in ("manual_stig", "scap_benchmark") and name.lower().endswith(".xml"):
-            root = _xml_root(p.read_bytes())
-            checked.append(f"xml:{root}")
         return out
     if not zipfile.is_zipfile(p):
         raise ValueError("not a zip archive")
@@ -154,7 +170,7 @@ def check_file(path: str | Path, kind: str | None = None, *, filename: str | Non
             if bad is not None:
                 raise ValueError(f"zip member {bad!r} fails its CRC check")
             checked.append("zip")
-            if kind == "manual_stig":
+            if kind in ("manual_stig", "srg"):
                 try:
                     m = _pick_member(zf)
                 except BenchmarkError as e:

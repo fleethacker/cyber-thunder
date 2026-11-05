@@ -10,7 +10,7 @@ from cyberthunder.api import util
 from cyberthunder.api.errors import MappedRoute
 from cyberthunder.api.schemas import EvaluateBody, PolicyBody
 from cyberthunder.api.util import ActorDep, CtxDep
-from cyberthunder.control.policy import AutomationPolicy, PolicyRule, evaluate
+from cyberthunder.control.policy import AutomationPolicy, PolicyRule, evaluate_for_context
 from cyberthunder.findings.schema import utcnow
 from cyberthunder.inventory.targets import ASSET_TYPES
 from cyberthunder.remediation.library import DISRUPTION_RANK
@@ -105,4 +105,4 @@ def evaluate_policy(body: EvaluateBody, ctx=CtxDep) -> dict:
         raise KeyError(f"fix {p.fix_ref!r} is not in the library")
     finding = util.get_finding(ctx, p.finding_id)
     target = ctx.inventory.get(p.host)
-    return evaluate(ctx.policy, fix, finding, target).to_dict()
+    return evaluate_for_context(ctx, fix, finding, target).to_dict()

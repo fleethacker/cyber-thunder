@@ -10,6 +10,14 @@ export function fmtTime(ts?: string | null): string {
   return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : ts;
 }
 
+/** Absolute event time with an explicit offset; date-only publisher values stay date-only. */
+export function fmtZonedTime(ts?: string | null, empty = 'Not recorded'): string {
+  if (!ts) return empty;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(ts)) return ts;
+  const d = dayjs(ts);
+  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss [UTC]Z') : ts;
+}
+
 export function fmtClock(ts?: string | null): string {
   if (!ts) return '-';
   const d = dayjs(ts);

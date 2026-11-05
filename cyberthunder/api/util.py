@@ -221,8 +221,18 @@ def current_proposals(ctx: "AppContext") -> dict[str, Proposal]:
     return out
 
 
-def finding_plus(ctx: "AppContext", finding: Finding, with_proposal: bool = True) -> dict:
+def finding_assurance(ctx: "AppContext", finding: Finding, *, now=None, reviews=None) -> dict:
+    from cyberthunder.findings.confidence import assess_for_context
+    from cyberthunder.findings.review import ReviewService
+    return {"confidence": assess_for_context(ctx, finding, now=now),
+            "review": (reviews or ReviewService(ctx)).summary(finding, now=now)}
+
+
+def finding_plus(ctx: "AppContext", finding: Finding, with_proposal: bool = True,
+                 assurance: dict | None = None) -> dict:
     d = finding.to_dict()
+    d["scanner_status"] = finding.status.value
+    d.update(assurance if assurance is not None else finding_assurance(ctx, finding))
     d["categories"] = finding_categories(finding)
     d["cat"] = finding.severity.cat
     d["explanation"] = _explanation(ctx, finding.id)
@@ -239,7 +249,7 @@ def finding_plus(ctx: "AppContext", finding: Finding, with_proposal: bool = True
 
 
 def proposal_plus(ctx: "AppContext", p: Proposal) -> dict:
-    from cyberthunder.control.policy import evaluate
+    from cyberthunder.control.policy import evaluate_for_context
 
     d = p.to_dict()
     fix = ctx.library.get(p.fix_ref)
@@ -258,7 +268,7 @@ def proposal_plus(ctx: "AppContext", p: Proposal) -> dict:
     policy = None
     if fix is not None and finding is not None and target is not None:
         try:
-            policy = evaluate(ctx.policy, fix, finding, target).to_dict()
+            policy = evaluate_for_context(ctx, fix, finding, target).to_dict()
         except Exception as exc:  # noqa: BLE001  a bad policy rule must not hide the proposal
             policy = {"auto_eligible": False, "rule": None, "reasons": [f"policy evaluation failed: {exc}"]}
     d["policy"] = policy
@@ -293,7 +303,9 @@ def _split(v: str | None) -> set[str]:
 MISSING = "__missing__"
 CATEGORIES = ("stig", "cve", "hunt", "other")
 SORT_FIELDS = {"default", "severity", "host", "asset_type", "category", "title", "rule_id", "rule_version", "source",
-               "collected_at", "benchmark", "benchmark_release"}
+               "collected_at", "benchmark", "benchmark_release", "confidence", "review"}
+CONFIDENCE_ORDER = {"low": 1, "medium": 2, "high": 3}
+REVIEW_ORDER = {"unreviewed": 0, "needs_investigation": 1, "confirmed": 2, "false_positive": 3, "not_applicable": 4}
 
 
 def finding_categories(f: Finding) -> list[str]:
@@ -332,7 +344,7 @@ def _filter_values(value: str | None) -> set[str]:
     return {_facet_value(item) for item in rows[0]}
 
 
-def finding_facets(findings: list[Finding]) -> dict:
+def finding_facets(findings: list[Finding], assurance: dict | None = None) -> dict:
     """Options and counts from the complete view, independent of filters and pagination."""
     facets: dict[str, dict[str, dict]] = {name: {} for name in (
         "host", "asset_type", "source", "status", "severity", "category", "benchmark", "benchmark_release")}
@@ -347,6 +359,12 @@ def finding_facets(findings: list[Finding]) -> dict:
                 entry = options.setdefault(key, {"value": key, "label": label, "count": 0})
                 entry["label"] = min(entry["label"], label)  # stable even if input order changes
                 entry["count"] += 1
+    for name, field in (("confidence", "grade"), ("review", "disposition")):
+        facets[name] = {}
+        for f in findings:
+            value = (assurance or {}).get(f.id, {}).get(name, {}).get(field, "unknown" if name == "confidence" else "unreviewed")
+            entry = facets[name].setdefault(value, {"value": value, "label": value.replace("_", " ").capitalize(), "count": 0})
+            entry["count"] += 1
     return {name: sorted(options.values(), key=lambda o: (o["value"] == MISSING, o["value"]))
             for name, options in facets.items()}
 
@@ -390,7 +408,7 @@ def filter_findings(findings: list[Finding], *, host: str | None = None, status:
     return out
 
 
-def sort_findings(findings: list[Finding], sort_by: str, sort_dir: str) -> list[Finding]:
+def sort_findings(findings: list[Finding], sort_by: str, sort_dir: str, *, assurance: dict | None = None) -> list[Finding]:
     if sort_by not in SORT_FIELDS:
         raise ValueError(f"unknown sort field {sort_by!r}")
     if sort_dir not in {"asc", "desc"}:
@@ -402,6 +420,12 @@ def sort_findings(findings: list[Finding], sort_by: str, sort_dir: str) -> list[
                                                f.rule_version or f.rule_id, f.id))
 
     def key(f: Finding):
+        if sort_by == "confidence":
+            grade = (assurance or {}).get(f.id, {}).get("confidence", {}).get("grade", "unknown")
+            return CONFIDENCE_ORDER.get(grade)
+        if sort_by == "review":
+            disposition = (assurance or {}).get(f.id, {}).get("review", {}).get("disposition", "unreviewed")
+            return REVIEW_ORDER.get(disposition)
         if sort_by == "severity":
             return None if f.severity == Severity.UNKNOWN else f.severity.rank
         if sort_by == "category":
@@ -428,12 +452,24 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
     props = current_proposals(ctx) if all_f else {}
     scanned = {f.id: f for f in all_f}
     now = [effective(f, props.get(f.id)) for f in all_f]
+    from cyberthunder.findings.review import ReviewService
+    assessed_at = datetime.now(timezone.utc)
+    reviews = ReviewService(ctx)
+    assurance = {f.id: finding_assurance(ctx, f, now=assessed_at, reviews=reviews) for f in all_f}
+    confidence_filter = _filter_values(filters.pop("confidence", None))
+    review_filter = _filter_values(filters.pop("review", None))
+    if confidence_filter - {"high", "medium", "low", "unknown"}:
+        raise ValueError("unknown confidence grade")
+    if review_filter - set(REVIEW_ORDER):
+        raise ValueError("unknown review disposition")
     sel = filter_findings(now, **filters)
-    sel = sort_findings(sel, sort_by, sort_dir)
+    sel = [f for f in sel if (not confidence_filter or assurance[f.id]["confidence"]["grade"] in confidence_filter)
+           and (not review_filter or assurance[f.id]["review"]["disposition"] in review_filter)]
+    sel = sort_findings(sel, sort_by, sort_dir, assurance=assurance)
     page = sel[offset: offset + limit]
-    return {"findings": [finding_plus(ctx, scanned.get(f.id, f)) for f in page], "total": len(sel), "scan_id": sid,
+    return {"findings": [finding_plus(ctx, scanned.get(f.id, f), assurance=assurance[f.id]) for f in page], "total": len(sel), "scan_id": sid,
             "view": "scan" if scan_id else "current", "summary": summarize(now), "limit": limit, "offset": offset,
-            "unfiltered_total": len(now), "facets": finding_facets(now), "sort_by": sort_by, "sort_dir": sort_dir}
+            "unfiltered_total": len(now), "facets": finding_facets(now, assurance), "sort_by": sort_by, "sort_dir": sort_dir}
 
 
 # -- link / outbox fallbacks ----------------------------------------------------------------------

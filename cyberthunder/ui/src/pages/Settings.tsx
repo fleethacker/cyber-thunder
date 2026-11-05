@@ -3,10 +3,10 @@ import { Alert, Badge, Button, Card, Group, Paper, SimpleGrid, Stack, Switch, Te
 import { notifications } from '@mantine/notifications';
 import { IconFlask } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, errorText } from '../api/client';
 import { actorProblem } from '../components/ActorChip';
 import { ErrorBox, Loading, PageTitle } from '../components/common';
-import { ContentUpdates } from '../components/ContentUpdates';
 import { LinkControls } from '../components/LinkControls';
 import { PolicyEditor } from '../components/PolicyEditor';
 import { useAsync } from '../lib/hooks';
@@ -114,7 +114,15 @@ export default function Settings() {
       </SimpleGrid>
       <Paper withBorder p="md" radius="md"><PolicyEditor /></Paper>
       <LinkControls />
-      <ContentUpdates />
+      <Card withBorder radius="md">
+        <Group justify="space-between">
+          <Stack gap={4}>
+            <Text fw={700}>STIG Library</Text>
+            <Text size="sm" c="dimmed">Manage local releases, product subscriptions, update checks and offline imports.</Text>
+          </Stack>
+          <Button component={Link} to="/content" variant="light">Open STIG Library</Button>
+        </Group>
+      </Card>
       <DemoControls />
     </Stack>
   );

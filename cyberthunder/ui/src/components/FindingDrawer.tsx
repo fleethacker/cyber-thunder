@@ -7,11 +7,14 @@ import { useState, type ReactNode } from 'react';
 import { api, errorText } from '../api/client';
 import type { FindingPlus, ProposalPlus } from '../api/types';
 import { fmtAgo, fmtTime } from '../lib/format';
+import { isSuppressed } from '../lib/findingAssurance';
 import { useAsync } from '../lib/hooks';
 import { CitationChips } from './CitationChips';
 import { CodeBlock, Collapsible, ErrorBox, Loading, Mono, SeverityBadge, StateBadge, StatusBadge } from './common';
 import { RiskTagsForFix } from './FixPanel';
 import { DiffButton } from './ProposalDiff';
+import { ConfidenceBadge } from './FindingAssurance';
+import { FindingReviewPanel } from './FindingReviewPanel';
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -27,15 +30,19 @@ function citationsOf(f: FindingPlus): string[] {
   return Array.from(new Set(ids));
 }
 
-export function FindingDrawer({ findingId, onClose, onProposed }: { findingId: string | null; onClose: () => void; onProposed?: (p: ProposalPlus) => void }) {
+export function FindingDrawer({ findingId, onClose, onProposed, onReviewed, initialReviewOpen = false }: {
+  findingId: string | null; onClose: () => void; onProposed?: (p: ProposalPlus) => void; onReviewed?: () => void; initialReviewOpen?: boolean;
+}) {
   return (
     <Drawer opened={!!findingId} onClose={onClose} position="right" size="xl" title={<Text fw={700}>Finding detail</Text>}>
-      {findingId && <FindingDetail id={findingId} onProposed={onProposed} />}
+      {findingId && <FindingDetail key={findingId} id={findingId} onProposed={onProposed} onReviewed={onReviewed} initialReviewOpen={initialReviewOpen} />}
     </Drawer>
   );
 }
 
-function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: ProposalPlus) => void }) {
+function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
+  id: string; onProposed?: (p: ProposalPlus) => void; onReviewed?: () => void; initialReviewOpen: boolean;
+}) {
   const st = useAsync(() => api.finding(id), [id]);
   const f = st.data;
   const history = useAsync(
@@ -44,6 +51,7 @@ function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: Propos
   );
   const [busy, setBusy] = useState<'explain' | 'propose' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
 
   if (!f) return st.error ? <ErrorBox error={st.error} onRetry={() => void st.reload()} /> : <Loading what="Loading finding" />;
 
@@ -52,7 +60,7 @@ function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: Propos
     setActionError(null);
     try {
       const ex = await api.explain(f.id, true);
-      st.setData({ ...f, explanation: ex });
+      st.setData((current) => current ? { ...current, explanation: ex } : current);
       notifications.show({ message: 'Explanation regenerated' });
     } catch (e) {
       setActionError(errorText(e));
@@ -61,6 +69,7 @@ function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: Propos
     }
   };
   const propose = async () => {
+    if (isSuppressed(f.review)) return;
     setBusy('propose');
     setActionError(null);
     try {
@@ -76,6 +85,8 @@ function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: Propos
   };
 
   const ex = f.explanation;
+  const scannerStatus = f.scanner_status ?? f.remediated?.scan_status ?? f.status;
+  const suppressed = isSuppressed(f.review);
   const live = f.proposal && !['denied', 'cancelled', 'verified', 'rolled_back', 'failed'].includes(f.proposal.state);
   return (
     <Stack gap="md">
@@ -85,7 +96,7 @@ function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: Propos
           <Title order={4}>{f.title}</Title>
           <Group gap={6}>
             <Text size="sm" fw={600}>{f.host}</Text>
-            <StatusBadge status={f.status} />
+            <Text size="xs">Scanner result:</Text><StatusBadge status={scannerStatus} />
             <Badge variant="outline" color="gray" size="sm">{f.source}</Badge>
             {f.asset_type && <Badge variant="outline" color="gray" size="sm">{f.asset_type}</Badge>}
           </Group>
@@ -99,6 +110,20 @@ function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: Propos
       </Group>
 
       {actionError && <ErrorBox error={actionError} />}
+
+      <Section title="Scanner observation">
+        <Group gap="xs"><Text size="sm">Original result:</Text><StatusBadge status={scannerStatus} /><Mono>{scannerStatus}</Mono></Group>
+        {scannerStatus !== f.status && <Group gap="xs"><Text size="sm">Current result after verified fix:</Text><StatusBadge status={f.status} /></Group>}
+        <Text size="xs" c="dimmed">Human review keeps this scanner observation intact.</Text>
+        {f.evidence ? <CodeBlock code={f.evidence} maxHeight={220} /> : <Text size="sm" c="dimmed">No scanner evidence was recorded.</Text>}
+      </Section>
+
+      <Section title="Evidence confidence">
+        <Group><ConfidenceBadge confidence={f.confidence} /><Text size="xs" c="dimmed">Select the badge for reasons and collection details.</Text></Group>
+        <Text size="sm">{f.confidence?.reason || 'This server has not reported evidence confidence.'}</Text>
+      </Section>
+
+      <FindingReviewPanel finding={f} opened={reviewOpen} onToggle={() => setReviewOpen((o) => !o)} onFinding={st.setData} onReviewed={onReviewed} />
 
       <Section title="Citations">
         <CitationChips ids={citationsOf(f)} links />
@@ -131,7 +156,6 @@ function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: Propos
       </Paper>
 
       {f.description && <Section title="Description"><Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{f.description}</Text></Section>}
-      {f.evidence && <Section title="Evidence"><CodeBlock code={f.evidence} maxHeight={220} /></Section>}
       {f.check_text && <Section title="Check text"><Collapsible title="check text"><Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{f.check_text}</Text></Collapsible></Section>}
       {f.fix_text && <Section title="Fix text"><Collapsible title="fix text"><Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{f.fix_text}</Text></Collapsible></Section>}
 
@@ -142,7 +166,7 @@ function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: Propos
             <Button
               size="sm"
               leftSection={<IconSend size={16} />}
-              disabled={!f.fix || !!live || f.status !== 'open'}
+              disabled={!f.fix || !!live || f.status !== 'open' || suppressed}
               loading={busy === 'propose'}
               onClick={() => void propose()}
             >
@@ -161,6 +185,7 @@ function FindingDetail({ id, onProposed }: { id: string; onProposed?: (p: Propos
             <Text size="sm" c="dimmed">No vetted library fix for this rule. Remediate by hand using the fix text, then rescan.</Text>
           )}
           {live && <Text size="xs" c="dimmed">A live proposal already exists ({f.proposal?.state}).</Text>}
+          {suppressed && <Text size="sm" c="orange">Propose is disabled while this human dismissal is active. {f.review?.current?.reason} Review the current evidence to reverse the dismissal.</Text>}
         </Stack>
       </Paper>
 

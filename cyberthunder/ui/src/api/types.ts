@@ -11,6 +11,50 @@ export type ProposalState =
 
 export interface Reference { system: string; id: string }
 
+export type ConfidenceGrade = 'high' | 'medium' | 'low' | 'unknown';
+export interface FindingConfidence {
+  grade: ConfidenceGrade;
+  reason: string;
+  reasons: string[];
+  version: string;
+  assessed_at: string;
+  observed_at: string | null;
+  evidence: Record<string, unknown>;
+}
+export type ReviewDisposition = 'unreviewed' | 'confirmed' | 'false_positive' | 'not_applicable' | 'needs_investigation';
+export interface FindingReviewEvent {
+  id: string;
+  disposition: ReviewDisposition;
+  reason: string;
+  supporting_evidence: string;
+  expires_at: string | null;
+  reviewed_at: string;
+  reviewed_by: string;
+  identity_verified: false;
+  scope: Record<string, unknown>;
+  evidence_fingerprint: string;
+}
+export interface FindingReview {
+  disposition: ReviewDisposition;
+  active: boolean;
+  suppressed: boolean;
+  revision: number;
+  evidence_fingerprint: string;
+  current: FindingReviewEvent | null;
+  history_count: number;
+  reopened_reason: string | null;
+  identity_verified: false;
+}
+export interface FindingReviewHistory extends FindingReview { history: FindingReviewEvent[] }
+export interface FindingReviewInput {
+  disposition: ReviewDisposition;
+  reason: string;
+  supporting_evidence: string;
+  expires_at: string | null;
+  expected_revision: number;
+  evidence_fingerprint: string;
+}
+
 export interface Explanation {
   finding_id: string;
   risk: string;
@@ -52,6 +96,21 @@ export interface FixEntry {
   risk_tags: string[];
 }
 
+/** POST /proposals/{id}/plan: library metadata only; no target connection or execution. */
+export interface ProposalPlan {
+  version: 1;
+  mode: 'static';
+  generated_at: string;
+  proposal_id: string;
+  proposal_state: ProposalState;
+  target: { id: string; name: string | null; asset_type: string | null; simulated: boolean | null; in_scope: boolean | null };
+  fix: FixEntry;
+  fix_sha256: string;
+  approved_fix_sha256: string | null;
+  checks: { code: string; status: 'pass' | 'blocked' | 'unknown'; detail: string }[];
+  limitations: string[];
+}
+
 export interface Finding {
   id: string;
   host: string;
@@ -80,6 +139,10 @@ export interface Finding {
 }
 
 export interface FindingPlus extends Finding {
+  scanner_status?: FindingStatus;
+  confidence?: FindingConfidence | null;
+  review?: FindingReview | null;
+  remediated?: { proposal_id: string; verified_at: string; scan_status: FindingStatus } | null;
   categories: FindingCategory[];
   cat: string;
   explanation: Explanation | null;
@@ -103,7 +166,7 @@ export interface FindingsPage {
   summary: FindingsSummary | null;
   view: 'current' | 'scan';
   unfiltered_total: number;
-  facets: Record<FindingFacet, FindingFacetOption[]>;
+  facets: Partial<Record<FindingFacet, FindingFacetOption[]>>;
   limit: number;
   offset: number;
   sort_by: FindingSort;
@@ -111,9 +174,9 @@ export interface FindingsPage {
 }
 
 export type FindingCategory = 'stig' | 'cve' | 'hunt' | 'other';
-export type FindingFacet = 'host' | 'asset_type' | 'source' | 'status' | 'severity' | 'category' | 'benchmark' | 'benchmark_release';
+export type FindingFacet = 'host' | 'asset_type' | 'source' | 'status' | 'severity' | 'category' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review';
 export interface FindingFacetOption { value: string; label: string; count: number }
-export type FindingSort = 'default' | 'severity' | 'host' | 'asset_type' | 'category' | 'title' | 'rule_id' | 'rule_version' | 'source' | 'collected_at' | 'benchmark' | 'benchmark_release';
+export type FindingSort = 'default' | 'severity' | 'host' | 'asset_type' | 'category' | 'title' | 'rule_id' | 'rule_version' | 'source' | 'collected_at' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review';
 export type SortDirection = 'asc' | 'desc';
 export type FindingsQuery = Partial<Record<FindingFacet | 'scan_id' | 'q', string>> & {
   sort_by?: FindingSort; sort_dir?: SortDirection; limit?: number; offset?: number;
@@ -440,6 +503,7 @@ export interface ContentRow {
   upload_date: string | null;
   title?: string;
   sunset?: boolean;
+  allowed?: boolean;
   targets?: string[];
   held_version?: number[] | null;
   expected_bytes?: number | null;
@@ -516,10 +580,17 @@ export interface HeldFile {
   upload_date: string | null;
   sha256: string;
   bytes: number;
-  fetched_at: string;
-  fetched_by: string;
-  source: 'pulled' | 'imported' | 'bundled';
-  ingest: { delta_id?: string; catalog_path?: string; datastream_path?: string };
+  fetched_at: string | null;
+  fetched_by: string | null;
+  source: 'pulled' | 'imported' | 'uploaded' | 'bundled';
+  benchmark_id?: string | null;
+  benchmark_release?: string | null;
+  ingest: {
+    delta_id?: string;
+    catalog_path?: string;
+    datastream_path?: string;
+    upload?: { filename: string; imported_at: string; imported_by: string; authenticity_verified: boolean };
+  };
 }
 
 export interface HeldContent {
@@ -546,6 +617,67 @@ export interface ImportDirResult {
   verified_by: string;
   deltas: PullDelta[];
 }
+
+export type LibraryKind = 'manual_stig' | 'srg' | 'scap_benchmark';
+
+export interface LibraryPreferences {
+  mode: 'inventory' | 'selected';
+  products: string[];
+  kinds: LibraryKind[];
+  check_on_reconnect: boolean;
+  auto_pull: boolean;
+  revision: number;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+export type LibraryPreferencesInput = Omit<LibraryPreferences, 'updated_at' | 'updated_by'>;
+
+export interface LibraryProduct {
+  product_key: string;
+  title: string;
+  kinds: string[];
+  recommended: boolean;
+  selected: boolean;
+  targets: string[];
+  available: ContentRow[];
+  held: HeldFile[];
+  status: 'update_available' | 'current' | 'not_downloaded' | 'unavailable';
+}
+
+export interface LibraryCatalog {
+  benchmark_id: string;
+  title: string;
+  release: string;
+  rules: number;
+  imported_at: string | null;
+  filename: string;
+  origin: 'imported_catalog' | 'bundled_reference';
+  path: string;
+}
+
+export interface StigLibrary {
+  catalog: { source: 'live' | 'snapshot'; saved_at: string | null; total_entries: number };
+  sync: {
+    last_attempt_at: string | null;
+    last_attempt_status: string | null;
+    last_error: string | null;
+    last_successful_check_at: string | null;
+    last_download_at: string | null;
+    last_import_at: string | null;
+  };
+  preferences: LibraryPreferences;
+  products: LibraryProduct[];
+  selection: { wanted: ContentRow[]; updates: ContentRow[]; current: ContentRow[]; skipped: ContentSkip[] };
+  held: HeldContent;
+  catalogs: LibraryCatalog[];
+  catalog_errors?: { filename: string; reason: string }[];
+  jobs: PullJob[];
+  connected: boolean;
+  check_interval_s: number;
+}
+
+export interface ContentUploadResult { record: HeldFile; delta: PullDelta | null }
 
 /** A Target returned by POST /discover. `facts` is set on the system that was read. */
 export interface DiscoveredTarget extends Target {

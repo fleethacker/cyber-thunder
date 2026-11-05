@@ -61,7 +61,7 @@ These are recorded real-target results, not full benchmark coverage. Windows/Win
 | DISA SCAP benchmarks run by the tool itself (OVAL evaluator for Windows, DISA datastreams through oscap on Linux) | `cyberthunder/scap/` | built |
 | Local-model explanations with citation validation | `cyberthunder/explain/` | built |
 | STIG delta ingest, link emulation, outbox | `cyberthunder/ingest/` | built |
-| DISA content pull (public STIG index, resumable allow-listed downloads, manifest round trip for disconnected sites) | `cyberthunder/ingest/content/` | built |
+| STIG Library (saved product/type subscriptions, catalog versions, validated uploads, resumable downloads and offline manifests) | `cyberthunder/ingest/content/` | built |
 | Reports (one-pager, POA&M, checklist, searchable history) | `cyberthunder/report/` | built |
 | HTTP API | `cyberthunder/api/` | built |
 | Web UI | `cyberthunder/ui/` | built |
@@ -152,9 +152,19 @@ python -m cyberthunder serve
 In the UI, set your name in Settings, open **Decisions**, press **Approve** on a card, then **Apply**. The card
 shows the step timeline: scope check, before-state captured, applied, verified.
 
+Open **STIG Library** for uploads, downloads, versions and separate live-check/download/import times.
+Subscriptions default to inventory matches; choose manual product/type checkboxes and **Save selections**
+before checking or pulling. XML/ZIP uploads work offline (32 MiB per file), as do manifest/folder imports.
+Reconnect options apply only on reconnect; periodic checks are server-configured. Bundled references and
+installed content are labelled separately, and neither implies full executable scan coverage.
+See [content and subscriptions](docs/CONTENT.md).
+
 Force a failure and watch the rollback: in Settings turn on "force verification failure on next apply", then
 apply another approved fix. Verification fails, the engine rolls back automatically, and **Diff** shows
 before and after. From the CLI the same flow is `proposals approve <id>`, `apply <id> [--simulate-verify-fail]`, `diff <id>`, `rollback <id>`; `apply` refuses a proposal that has not been approved.
+Before approving, **Preview change** or `apply <id> --plan` shows the stored change plan and declared
+capture, verification and rollback instructions. The preview is audited and makes no target connection;
+it does not establish host readiness or approve the change.
 
 Verify the audit chain (also the green badge in the UI header):
 
@@ -173,13 +183,19 @@ POA&M, checklist), `demo reset|run`, `state info|migrate` (where the documents l
 
 ## Documentation
 
+Automated regression configuration and its explicit platform limitations are described in [docs/CI.md](docs/CI.md).
+
 | Document | What it is |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | pipeline, contracts, guardrails, how to add an adapter |
 | [docs/VALIDATION.md](docs/VALIDATION.md) | real-platform evidence, untested versions and missing run metadata |
 | [docs/COVERAGE.md](docs/COVERAGE.md) | implemented checks, benchmark denominators, executable fixes and runbooks |
+| [docs/CONFIDENCE.md](docs/CONFIDENCE.md) | evidence-strength grades, provenance, freshness and limits |
+| [docs/FINDING_REVIEW.md](docs/FINDING_REVIEW.md) | reasoned reviews, false positives, expiry, history and remediation guards |
+| [docs/REPORT_ASSURANCE.md](docs/REPORT_ASSURANCE.md) | raw scanner results and review decisions in commander and POA&M reports |
+| [docs/REMEDIATION_PLAN.md](docs/REMEDIATION_PLAN.md) | static change previews, declared capture paths, verification and rollback instructions |
 | [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |
-| [docs/CONTENT.md](docs/CONTENT.md) | how STIGs and SCAP benchmarks reach the node: pull when connected, manifest and removable media when not |
+| [docs/CONTENT.md](docs/CONTENT.md) | STIG Library, saved subscriptions, versions and sync times, uploads/downloads and offline transfers |
 | [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |
 | [docs/API.md](docs/API.md) | HTTP API v1 |
 | [docs/STATE.md](docs/STATE.md) | the state directory: documents (json files or SQLite) and files, `state migrate` and `state info`, WAL on a local volume only, backups |
@@ -211,6 +227,10 @@ application in a container. Both deployment paths retain approval, audit and rol
 both still require the identity and credential work in the backlog before fielding.
 See the [application container guide](deploy/kubernetes/README.md) and
 [Zarf package](packages/cyberthunder/README.md) for the merged container and UDS SSO configuration.
+
+SQLite stores scan/findings/discovery documents and library preferences/sync metadata. Persist and back up
+the **entire state directory**, including raw scanner files, inventory, audit, rollback snapshots and content;
+mount the whole directory on the persistent volume. See [state and backups](docs/STATE.md).
 
 Deploy UDS Core and Podinfo with `./deploy.sh`. See
 [UDS cluster deployment](docs/DEPLOYMENT.md) for macOS Podman, Linux,

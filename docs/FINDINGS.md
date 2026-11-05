@@ -59,9 +59,14 @@ The page displays matching versus total counts and the range shown on the curren
 These statuses primarily describe scanner/check outcomes. Kubernetes known-good exceptions can also
 change matching open results to Not applicable on later scans; their tags and evidence record the
 exception and reason. That exception mechanism is not a confidence score or a separate review disposition.
-The Findings page introduces no confidence or false-positive/review controls. Human approval remains in the
-proposal workflow. Existing verified fixes display as passed; their original scanner status stays
-in the response's remediation metadata. A newer scan finding the issue open again takes precedence.
+Confidence and human review are separate columns and filters. High, Medium, Low and Unknown are
+deterministic evidence-strength categories with reasons, not probabilities; see [CONFIDENCE](CONFIDENCE.md).
+The drawer records Confirmed, False positive, Not applicable, Needs investigation or a reversal to
+Unreviewed, with reason, supporting evidence and history. Suppression requires a future expiry and
+reopens when relevant evidence changes. Reviewer names are self-asserted until identity integration lands.
+See [FINDING_REVIEW](FINDING_REVIEW.md). These decisions never change stored scanner observations.
+Human approval remains in the proposal workflow. Existing verified fixes display as passed; the
+original scanner status stays in `scanner_status` and remediation metadata. A newer scan finding the issue open again takes precedence.
 The API retains that existing remediation decoration even when an explicit scan ID is requested.
 
 **Explain all open** queues the existing explanation operation for all open findings, independent of
@@ -71,11 +76,13 @@ the page filters. Open a finding using its rule/identifier button to inspect evi
 
 Default priority keeps the original order: highest severity, open first, machine, then STIG ID/rule.
 Choose an explicit field and ascending/descending direction for severity, machine, asset type,
-category, title, rule ID, STIG ID/rule version, source, observation time, benchmark or release.
+category, title, rule ID, STIG ID/rule version, source, observation time, benchmark, release, confidence or review.
 Observation time compares actual instants across time zones. Text sorts ignore case; releases sort
 as text, not semantic versions. Category sorting compares each finding's alphabetically ordered
 category names. Equal sort values always use finding ID ascending. Missing values and unknown
 severity stay last in either direction for explicit sorts.
+Unknown confidence also stays last in either direction. Review order is Unreviewed, Needs investigation,
+Confirmed, False positive, Not applicable (reversed for descending).
 
 The API filters and sorts before returning pages of 200 rows. Facets describe all findings, not just
 those 200 rows. Processing uses the public StateStore API and works with JSON and SQLite; it currently

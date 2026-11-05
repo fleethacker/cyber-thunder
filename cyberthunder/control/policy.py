@@ -125,6 +125,29 @@ def evaluate(policy: AutomationPolicy, fix: FixEntry, finding: Finding, target, 
     return PolicyDecision(False, None, all_reasons or ["no rules defined"])
 
 
+def assurance_block_reason(ctx, finding: Finding) -> str | None:
+    """Evidence/review can withhold standing approval; neither can grant it."""
+    from cyberthunder.findings.confidence import assess_for_context
+    from cyberthunder.findings.review import ReviewService
+
+    review = ReviewService(ctx).summary(finding)
+    if review["suppressed"] or review["disposition"] == "needs_investigation":
+        return "finding review requires attention: " + review["disposition"].replace("_", " ")
+    confidence = assess_for_context(ctx, finding)
+    if confidence["grade"] in {"low", "unknown"}:
+        return "individual human approval required for " + confidence["grade"] + " confidence: " + confidence["reason"]
+    return None
+
+
+def evaluate_for_context(ctx, fix: FixEntry, finding: Finding, target) -> PolicyDecision:
+    decision = evaluate(ctx.policy, fix, finding, target)
+    if decision.auto_eligible:
+        blocked = assurance_block_reason(ctx, finding)
+        if blocked:
+            return PolicyDecision(False, decision.rule, [blocked])
+    return decision
+
+
 def load_policy(path: str | Path) -> AutomationPolicy:
     p = Path(path)
     if not p.exists():

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from cyberthunder.api import util
 from cyberthunder.api.errors import MappedRoute, feature, status_for, unavailable
@@ -103,12 +103,33 @@ def _demo_forces_failure(ctx) -> bool:
         return False
 
 
+@router.post("/proposals/{pid}/plan")
+def plan(pid: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    fn = getattr(ctx.engine, "plan", None) if ctx.engine is not None else None
+    if not callable(fn):
+        raise unavailable("static remediation preview")
+    with feature("static remediation preview"):
+        return fn(pid, actor=actor)
+
+
 @router.post("/proposals/{pid}/apply", status_code=202)
 def apply(pid: str, body: ApplyBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
     p = util.get_proposal(ctx, pid)
     if p.state != ProposalState.APPROVED:
         raise IllegalTransition(f"proposal {pid} is {p.state.value}; only an approved proposal can be applied")
     ctx.killswitch.guard(f"proposal.apply:{pid}", actor)
+    from cyberthunder.findings.review import ReviewService
+    from cyberthunder.control.policy import assurance_block_reason
+    finding = util.get_finding(ctx, p.finding_id)
+    reason = None
+    if ReviewService(ctx).summary(finding)["suppressed"]:
+        reason = "The finding has an active review suppression; reopen its review before applying"
+    elif (p.decided_by or "").startswith("policy:"):
+        reason = assurance_block_reason(ctx, finding)
+    if reason:
+        ctx.audit.append("finding.review_blocked", actor, {"action": "apply", "reason": reason},
+                         subject=p.id, outcome="blocked")
+        raise HTTPException(409, reason)
     body = body or ApplyBody()
     # The demo toggle is consumed only when the request does not ask for a forced failure itself.
     simulate = True if body.simulate_verify_fail else _demo_forces_failure(ctx)

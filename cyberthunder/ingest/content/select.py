@@ -199,11 +199,15 @@ def _row(e: Entry, want: ProductWant | None, **extra) -> dict:
 def select(entries: list[Entry], targets: Iterable, collected: Mapping[str, Mapping] | None = None,
            held: Iterable[dict] = (), *, include_automation: bool = False, include_compilation: bool = False,
            extra_products: Iterable[str] = (), allowed_hosts: Iterable[str] = ALLOWED_HOSTS,
-           allow_http: bool = False) -> Selection:
+           allow_http: bool = False, content_kinds: Iterable[str] | None = None) -> Selection:
     """Work out wanted, current, update and skipped entries. Pure: no I/O."""
     collected = collected or {}
-    held = list(held)
+    # Local XML can claim any identity/release. It is useful reference content, but it
+    # must not suppress an official download without verified publisher provenance.
+    held = [r for r in held if r.get("source") != "uploaded" and
+            (r.get("ingest") or {}).get("upload", {}).get("authenticity_verified") is not False]
     hosts = frozenset(allowed_hosts)
+    requested_kinds = set(content_kinds) if content_kinds is not None else None
 
     def ok(e: Entry) -> bool:
         return e.allowed_by(hosts, allow_http)
@@ -225,7 +229,9 @@ def select(entries: list[Entry], targets: Iterable, collected: Mapping[str, Mapp
             if t.asset_type in SCAP_TYPES:
                 w.scap = True
     for k in extra_products:
-        sel.products.setdefault(k, ProductWant(product_key=k, targets=[], reasons=["requested"]))
+        w = sel.products.setdefault(k, ProductWant(product_key=k, targets=[], reasons=["requested"]))
+        if requested_kinds is not None and "scap_benchmark" in requested_kinds:
+            w.scap = True
 
     by_product: dict[str, list[Entry]] = {}
     for e in entries:
@@ -241,16 +247,20 @@ def select(entries: list[Entry], targets: Iterable, collected: Mapping[str, Mapp
         kinds = list(GUIDE_KINDS[:1])
         if want.scap:
             kinds.append("scap_benchmark")
+        if requested_kinds is not None:
+            kinds = [k for k in kinds if k in requested_kinds]
+            if "srg" in requested_kinds:
+                kinds.append("srg")
         if include_automation:
             kinds.append("automation")
         for kind in kinds:
             pool = [e for e in cands if e.kind == kind]
-            if kind == "manual_stig" and not pool:
+            if kind == "manual_stig" and not pool and (requested_kinds is None or "srg" in requested_kinds):
                 pool = [e for e in cands if e.kind == "srg"]
                 if pool:
                     kind = "srg"
             if not pool:
-                if kind != "automation":
+                if kind not in ("automation", "srg"):
                     sel.skipped.append({"product_key": key, "kind": kind,
                                         "reason": f"not matching: no {kind.replace('_', ' ')} for this product"})
                 continue
@@ -277,7 +287,11 @@ def select(entries: list[Entry], targets: Iterable, collected: Mapping[str, Mapp
         if comp is not None:
             wanted.append((comp, None))
 
+    seen = set()
     for e, want in wanted:
+        if e.filename in seen:
+            continue
+        seen.add(e.filename)
         row = _row(e, want)
         sel.wanted.append(row)
         hv = _held_version(held, e.product_key or "", e.kind)

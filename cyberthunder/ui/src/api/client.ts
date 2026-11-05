@@ -4,8 +4,9 @@ import type {
   AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, ContentManifest, DeltaReport,
   DemoStatus, DiscoveredAsset, DiscoveredTarget, DiscoveryAccept, Finding, DiscoveryMode, DiscoveryOverview, DiscoveryRun, DiscoveryScope,
   DiscoveryStatus, Explanation, FindingPlus, FindingsPage, FindingsQuery, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
-  Outbox, PolicyDecision, ProposalDiff, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
+  Outbox, PolicyDecision, ProposalDiff, ProposalPlan, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
   ReportHistory, SavedReportContent, TargetOutcome, TargetReport, UpdateCheck,
+  ContentUploadResult, LibraryPreferences, LibraryPreferencesInput, StigLibrary, FindingReviewHistory, FindingReviewInput,
 } from './types';
 
 export const API_BASE = '/api/v1';
@@ -130,12 +131,15 @@ export const api = {
 
   findings: (q: FindingsQuery) => get<FindingsPage>('/findings', q),
   finding: (id: string) => get<FindingPlus>(`/findings/${enc(id)}`),
+  findingReview: (id: string, scan_id?: string) => get<FindingReviewHistory>(`/findings/${enc(id)}/review`, { scan_id }),
+  saveFindingReview: (id: string, body: FindingReviewInput) => put<FindingReviewHistory>(`/findings/${enc(id)}/review`, body),
   propose: (id: string) => post<ProposalPlus>(`/findings/${enc(id)}/propose`),
   explain: (id: string, force = false) => post<Explanation>(`/findings/${enc(id)}/explain`, { force }),
   explainAll: (ids?: string[]) => post<{ queued: number }>('/findings/explain', ids ? { ids } : {}),
 
   proposals: (q?: Query) => get<{ proposals: ProposalPlus[] }>('/proposals', q),
   proposal: (id: string) => get<ProposalPlus>(`/proposals/${enc(id)}`),
+  plan: (id: string) => post<ProposalPlan>(`/proposals/${enc(id)}/plan`),
   approve: (id: string, note?: string) => post<ProposalPlus>(`/proposals/${enc(id)}/approve`, { note }),
   deny: (id: string, note?: string) => post<ProposalPlus>(`/proposals/${enc(id)}/deny`, { note }),
   cancel: (id: string, note?: string) => post<ProposalPlus>(`/proposals/${enc(id)}/cancel`, { note }),
@@ -176,6 +180,13 @@ export const api = {
   pullUpdates: (body: { filenames?: string[]; all_matching?: boolean; pace?: boolean }) => post<PullJob>('/ingest/updates/pull', body),
   pullJob: (id: string) => get<PullJob>(`/ingest/updates/jobs/${enc(id)}`),
   content: () => get<HeldContent>('/ingest/content'),
+  stigLibrary: () => get<StigLibrary>('/ingest/library'),
+  saveLibraryPreferences: (body: LibraryPreferencesInput) => put<LibraryPreferences>('/ingest/library/preferences', body),
+  uploadContent: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<ContentUploadResult>('POST', '/ingest/content/upload', { form });
+  },
   writeManifest: () => post<ContentManifest>('/ingest/manifest'),
   importDir: (path: string) => post<ImportDirResult>('/ingest/import-dir', { path }),
   outbox: () => get<Outbox>('/outbox'),

@@ -307,6 +307,8 @@ class Scanner:
             findings = self._filter(findings, run.rule_filter)
             self._apply_known_good(target, findings, actor)
             for f in findings:
+                f.collection_provenance = dict(f.collection_provenance or {})
+                f.collection_provenance["simulated"] = bool(target.simulated)
                 f.scan_id = run.id
                 f.asset_type = f.asset_type or target.asset_type
             ctx.store.write_json(workdir / "collected.json", collected.to_dict())

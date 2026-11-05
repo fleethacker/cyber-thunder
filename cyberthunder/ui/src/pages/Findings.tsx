@@ -8,6 +8,8 @@ import { api, errorText } from '../api/client';
 import type { FindingFacet, FindingsPage, FindingsQuery, FindingSort, SortDirection } from '../api/types';
 import { AssetIcon, AsyncView, Empty, Mono, PageTitle, SeverityBadge, StateBadge } from '../components/common';
 import { FindingDrawer } from '../components/FindingDrawer';
+import { ConfidenceBadge, ReviewBadge } from '../components/FindingAssurance';
+import { CONFIDENCE_LABELS, REVIEW_LABELS } from '../lib/findingAssurance';
 import { fmtTime, statusColor } from '../lib/format';
 import { useLocalPref } from '../lib/hooks';
 
@@ -25,6 +27,7 @@ const SORTS: { value: FindingSort; label: string }[] = [
   { value: 'rule_id', label: 'Rule ID' }, { value: 'rule_version', label: 'STIG ID / rule version' }, { value: 'source', label: 'Source' },
   { value: 'collected_at', label: 'Observation time' }, { value: 'benchmark', label: 'Benchmark' },
   { value: 'benchmark_release', label: 'Release' },
+  { value: 'confidence', label: 'Evidence confidence' }, { value: 'review', label: 'Human review' },
 ];
 
 // Quote CSV values so names such as "Release 1, January" remain a single selection.
@@ -45,19 +48,28 @@ export default function Findings() {
   const [category, setCategory] = useLocalPref<string[]>('ct.f.category', []);
   const [benchmark, setBenchmark] = useLocalPref<string[]>('ct.f.benchmark', []);
   const [release, setRelease] = useLocalPref<string[]>('ct.f.release', []);
+  const [confidence, setConfidence] = useLocalPref<string[]>('ct.f.confidence', []);
+  const [review, setReview] = useLocalPref<string[]>('ct.f.review', []);
   const [sortBy, setSortBy] = useLocalPref<FindingSort>('ct.f.sort', 'default');
   const [sortDir, setSortDir] = useLocalPref<SortDirection>('ct.f.direction', 'asc');
   const [page, setPage] = useState(1);
   const [drawer, setDrawer] = useState<string | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [explaining, setExplaining] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [data, setData] = useState<FindingsPage>();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Capability comes from server facets, including on an empty findings view.
+  const confidenceAvailable = data?.facets?.confidence !== undefined;
+  const reviewAvailable = data?.facets?.review !== undefined;
+  const sortAvailable = (sortBy !== 'confidence' || confidenceAvailable) && (sortBy !== 'review' || reviewAvailable);
+  const effectiveSort = sortAvailable ? sortBy : 'default';
   const query: FindingsQuery = {
     q: dq, status: csv(status), severity: csv(severity), source: csv(source), asset_type: csv(assetType),
     host: csv(host), category: csv(category), benchmark: csv(benchmark), benchmark_release: csv(release),
-    sort_by: sortBy, sort_dir: sortDir, limit: PAGE, offset: (page - 1) * PAGE,
+    confidence: confidenceAvailable ? csv(confidence) : undefined, review: reviewAvailable ? csv(review) : undefined,
+    sort_by: effectiveSort, sort_dir: effectiveSort === 'default' ? 'asc' : sortDir, limit: PAGE, offset: (page - 1) * PAGE,
   };
   const queryKey = JSON.stringify(query);
   useEffect(() => {
@@ -78,21 +90,27 @@ export default function Findings() {
 
   const axes: { key: FindingFacet; label: string; value: string[]; set: (v: string[]) => void }[] = [
     { key: 'category', label: 'Category', value: category, set: setCategory },
-    { key: 'status', label: 'Scanner result', value: status, set: setStatus },
+    { key: 'status', label: 'Current result', value: status, set: setStatus },
     { key: 'severity', label: 'Severity', value: severity, set: setSeverity },
+    { key: 'confidence', label: 'Evidence confidence', value: confidence, set: setConfidence },
+    { key: 'review', label: 'Human review', value: review, set: setReview },
     { key: 'host', label: 'Machine', value: host, set: setHost },
     { key: 'asset_type', label: 'Asset type', value: assetType, set: setAssetType },
     { key: 'source', label: 'Source', value: source, set: setSource },
     { key: 'benchmark', label: 'Benchmark', value: benchmark, set: setBenchmark },
     { key: 'benchmark_release', label: 'Release', value: release, set: setRelease },
   ];
+  const optionLabel = (key: FindingFacet, value: string, fallback: string) => {
+    const labels: Record<string, string> = key === 'confidence' ? CONFIDENCE_LABELS : key === 'review' ? REVIEW_LABELS : LABELS;
+    return ['category', 'severity', 'status', 'confidence', 'review'].includes(key) || value === '__missing__' ? labels[value] ?? fallback : fallback;
+  };
   const options = (key: FindingFacet, selected: string[]) => {
-    const result = (data?.facets[key] ?? []).map((o) => ({
+    const result = (data?.facets?.[key] ?? []).map((o) => ({
       value: selected.find((s) => s.trim().toLowerCase() === o.value) ?? o.value,
-      label: `${['category', 'severity', 'status'].includes(key) || o.value === '__missing__' ? LABELS[o.value] ?? o.label : o.label} (${o.count})`,
+      label: `${optionLabel(key, o.value, o.label)} (${o.count})`,
     }));
     for (const value of selected) {
-      if (!result.some((o) => o.value === value)) result.push({ value, label: `${['category', 'severity', 'status'].includes(key) || value === '__missing__' ? LABELS[value] ?? value : value} (0)` });
+      if (!result.some((o) => o.value === value)) result.push({ value, label: `${optionLabel(key, value, value)} (0)` });
     }
     return result;
   };
@@ -104,7 +122,7 @@ export default function Findings() {
     setPage(1);
   };
   const reset = () => { quickView('open'); setSortBy('default'); setSortDir('asc'); };
-  const activeQuickView = !q && !severity.length && !source.length && !assetType.length && !host.length && !benchmark.length && !release.length
+  const activeQuickView = !q && !severity.length && !source.length && !assetType.length && !host.length && !benchmark.length && !release.length && !confidence.length && !review.length
     ? (!status.length && !category.length ? 'all' : status.length === 1 && status[0] === 'open'
       ? (!category.length ? 'open' : category.length === 1 ? category[0] : '') : '') : '';
   const explainAll = async () => {
@@ -144,12 +162,14 @@ export default function Findings() {
             rightSection={q ? <ActionIcon variant="subtle" aria-label="Clear search" onClick={() => { setQ(''); setPage(1); }}><IconX size={16} /></ActionIcon> : undefined} />
           <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="sm">
             {axes.map((a) => <MultiSelect key={a.key} label={a.label} data={options(a.key, a.value)} value={a.value}
+              disabled={(a.key === 'confidence' && !confidenceAvailable) || (a.key === 'review' && !reviewAvailable)}
               onChange={(value) => { setPage(1); a.set(value); }} searchable clearable placeholder={a.value.length ? undefined : 'All'} nothingFoundMessage="No matching options" />)}
           </SimpleGrid>
+          {data && (!confidenceAvailable || !reviewAvailable) && <Text size="sm" c="dimmed">This server has not reported all confidence and review features. Missing values appear as Unknown or Unreviewed. Unavailable filters and sorts are paused until the server is upgraded; saved preferences are retained.</Text>}
           <Group justify="space-between" align="flex-end">
-            <Text size="xs" c="dimmed" maw={620}>Option counts cover the full view. Categories can overlap. Scanner results are not human triage decisions; verified fixes appear passed.</Text>
+            <Text size="xs" c="dimmed" maw={620}>Option counts cover the full view. Categories can overlap. Current result includes verified fixes. Original scanner observations, evidence confidence and human review are shown separately.</Text>
             <Group gap="sm">
-              <Select label="Sort by" data={SORTS} value={sortBy} allowDeselect={false} w={190}
+              <Select label="Sort by" data={SORTS.map((s) => ({ ...s, disabled: (s.value === 'confidence' && !confidenceAvailable) || (s.value === 'review' && !reviewAvailable) }))} value={sortBy} allowDeselect={false} w={190}
                 onChange={(v) => { setSortBy((v ?? 'default') as FindingSort); if (v === 'default') setSortDir('asc'); setPage(1); }} />
               <Select label="Direction" data={[{ value: 'asc', label: 'Ascending' }, { value: 'desc', label: 'Descending' }]} value={sortDir}
                 disabled={sortBy === 'default'} allowDeselect={false} w={150} onChange={(v) => { setSortDir((v ?? 'asc') as SortDirection); setPage(1); }} />
@@ -165,17 +185,21 @@ export default function Findings() {
         empty={<Empty title="No findings match"><Stack align="center" gap="xs"><Text size="sm">Choose another quick view, clear filters, or run a scan.</Text><Button variant="light" onClick={() => quickView('all')}>Show all results</Button></Stack></Empty>}>
         {(d) => <Paper withBorder radius="md">
           <ScrollArea>
-            <Table striped highlightOnHover verticalSpacing="sm" miw={1250}>
+            <Table striped highlightOnHover verticalSpacing="sm" miw={1550}>
               <Table.Thead><Table.Tr>
-                <Table.Th>Severity</Table.Th><Table.Th>Scanner result</Table.Th><Table.Th>Machine / type</Table.Th><Table.Th>Category / source</Table.Th>
+                <Table.Th>Severity</Table.Th><Table.Th>Scanner result</Table.Th><Table.Th>Evidence confidence</Table.Th><Table.Th>Human review</Table.Th><Table.Th>Machine / type</Table.Th><Table.Th>Category / source</Table.Th>
                 <Table.Th>Rule / title</Table.Th><Table.Th>Benchmark / release</Table.Th><Table.Th>Observed</Table.Th><Table.Th>Fix / explanation / proposal</Table.Th>
               </Table.Tr></Table.Thead>
               <Table.Tbody>{d.findings.map((f) => <Table.Tr key={f.id}>
                 <Table.Td><SeverityBadge severity={f.severity} size="sm" /></Table.Td>
-                <Table.Td><Badge color={statusColor(f.status)} variant="light" radius="sm">{LABELS[f.status]}</Badge></Table.Td>
+                <Table.Td><Badge color={statusColor(f.scanner_status ?? f.remediated?.scan_status ?? f.status)} variant="light" radius="sm">{LABELS[f.scanner_status ?? f.remediated?.scan_status ?? f.status]}</Badge>
+                  {(f.scanner_status ?? f.remediated?.scan_status ?? f.status) !== f.status && <Text size="xs" c="dimmed" mt={4}>Current: {LABELS[f.status]} · verified fix</Text>}</Table.Td>
+                <Table.Td miw={160} maw={240}><ConfidenceBadge confidence={f.confidence} /><Text size="xs" c="dimmed" lineClamp={2} mt={4}>{f.confidence?.reason || 'Evidence strength not reported'}</Text></Table.Td>
+                <Table.Td miw={180} maw={240}><ReviewBadge review={f.review} onClick={() => { setReviewOpen(true); setDrawer(f.id); }} />
+                  {f.review?.reopened_reason && <Text size="xs" c="orange" lineClamp={2} mt={4}>Reopened: {f.review.reopened_reason}</Text>}</Table.Td>
                 <Table.Td><Group gap={4} wrap="nowrap"><AssetIcon type={f.asset_type} size={14} /><Text size="sm">{f.host || 'Not recorded'}</Text></Group><Text size="xs" c="dimmed">{f.asset_type || 'Not recorded'}</Text></Table.Td>
                 <Table.Td><Group gap={4}>{f.categories.map((c) => <Badge key={c} size="xs" variant="light" color={c === 'stig' ? 'blue' : c === 'cve' ? 'orange' : 'gray'}>{LABELS[c]}</Badge>)}</Group><Text size="xs" c="dimmed" mt={4}>{f.source || 'Not recorded'}</Text></Table.Td>
-                <Table.Td miw={280} maw={420}><Button variant="subtle" size="compact-xs" onClick={() => setDrawer(f.id)} aria-label={`Open finding ${f.rule_version || f.rule_id}`}><Mono>{f.rule_version || f.rule_id}</Mono></Button><Text size="sm" lineClamp={2} mt={4}>{f.title}</Text>
+                <Table.Td miw={280} maw={420}><Button variant="subtle" size="compact-xs" onClick={() => { setReviewOpen(false); setDrawer(f.id); }} aria-label={`Open finding ${f.rule_version || f.rule_id}`}><Mono>{f.rule_version || f.rule_id}</Mono></Button><Text size="sm" lineClamp={2} mt={4}>{f.title}</Text>
                   <Text size="xs" c="dimmed" lineClamp={2}>{Array.from(new Set([f.group_id, ...f.references.filter((r) => r.system === 'cve').map((r) => r.id)])).filter(Boolean).join(' · ')}</Text></Table.Td>
                 <Table.Td maw={240}><Text size="xs" lineClamp={2}>{f.benchmark || 'Not recorded'}</Text><Text size="xs" c="dimmed">{f.benchmark_release || 'Not recorded'}</Text></Table.Td>
                 <Table.Td><Text size="xs">{f.collected_at && !Number.isNaN(Date.parse(f.collected_at)) ? fmtTime(f.collected_at) : 'Not recorded'}</Text></Table.Td>
@@ -187,7 +211,7 @@ export default function Findings() {
             {d.total > PAGE && <Pagination total={Math.ceil(d.total / PAGE)} value={page} onChange={setPage} />}</Group>
         </Paper>}
       </AsyncView>
-      <FindingDrawer findingId={drawer} onClose={() => setDrawer(null)} onProposed={() => void reload()} />
+      <FindingDrawer findingId={drawer} onClose={() => setDrawer(null)} onProposed={() => void reload()} onReviewed={() => void reload()} initialReviewOpen={reviewOpen} />
     </Stack>
   );
 }

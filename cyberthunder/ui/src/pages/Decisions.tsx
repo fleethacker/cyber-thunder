@@ -14,6 +14,7 @@ import { Empty, ErrorBox, Loading, PageTitle } from '../components/common';
 import { FindingDrawer } from '../components/FindingDrawer';
 import { ProposalCard, type ProposalActions } from '../components/ProposalCard';
 import { ageSeconds, severityRank } from '../lib/format';
+import { isSuppressed } from '../lib/findingAssurance';
 import { useAsync, useInterval, useLocalPref } from '../lib/hooks';
 import { useAuditListener } from '../state/AppState';
 
@@ -53,10 +54,10 @@ export default function Decisions() {
   const upsertRef = useRef(upsert);
   upsertRef.current = upsert;
 
-  // live: any proposal.* audit event reloads the list (debounced); applying ones are polled below
+  // Proposal and review audit events refresh action availability; applying ones are polled below.
   const reloadTimer = useRef<number | undefined>(undefined);
   useAuditListener((r) => {
-    if (!r.action.startsWith('proposal.') && r.action !== 'action.blocked') return;
+    if (!r.action.startsWith('proposal.') && r.action !== 'action.blocked' && r.action !== 'finding.review') return;
     window.clearTimeout(reloadTimer.current);
     reloadTimer.current = window.setTimeout(() => void list.reload(), 300);
   });
@@ -106,7 +107,13 @@ export default function Decisions() {
   const actions: ProposalActions = useMemo(() => ({
     approve: (p) => void run(p, () => api.approve(p.id), `Approved: ${p.title}`),
     deny: (p) => { setDenyError(null); setDenyFor([p]); },
-    apply: (p) => void run(p, () => api.apply(p.id), `Applying: ${p.title}`),
+    apply: (p) => {
+      if (isSuppressed(p.finding?.review)) {
+        setActionError(`Apply blocked by human review: ${p.finding?.review?.current?.reason || 'Review the current finding before applying.'}`);
+        return;
+      }
+      void run(p, () => api.apply(p.id), `Applying: ${p.title}`);
+    },
     rollback: (p) => void run(p, () => api.rollback(p.id), `Rollback started: ${p.title}`),
     verify: (p) => void run(p, () => api.verify(p.id), `Verification recorded: ${p.title}`),
     openFinding: (id) => setDrawer(id),
@@ -246,7 +253,7 @@ export default function Decisions() {
         </>
       )}
 
-      <FindingDrawer findingId={drawer} onClose={() => setDrawer(null)} onProposed={upsert} />
+      <FindingDrawer findingId={drawer} onClose={() => setDrawer(null)} onProposed={upsert} onReviewed={() => void list.reload()} />
       <ConfirmReasonModal
         opened={!!denyFor}
         onClose={() => setDenyFor(null)}

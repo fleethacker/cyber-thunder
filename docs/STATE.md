@@ -5,8 +5,10 @@ in the container). Two kinds of thing live there, and the difference decides whe
 
 **Documents** are JSON the application reads and writes only through `StateStore` (`cyberthunder/store.py`):
 scan runs and findings, explanations, the link state, the presenter's demo switch, STIG delta and bulletin
-records, discovery scopes, assets and sweep runs, Kubernetes known-good exceptions, the content index, update
-check, source and pull jobs. A
+records, discovery scopes, assets and sweep runs, finding review history (`finding_reviews/`), Kubernetes known-good exceptions, the content index, update
+check, cached catalog, library preferences (`content/preferences.json`), sync timestamps (`content/sync.json`),
+source and pull jobs. Preferences include product/type subscriptions, reconnect behavior, revision and actor;
+sync records distinguish live-check attempts/success, downloads and local imports. A
 document has a logical path such as `scans/<id>/run.json`, and the backend chosen by `CT_STATE_BACKEND` holds it.
 
 **Files** are read from disk by other programs, people or transports, so they stay files under every backend:
@@ -85,11 +87,15 @@ directory: the API server, the CLI, and the container environment.
 
 ## Backups
 
-The backup instructions in [CONTRIBUTING.md](CONTRIBUTING.md) cover the repository; the state directory is
-operational data and is backed up as a directory of files under both backends. Under sqlite, copy `state.db`
-together with `state.db-wal` and `state.db-shm` while nothing is writing, or run `state migrate --to json`
-first and copy the files. Restoring is copying the directory back and starting with the same
-`CT_STATE_BACKEND`. The audit chain, proposals, inventory and snapshots are files in both cases.
+The backup instructions in [CONTRIBUTING.md](CONTRIBUTING.md) cover the repository. Back up the **entire state
+directory** for operational data under both backends. SQLite holds scan runs, findings, discovery and the
+library preference/sync documents, but raw scanner files, inventory, audit, rollback snapshots, downloaded
+content and imported catalog XML remain outside the database.
+
+Stop writers before copying the directory; under sqlite include `state.db` and any `state.db-wal` and
+`state.db-shm` files. Alternatively migrate documents to JSON first and retain all other state files too.
+Restore the complete directory with the corresponding `CT_STATE_BACKEND`. A container persistent volume
+must mount the whole state directory (`/var/lib/cyberthunder` by default), not only `state.db`.
 
 ## What remains
 
