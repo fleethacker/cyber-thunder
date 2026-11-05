@@ -61,6 +61,10 @@ jobs:
         working-directory: cyberthunder/ui
         run: npm run build
 
+      - name: Run UI regressions
+        working-directory: cyberthunder/ui
+        run: npm test
+
       - name: Run the normal gate with strict full-suite skip checks
         if: ${{ !cancelled() }}
         run: bash scripts/gate.sh

@@ -162,6 +162,9 @@ See [content and subscriptions](docs/CONTENT.md).
 Force a failure and watch the rollback: in Settings turn on "force verification failure on next apply", then
 apply another approved fix. Verification fails, the engine rolls back automatically, and **Diff** shows
 before and after. From the CLI the same flow is `proposals approve <id>`, `apply <id> [--simulate-verify-fail]`, `diff <id>`, `rollback <id>`; `apply` refuses a proposal that has not been approved.
+Before approving, **Preview change** or `apply <id> --plan` shows the stored change plan and declared
+capture, verification and rollback instructions. The preview is audited and makes no target connection;
+it does not establish host readiness or approve the change.
 
 Verify the audit chain (also the green badge in the UI header):
 
@@ -190,6 +193,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/CONFIDENCE.md](docs/CONFIDENCE.md) | evidence-strength grades, provenance, freshness and limits |
 | [docs/FINDING_REVIEW.md](docs/FINDING_REVIEW.md) | reasoned reviews, false positives, expiry, history and remediation guards |
 | [docs/REPORT_ASSURANCE.md](docs/REPORT_ASSURANCE.md) | raw scanner results and review decisions in commander and POA&M reports |
+| [docs/REMEDIATION_PLAN.md](docs/REMEDIATION_PLAN.md) | static change previews, declared capture paths, verification and rollback instructions |
 | [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |
 | [docs/CONTENT.md](docs/CONTENT.md) | STIG Library, saved subscriptions, versions and sync times, uploads/downloads and offline transfers |
 | [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |

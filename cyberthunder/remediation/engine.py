@@ -623,6 +623,11 @@ class RemediationEngine:
         finally:
             self._close(transport, target)
 
+    def plan(self, proposal_id: str, *, actor: str) -> dict:
+        """Inspect the bound fix and current stored checks without accessing a target."""
+        from cyberthunder.remediation.plan import static_plan
+        return static_plan(self, proposal_id, actor=actor)
+
     def diff(self, proposal_id: str) -> dict:
         p = self.ctx.gate.get(proposal_id)
         snap = self.ctx.store.snapshot_dir(p.id)

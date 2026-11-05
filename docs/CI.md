@@ -11,6 +11,8 @@ Each matrix job uses Python 3.12 and Node 22 on a hosted runner:
 The workflow installs the existing `.[dev]` Python dependencies and runs `npm ci`
 against `cyberthunder/ui/package-lock.json`. `npm run build` runs TypeScript and
 Vite before pytest, so the existing UI asset test inspects the fresh build.
+`npm test` also runs the source component and utility regressions with Node's
+built-in test runner before the Python gate. A UI test failure fails the job.
 Node 22 satisfies the lockfile's Vite requirement of Node 22.12 or newer.
 Python and Node use the latest available patch in their selected release lines;
 Python dependencies retain the version ranges in `pyproject.toml`.

@@ -197,8 +197,9 @@ def test_workflow_has_read_only_triggers_full_matrix_and_immutable_actions():
     assert checkout["with"]["fetch-depth"] == 0
     assert checkout["with"]["persist-credentials"] is False
     commands = [step["run"] for step in steps if "run" in step]
-    assert "bash scripts/gate.sh" in commands and "npm run build" in commands
+    assert "bash scripts/gate.sh" in commands and "npm run build" in commands and "npm test" in commands
     assert commands.index("git show --check --format= HEAD") < commands.index("npm run build")
+    assert commands.index("npm run build") < commands.index("npm test") < commands.index("bash scripts/gate.sh")
     for step in steps:
         if "uses" in step:
             action, sha = step["uses"].split("@")

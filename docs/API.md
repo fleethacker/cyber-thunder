@@ -109,6 +109,7 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/proposals/{id}/approve` | `{note?}` → Proposal+ |
 | POST | `/proposals/{id}/deny` | `{note?}` → Proposal+ |
 | POST | `/proposals/{id}/cancel` | `{note?}` → Proposal+ |
+| POST | `/proposals/{id}/plan` | → static remediation plan; named actor and kill switch checked, one `remediation.plan` audit event. Includes target identity, bound fix/digests, declared capture/verification/rollback metadata, checks and limitations. Makes no target connection, changes no proposal state and does not approve or apply anything. See [REMEDIATION_PLAN](REMEDIATION_PLAN.md) |
 | POST | `/proposals/{id}/apply` | `{simulate_verify_fail?: bool}` → `202 {proposal_id, state: "applying"}`; engine.execute runs in background: before-state → apply → verify → verified, or failed → automatic rollback. `409` unless APPROVED, `423` if kill switch engaged |
 | POST | `/proposals/{id}/rollback` | → `202`; manual rollback of APPLIED, VERIFIED or FAILED |
 | POST | `/proposals/{id}/verify` | → Proposal+; re-checks an APPLIED proposal (used after an operator completes a runbook): VERIFIED or FAILED. `501` on a node whose engine lacks it |

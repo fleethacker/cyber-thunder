@@ -96,6 +96,21 @@ export interface FixEntry {
   risk_tags: string[];
 }
 
+/** POST /proposals/{id}/plan: library metadata only; no target connection or execution. */
+export interface ProposalPlan {
+  version: 1;
+  mode: 'static';
+  generated_at: string;
+  proposal_id: string;
+  proposal_state: ProposalState;
+  target: { id: string; name: string | null; asset_type: string | null; simulated: boolean | null; in_scope: boolean | null };
+  fix: FixEntry;
+  fix_sha256: string;
+  approved_fix_sha256: string | null;
+  checks: { code: string; status: 'pass' | 'blocked' | 'unknown'; detail: string }[];
+  limitations: string[];
+}
+
 export interface Finding {
   id: string;
   host: string;

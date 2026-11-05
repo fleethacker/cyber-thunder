@@ -34,6 +34,12 @@ questions in plain words:
 Buttons: **Approve**, **Deny** (note optional), after approval **Apply** (shows a step timeline: scope check →
 before-state captured → applied → verified ✓, or failed → rolled back ↶, each with timestamp and audit seq),
 **Rollback** on applied/verified. Policy chip when a proposal was auto-approved ("standing approval: <rule>, signed by <name>").
+**Preview change** opens an audited static plan: the target, proposed payload, declared before-state
+capture paths and commands, verification instructions, service/reboot impact and rollback. It shows
+checks and unknowns without connecting to the target. Capture paths are not an exhaustive list of
+files the payload could touch; this preview does not establish host readiness or lockout safety.
+Approval and apply remain separate actions. A changed fix binding is refused rather than presented
+as the approved change. Maintenance-window enforcement remains backlog work.
 Filters: host, severity, asset type, state. Bulk select → approve/deny. Sort: severity, host, age.
 Empty state: "Nothing waiting for a decision" with a button to start a scan.
 

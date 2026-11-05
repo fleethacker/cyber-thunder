@@ -9,6 +9,7 @@ import { isSuppressed } from '../lib/findingAssurance';
 import { ApplyTimeline } from './ApplyTimeline';
 import { CitationChips } from './CitationChips';
 import { DiffButton } from './ProposalDiff';
+import { PreviewButton } from './ProposalPlan';
 import { RiskTagsForFix } from './FixPanel';
 import { AssetIcon, CodeBlock, Collapsible, Mono, SeverityBadge, SimulatedBadge, StateBadge } from './common';
 
@@ -166,6 +167,7 @@ export function ProposalCard({
           {p.state === 'applied' && fix?.kind === 'runbook' && actions.verify && (
             <Button size="md" color="teal" variant="light" leftSection={<IconChecklist size={18} />} loading={busy} onClick={() => actions.verify?.(p)}>Verify</Button>
           )}
+          <PreviewButton proposalId={p.id} busy={busy} />
           <DiffButton proposalId={p.id} state={p.state} />
           <Button size="md" variant="subtle" onClick={() => actions.openFinding(p.finding_id)}>Finding detail</Button>
         </Group>

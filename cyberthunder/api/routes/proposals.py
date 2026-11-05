@@ -103,6 +103,15 @@ def _demo_forces_failure(ctx) -> bool:
         return False
 
 
+@router.post("/proposals/{pid}/plan")
+def plan(pid: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    fn = getattr(ctx.engine, "plan", None) if ctx.engine is not None else None
+    if not callable(fn):
+        raise unavailable("static remediation preview")
+    with feature("static remediation preview"):
+        return fn(pid, actor=actor)
+
+
 @router.post("/proposals/{pid}/apply", status_code=202)
 def apply(pid: str, body: ApplyBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
     p = util.get_proposal(ctx, pid)
