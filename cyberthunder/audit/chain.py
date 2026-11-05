@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Iterator
 
 from cyberthunder.findings.schema import utcnow
-from cyberthunder.state.json_files import replace_file
+from cyberthunder.state.json_files import read_text_retry, replace_file
 
 GENESIS = "0" * 64
 
@@ -194,7 +194,7 @@ def _read_checkpoint(path: Path) -> dict | None:
     if not hp.exists():
         return None
     try:
-        cp = json.loads(hp.read_text(encoding="utf-8"))
+        cp = json.loads(read_text_retry(hp))
         return {"seq": int(cp["seq"]), "hash": str(cp["hash"])}
     except (OSError, ValueError, KeyError, TypeError):
         return {"seq": -1, "hash": ""}
@@ -206,6 +206,8 @@ def verify_file(path: str | Path) -> VerifyResult:
     cp = _read_checkpoint(path)
     cp_seen: str | None = None          # hash of the record at the checkpoint's seq, when the log reaches it
     if not path.exists():
+        if cp is not None and cp["seq"] < 0:
+            return VerifyResult(False, 0, GENESIS, None, "head checkpoint unreadable", checkpoint="truncated")
         if cp is not None and cp["seq"] > 0:
             return VerifyResult(False, 0, GENESIS, 1, f"log missing; checkpoint says {cp['seq']} records",
                                 checkpoint="truncated")
