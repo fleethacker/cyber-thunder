@@ -6,7 +6,7 @@ Built using the installed Zarf v0.85.0. The package includes the local
 
 ## Deploy to a remote cluster
 
-Copy these artifacts from `.build/` to the deployment machine:
+Copy these artifacts from `packages/` to the deployment machine:
 
 - `zarf-package-cyberthunder-amd64-0.2.1.tar.zst`
 - `zarf-package-cyberthunder-amd64-0.2.1.tar.zst.sha256`
@@ -51,7 +51,7 @@ A non-default storage class requires updating the PVC manifest and rebuilding.
 
 ## Rebuild
 
-From the repository root with a running Docker daemon:
+From the repository root with a running Docker daemon. Rebuilt artifacts are written to `.build/`:
 
 ```sh
 mkdir -p .build
