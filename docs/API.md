@@ -46,6 +46,16 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/findings/{id}/explain` | `{force?: bool}` → Explanation (synchronous; may take up to `CT_LLM_TIMEOUT`) |
 | POST | `/findings/explain` | `{ids?: [..]}` → `{queued: n}`; background precompute, default = all open findings of the latest scan |
 
+## Cluster
+| GET | `/cluster/survey` | → Kubernetes namespace/workload survey from kubectl |
+|---|---|---|
+| POST | `/cluster/baseline` | `{use_openai?: bool}` → persisted namespace image-risk baseline. Audit `cluster.baseline` |
+| GET | `/cluster/risk` | → latest persisted namespace risk profiles |
+| GET | `/cluster/known-good` | → `{exceptions: [KnownGoodException]}`. Exceptions are applied to future Kubernetes scans before summaries and proposals |
+| POST | `/cluster/known-good/exceptions` | `{target_id, reason, rule_id?, rule_version?, group_id?, object?, object_prefix?, expires_at?}` → KnownGoodException, `201`. Audit `known_good.add` |
+| POST | `/cluster/known-good/from-finding/{finding_id}` | `{reason, scope?: "object"|"object_prefix"|"rule", expires_at?}` → KnownGoodException, `201`. `object_prefix` keeps generated pod-name changes accepted, for example `kube-system/pod/metrics-collector-*` |
+| DELETE | `/cluster/known-good/exceptions/{id}` | → `204`. Audit `known_good.delete` |
+
 ## Proposals (the decision queue)
 | GET | `/proposals` | `?state&host&asset_type` (each takes comma-separated values; an unknown `state` is `400`) → `{proposals: [Proposal+]}` oldest first |
 |---|---|---|

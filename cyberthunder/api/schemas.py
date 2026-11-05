@@ -17,6 +17,23 @@ class ReasonBody(BaseModel):
     reason: str | None = Field(default=None, max_length=2000)
 
 
+class KnownGoodBody(BaseModel):
+    target_id: str
+    reason: str = Field(min_length=1, max_length=2000)
+    rule_id: str | None = None
+    rule_version: str | None = None
+    group_id: str | None = None
+    object: str | None = None
+    object_prefix: str | None = None
+    expires_at: str | None = None
+
+
+class KnownGoodFromFindingBody(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+    scope: Literal["object", "object_prefix", "rule"] = "object"
+    expires_at: str | None = None
+
+
 class ScanRequest(BaseModel):
     target_ids: list[str] | None = None
     modules: list[str] | None = None
