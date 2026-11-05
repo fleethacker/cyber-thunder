@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import subprocess
+from unittest.mock import Mock
 
 from fastapi.testclient import TestClient
 import pytest
@@ -10,6 +11,13 @@ import yaml
 from cyberthunder.api.app import create_app
 from cyberthunder.config import Settings
 from cyberthunder.context import AppContext
+
+
+@pytest.fixture(autouse=True)
+def offline_tools(monkeypatch):
+    monkeypatch.setattr("cyberthunder.config.platform.node", lambda: "cluster-bootstrap-test")
+    monkeypatch.setattr(subprocess, "run", Mock(side_effect=AssertionError("unexpected subprocess")))
+    monkeypatch.setattr("urllib.request.urlopen", Mock(side_effect=AssertionError("unexpected network call")))
 
 
 @pytest.fixture
@@ -38,11 +46,13 @@ def test_packaged_startup_registers_host_cluster(packaged_settings):
         assert Path(expected_kubeconfig) == Path("/etc/cyberthunder/kubeconfig")
         assert target["options"] == {"kubeconfig": expected_kubeconfig,
                                      "context": "in-cluster", "kubectl": "kubectl"}
-        assert target["in_scope"] is True
+        assert target["in_scope"] is False
         assert target["sudo"] is False
         assert "discovery-source" in target["tags"]
     events = [r for r in ctx.audit.records() if r["action"] == "inventory.bootstrap"]
     assert len(events) == 1
+    assert events[0]["details"]["authorization_required"] is True
+    assert events[0]["details"]["in_scope"] is False
     assert ctx.audit.verify().ok
 
 
@@ -50,6 +60,8 @@ def test_restart_preserves_operator_scope_edits_and_external_assets(packaged_set
     ctx = AppContext(packaged_settings)
     headers = {"X-Actor": "ITC Rivera"}
     with TestClient(create_app(ctx)) as client:
+        authorized = client.put("/api/v1/targets/local-cluster", headers=headers, json={"in_scope": True})
+        assert authorized.status_code == 200
         changed = client.put("/api/v1/targets/local-cluster", headers=headers,
                              json={"name": "Shipboard cluster", "in_scope": False})
         assert changed.status_code == 200
@@ -92,8 +104,17 @@ def test_host_cluster_discovery_uses_packaged_context_and_node_permissions(packa
         return subprocess.CompletedProcess(argv, 0, json.dumps(data), "")
 
     monkeypatch.setattr("cyberthunder.adapters.kubernetes.kubectl.subprocess.run", run)
-    with TestClient(create_app(AppContext(packaged_settings))) as client:
-        response = client.post("/api/v1/targets/local-cluster/discover", headers={"X-Actor": "ITC Rivera"})
+    ctx = AppContext(packaged_settings)
+    headers = {"X-Actor": "ITC Rivera"}
+    with TestClient(create_app(ctx)) as client:
+        refused = client.post("/api/v1/targets/local-cluster/discover", headers=headers)
+        assert refused.status_code == 403
+        assert calls == []
+        authorized = client.put("/api/v1/targets/local-cluster", headers=headers, json={"in_scope": True})
+        assert authorized.status_code == 200
+        scope = [r for r in ctx.audit.records() if r["action"] == "scope.change"]
+        assert len(scope) == 1 and scope[0]["actor"] == headers["X-Actor"]
+        response = client.post("/api/v1/targets/local-cluster/discover", headers=headers)
         assert response.status_code == 200, response.text
         facts = response.json()
         assert facts["os_name"] == "Kubernetes"

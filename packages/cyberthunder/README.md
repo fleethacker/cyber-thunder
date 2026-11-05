@@ -47,12 +47,19 @@ and is not enabled by these RBAC changes.
 
 ### Discover the host cluster
 
-At startup the package adds **Local Kubernetes cluster** (`local-cluster`) to
-**Assets**, using the mounted `/etc/cyberthunder/kubeconfig` and its `in-cluster`
-context. It starts in scope for read-only discovery and checks. There is no
-manual asset registration or external kubeconfig needed for the host cluster.
-In **Settings**, enter your operator name, then use the asset's **Discover**
-action to retrieve the Kubernetes version, node names and node readiness.
+An image and package rebuilt from this source add **Local Kubernetes cluster**
+(`local-cluster`) to **Assets** at startup, using the mounted
+`/etc/cyberthunder/kubeconfig` and its `in-cluster` context. The asset is visible
+but **out of scope**. No manual registration or external kubeconfig is needed
+for the host cluster. Enter your operator name in **Settings**, enable the
+asset's scope, then use **Discover** to retrieve the Kubernetes version, node
+names and readiness. Discover returns HTTP 403 before scope is authorized.
+
+The already-built `0.2.4` and `0.2.5` archives retain the earlier behavior:
+newly registered host-cluster assets start in scope. Those archives have not
+been rebuilt with these guardrails. Rebuild both the image and package from
+this source to get out-of-scope registration; existing operator scope choices
+remain unchanged on restart or upgrade.
 
 Registration is audited once as `inventory.bootstrap`. Restarting the pod
 preserves an existing asset, including its name, options and operator-selected
