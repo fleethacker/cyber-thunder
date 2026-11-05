@@ -1,0 +1,14 @@
+[
+  {
+    "op": "add",
+    "path": "/spec/network/allow/-",
+    "value": {
+      "direction": "Egress",
+      "selector": {"app": "cyberthunder"},
+      "remoteCidr": "172.18.0.1/32",
+      "port": 2222,
+      "remoteProtocol": "TCP",
+      "description": "SSH to the local QEMU range VM."
+    }
+  }
+]

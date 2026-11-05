@@ -156,6 +156,9 @@ spec:
               port: http
             periodSeconds: 20
           volumeMounts:
+            - name: target-credentials
+              mountPath: /etc/cyberthunder/targets
+              readOnly: true
             - name: state
               mountPath: /var/lib/cyberthunder
             - name: tmp
@@ -167,6 +170,11 @@ spec:
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
       volumes:
+        - name: target-credentials
+          secret:
+            secretName: cyberthunder-target-credentials
+            optional: true
+            defaultMode: 0440
         - name: state
           persistentVolumeClaim:
             claimName: cyberthunder-state
