@@ -34,6 +34,8 @@ def _env_num(name: str, default: float, cast=float):
 class Settings:
     # state
     state_dir: Path = field(default_factory=lambda: Path(_env("CT_STATE_DIR", "state")))
+    # where documents live: json (one file each, the default) or sqlite (state.db in the state directory)
+    state_backend: str = field(default_factory=lambda: (_env("CT_STATE_BACKEND", "json") or "json").strip().lower())
     # local model (explain layer). backend: ollama | openai | template
     llm_backend: str = field(default_factory=lambda: _env("CT_LLM_BACKEND", "ollama"))
     llm_url: str = field(default_factory=lambda: _env("CT_LLM_URL", "http://localhost:11434"))

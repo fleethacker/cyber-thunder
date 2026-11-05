@@ -142,7 +142,7 @@ class DiscoveryService:
 
     def _close_interrupted(self) -> None:
         """Runs still marked running whose lock nobody holds ended with their process: record them as failed."""
-        for path in sorted((self.dir / "runs").glob("*.json")):
+        for path in self.ctx.store.list_json(self.dir / "runs"):
             d = self._read(path, None)
             if not d or d.get("status") != "running":
                 continue
@@ -623,7 +623,7 @@ class DiscoveryService:
 
     def runs(self) -> list[DiscoveryRun]:
         out = [DiscoveryRun.from_dict(d) for d in
-               (self._read(p, None) for p in (self.dir / "runs").glob("*.json")) if d]
+               (self._read(p, None) for p in self.ctx.store.list_json(self.dir / "runs")) if d]
         return sorted(out, key=lambda r: (r.started_at, r.id), reverse=True)
 
     def get_run(self, run_id: str) -> DiscoveryRun:
