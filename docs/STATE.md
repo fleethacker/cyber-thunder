@@ -95,3 +95,10 @@ Proposals, the policy and the inventory stay files because their owners (`Approv
 `Inventory`) take a file path and lock it themselves; moving them onto the document backend means giving them a
 store instead of a path. PostgreSQL for the UDS deployment and more than one node are the rest of SCL-01 in
 [BACKLOG.md](BACKLOG.md).
+
+## Saved reports
+
+Report snapshots are portable files under `reports/history/<id>.json` for both backends.
+Each holds its metadata and original rendered content. Include `reports/` in backups;
+opening an older report does not regenerate it from current state. Existing target
+reports and retained outbox exports are imported into history when searched.

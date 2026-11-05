@@ -96,8 +96,11 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/ingest/import-dir` | `{path}` (a folder on this node) → `{imported, refused: [{filename, reason}], skipped, missing, verified_by, deltas}`; verified against `manifest.lock.json` when present. Audit `content.import`, `content.quarantine` |
 
 ## Reports
-| GET | `/reports/commander` | `?scan_id&format=html|md` → rendered one-pager |
+| GET | `/reports/history` | `?q&kind&target&from_date&to_date&offset&limit` → `{reports, total, offset, limit}`; keyword search covers saved contents and metadata; kind is `commander`, `poam`, `checklist` or `target`; dates are inclusive UTC `YYYY-MM-DD`; limit defaults to 20 (max 100) |
 |---|---|---|
+| GET | `/reports/history/{id}` | → saved metadata and `content`; does not re-render current state |
+| GET | `/reports/history/{id}/download` | → original saved content as an attachment |
+| GET | `/reports/commander` | `?scan_id&format=html|md` → rendered one-pager and a saved history snapshot |
 | GET | `/reports/poam.csv` | `?scan_id` → CSV |
 | GET | `/reports/checklist.cklb` | `?scan_id&host` → CKLB JSON with statuses written back |
 | GET | `/reports/fleet` | `?format=html|md` → path-to-fleet one-pager |
