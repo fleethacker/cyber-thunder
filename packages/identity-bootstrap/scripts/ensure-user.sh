@@ -3,8 +3,8 @@
 set -euo pipefail
 set +x
 
-username="admin"
-email=admin@uds.dev
+username="hacker"
+email=hacker@uds.dev
 domain="${DOMAIN:-uds.dev}"
 
 if [[ -x ./zarf ]]; then
@@ -32,7 +32,7 @@ fi
 if [[ "${BOOTSTRAP_DRY_RUN:-false}" == true ]]; then
   render_user_payload >/dev/null
   render_password_payload >/dev/null
-  echo "reconcile Keycloak user admin with email admin@uds.dev"
+  echo "reconcile Keycloak user hacker with email hacker@uds.dev"
   echo "user payload valid"
   exit 0
 fi
@@ -101,7 +101,7 @@ curl -fsS -o /dev/null -X DELETE \
   -H "@$request_dir/admin-headers"
 curl -fsS -o /dev/null -X PUT "${keycloak_admin_url}/admin/realms/uds/users/${user_id}" \
   -H "@$request_dir/admin-headers" -H 'Content-Type: application/json' \
-  --data-raw '{"username":"admin","email":"admin@uds.dev","enabled":true,"emailVerified":true,"requiredActions":[]}'
+  --data-raw '{"username":"hacker","email":"hacker@uds.dev","enabled":true,"emailVerified":true,"requiredActions":[]}'
 
 password_status="$(curl -sS -o /dev/null -w '%{http_code}' \
   "https://sso.${domain}/realms/uds/protocol/openid-connect/token" \
@@ -136,7 +136,7 @@ user_token=""
 for ((attempt = 1; attempt <= 10; attempt++)); do
   curl -fsS -o /dev/null -X PUT "${keycloak_admin_url}/admin/realms/uds/users/${user_id}" \
     -H "@$request_dir/admin-headers" -H 'Content-Type: application/json' \
-    --data-raw '{"username":"admin","email":"admin@uds.dev","enabled":true,"emailVerified":true,"requiredActions":[]}'
+    --data-raw '{"username":"hacker","email":"hacker@uds.dev","enabled":true,"emailVerified":true,"requiredActions":[]}'
   token_response="$(curl -sS "https://sso.${domain}/realms/uds/protocol/openid-connect/token" \
     -H 'Content-Type: application/x-www-form-urlencoded' \
     --data-urlencode "username=${username}" \

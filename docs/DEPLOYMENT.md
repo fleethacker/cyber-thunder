@@ -82,7 +82,7 @@ cluster deployment: Untested.
    ./deploy.sh dev
    ```
 
-   Dev mode creates or reconciles `admin` in the `uds` realm and assigns
+   Dev mode creates or reconciles `hacker` in the `uds` realm and assigns
    `/UDS Core/Admin`. It disables conditional OTP and clears required login
    actions for this local development identity. The password is generated
    once, stored with mode `0600` in `.build/identity/admin-password`, and printed
@@ -147,7 +147,7 @@ cluster deployment: Untested.
    | Keycloak administration | <https://keycloak.admin.uds.dev> |
    | Grafana | <https://grafana.admin.uds.dev> |
 
-   Podinfo redirects to UDS SSO. In dev mode, sign in with the printed `admin`
+   Podinfo redirects to UDS SSO. In dev mode, sign in with the printed `hacker`
    credentials. For normal deployment, create a user in the `uds` realm and
    assign it to `/UDS Core/Admin`. Retrieve the Keycloak master administrator
    password from its Secret when that credential has been provisioned.
