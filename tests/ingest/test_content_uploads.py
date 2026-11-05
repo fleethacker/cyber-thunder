@@ -203,6 +203,14 @@ def test_unverified_claimed_release_cannot_suppress_official_update(svc, version
     assert [r["filename"] for r in selection.updates] == [OFFICIAL]
 
 
+def test_padded_scap_version_is_displayed_without_trusting_it(svc):
+    record = upload(svc, datastream(version="002.010", release=None))["record"]
+    assert record["version"] == [2, 10]
+    assert record["version_label"] == "V2R10"
+    assert record["ingest"]["upload"]["benchmarks"][0]["version"] == "002.010"
+    assert record["ingest"]["upload"]["authenticity_verified"] is False
+
+
 def test_identical_bytes_reuse_record_even_when_renamed(svc, monkeypatch):
     first = upload(svc)
     sync_before = ContentLibrary(svc).sync_status(svc.store.records())
