@@ -10,6 +10,8 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+from cyberthunder.control.identity import MAX_ACTOR_LEN, normalize_actor
+from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.inventory.targets import Target
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -28,6 +30,16 @@ def bootstrap_cluster_target(ctx: "AppContext") -> None:
         return
     except KeyError:
         pass
+    actor = normalize_actor(settings.scheduler_actor)
+    if not actor or len(actor) > MAX_ACTOR_LEN or any(ord(c) < 32 or ord(c) == 127 for c in actor):
+        ctx.audit.append("inventory.bootstrap", "?", {"target": target_id, "reason": "invalid scheduler actor"},
+                         outcome="rejected")
+        raise PermissionError("bootstrap requires a named scheduler actor")
+    try:
+        ctx.killswitch.guard("inventory.bootstrap", actor)
+    except KillSwitchEngaged:
+        # Keep the API available so an operator can inspect state and release the switch.
+        return
     kubeconfig = Path(settings.bootstrap_cluster_kubeconfig)
     target = Target(
         id=target_id,
@@ -35,12 +47,17 @@ def bootstrap_cluster_target(ctx: "AppContext") -> None:
         asset_type="kubernetes",
         transport="kubeconfig",
         tags=["bootstrap", "discovery-source", "cluster"],
-        in_scope=True,
+        in_scope=False,
         options={"kubeconfig": str(kubeconfig), "context": "in-cluster", "kubectl": "kubectl"},
-        notes="Bootstrapped by the packaged service so discovery can enumerate the test cluster.",
+        notes="Registered by the packaged service; an operator must review and authorize scope before scanning.",
     )
+    try:
+        ctx.killswitch.guard("inventory.bootstrap", actor)
+    except KillSwitchEngaged:
+        return
     ctx.inventory.add(target)
-    ctx.save_inventory(settings.scheduler_actor, "inventory.bootstrap", {"target": target.id, "source": "kubernetes"})
+    ctx.save_inventory(actor, "inventory.bootstrap", {"target": target.id, "source": "kubernetes",
+                                                     "in_scope": False, "authorization_required": True})
 
 
 class RuntimeTasks:

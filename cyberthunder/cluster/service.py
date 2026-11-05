@@ -13,11 +13,15 @@ import time
 import urllib.error
 import urllib.request
 from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterator
 
+from cyberthunder.control.identity import normalize_actor, require_human
+from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.findings.schema import utcnow
+from cyberthunder.inventory.targets import ScopeViolation
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -113,29 +117,86 @@ def _image_vulns(report: dict) -> list[dict]:
     return out
 
 
+@dataclass(frozen=True)
+class _ClusterBinding:
+    target_id: str
+    kubeconfig: str
+    context: str
+    kubectl: str
+
+    def argv(self) -> list[str]:
+        return [self.kubectl, "--kubeconfig", self.kubeconfig, "--context", self.context]
+
+
 class ClusterBaselineService:
     def __init__(self, ctx: "AppContext"):
         self.ctx = ctx
         self.root = Path(ctx.store.root) / "cluster"
         self.root.mkdir(parents=True, exist_ok=True)
 
-    @property
-    def kubectl(self) -> list[str]:
-        kubeconfig = str(self.ctx.settings.bootstrap_cluster_kubeconfig)
-        argv = ["kubectl"]
-        if kubeconfig:
-            argv += ["--kubeconfig", kubeconfig]
-        return argv
+    def _binding(self, target_id: str) -> _ClusterBinding:
+        target = self.ctx.inventory.assert_in_scope(target_id)
+        if target.asset_type != "kubernetes" or target.transport != "kubeconfig" or target.simulated:
+            raise ScopeViolation(f"target {target_id!r} must be a Kubernetes kubeconfig target")
+        options = target.options
+        values = [options.get("kubeconfig"), options.get("context"), options.get("kubectl", "kubectl")]
+        if any(not isinstance(v, str) or not v.strip() for v in values):
+            raise ScopeViolation(f"target {target_id!r} requires explicit kubeconfig, context and kubectl values")
+        kubeconfig, context, kubectl = (v.strip() for v in values)
+        return _ClusterBinding(target_id, str(Path(kubeconfig).expanduser().resolve()), context, kubectl)
 
-    def _kubectl_json(self, *args: str, timeout: int = 120) -> dict:
-        p = subprocess.run([*self.kubectl, *args, "-o", "json"], capture_output=True, text=True, timeout=timeout,
-                           encoding="utf-8", errors="replace")
+    def _guard(self, binding: _ClusterBinding, actor: str) -> None:
+        self.ctx.killswitch.guard(f"cluster.access:{binding.target_id}", actor)
+        if self._binding(binding.target_id) != binding:
+            raise ScopeViolation(f"target {binding.target_id!r} connection changed during the cluster run; retry")
+
+    @contextmanager
+    def _operation(self, action: str, actor: str, target_id: str | None) -> Iterator[tuple[_ClusterBinding, dict]]:
+        details = {"run_id": self.ctx.store.new_id("cluster-"), "source": "inventory",
+                   "target_id": target_id if target_id is not None else self.ctx.settings.bootstrap_cluster_target_id}
+        started = False
+        try:
+            actor = require_human(actor)
+            details["requested_by"] = actor
+            self.ctx.killswitch.guard(action, actor)
+            binding = self._binding(details["target_id"])
+            details.update(asdict(binding))
+            self.ctx.audit.append(f"{action}.start", actor, details, subject=details["run_id"])
+            started = True
+            yield binding, details
+        except (PermissionError, KillSwitchEngaged) as exc:
+            self.ctx.audit.append(action, normalize_actor(actor) or "?", {**details, "reason": str(exc)},
+                                  subject=details["run_id"],
+                                  outcome="blocked" if started or isinstance(exc, KillSwitchEngaged) else "rejected")
+            raise
+        except Exception as exc:  # noqa: BLE001 - record failure, never turn it into a successful baseline
+            self.ctx.audit.append(action, actor, {**details, "error": str(exc)},
+                                  subject=details["run_id"], outcome="error")
+            raise
+        else:
+            self.ctx.audit.append(action, actor, details, subject=details["run_id"],
+                                  outcome="partial" if details.get("errors") else "ok")
+
+    def _kubectl_json(self, binding: _ClusterBinding, actor: str, *args: str, timeout: int = 120) -> dict:
+        self._guard(binding, actor)
+        try:
+            p = subprocess.run([*binding.argv(), *args, "-o", "json"], capture_output=True, text=True,
+                               timeout=timeout, encoding="utf-8", errors="replace")
+        finally:
+            self._guard(binding, actor)
         if p.returncode != 0:
             raise RuntimeError((p.stderr or p.stdout or "kubectl failed").strip()[:500])
         return json.loads(p.stdout or "{}")
 
-    def survey(self) -> dict:
-        ns_doc = self._kubectl_json("get", "namespaces")
+    def survey(self, *, actor: str, target_id: str | None = None) -> dict:
+        with self._operation("cluster.survey", actor, target_id) as (binding, details):
+            result = self._survey(binding, details["requested_by"])
+            details.update(namespaces=len(result["namespaces"]), errors=len(result["errors"]))
+            return {**result, "requested_by": details["requested_by"], "target": asdict(binding),
+                    "id": details["run_id"]}
+
+    def _survey(self, binding: _ClusterBinding, actor: str) -> dict:
+        ns_doc = self._kubectl_json(binding, actor, "get", "namespaces")
         namespaces = []
         for item in ns_doc.get("items") or []:
             md = item.get("metadata") or {}
@@ -148,7 +209,9 @@ class ClusterBaselineService:
         errors: list[str] = []
         for _api, kind, resource in WORKLOAD_KINDS:
             try:
-                doc = self._kubectl_json("get", resource, "-A")
+                doc = self._kubectl_json(binding, actor, "get", resource, "-A")
+            except (PermissionError, KillSwitchEngaged):
+                raise
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{resource}: {e}")
                 continue
@@ -161,52 +224,68 @@ class ClusterBaselineService:
                                              replicas=_replicas(item, kind), labels=md.get("labels") or {}))
         namespaces.sort(key=lambda n: n["name"] or "")
         workloads.sort(key=lambda w: (w.namespace, w.kind, w.name))
+        self._guard(binding, actor)
         return {"surveyed_at": utcnow(), "namespaces": namespaces, "workloads": [w.to_dict() for w in workloads],
                 "errors": errors}
 
-    def scan(self, *, use_openai: bool = False) -> dict:
-        survey = self.survey()
+    def scan(self, *, actor: str, target_id: str | None = None, use_openai: bool = False) -> dict:
+        with self._operation("cluster.baseline", actor, target_id) as (binding, details):
+            return self._baseline(binding, details, describe=use_openai)
+
+    def _baseline(self, binding: _ClusterBinding, details: dict, *, describe: bool) -> dict:
+        actor = details["requested_by"]
+        survey = self._survey(binding, actor)
         images = sorted({img for w in survey["workloads"] for img in w.get("images", [])})
-        run_id = self.ctx.store.new_id("cluster-")
+        run_id = details["run_id"]
         run_dir = self.root / "baselines" / run_id
+        self._guard(binding, actor)
         run_dir.mkdir(parents=True, exist_ok=True)
         image_reports: dict[str, dict] = {}
         errors: list[str] = list(survey.get("errors") or [])
         for image in images:
-            report, err = self._scan_image(image, run_dir)
+            report, err = self._scan_image(image, run_dir, binding, actor)
             if err:
                 errors.append(f"{image}: {err}")
             image_reports[image] = report or {"image": image, "vulnerabilities": [], "error": err}
         profiles = self._profiles(survey, image_reports)
-        if use_openai:
+        if describe:
             for profile in profiles:
-                generated, err = self._openai_description(profile)
+                self._guard(binding, actor)
+                try:
+                    generated, err = self._openai_description(profile)
+                finally:
+                    self._guard(binding, actor)
                 if generated:
                     profile["description"] = generated
                     profile["description_source"] = "openai"
                 elif err:
                     profile.setdefault("notes", []).append(f"OpenAI summary unavailable: {err}")
         doc = {"id": run_id, "generated_at": utcnow(), "survey": survey, "images": image_reports,
-               "namespaces": profiles, "errors": errors}
+               "namespaces": profiles, "errors": errors, "requested_by": actor, "target": asdict(binding)}
+        self._guard(binding, actor)
         self.ctx.store.write_json(run_dir / "baseline.json", doc)
+        self._guard(binding, actor)
         self.ctx.store.write_json(self.root / "latest.json", doc)
-        self.ctx.audit.append("cluster.baseline", "agent", {"run_id": run_id, "namespaces": len(profiles),
-                                                            "images": len(images), "errors": len(errors)},
-                              subject=run_id, outcome="ok" if not errors else "partial")
+        details.update(namespaces=len(profiles), images=len(images), errors=len(errors))
         return doc
 
     def latest(self) -> dict | None:
         return self.ctx.store.read_json(self.root / "latest.json")
 
-    def _scan_image(self, image: str, run_dir: Path) -> tuple[dict | None, str | None]:
+    def _scan_image(self, image: str, run_dir: Path, binding: _ClusterBinding,
+                    actor: str) -> tuple[dict | None, str | None]:
         args = [self.ctx.settings.trivy_binary, "image", "--quiet", "--format", "json"]
         if self.ctx.settings.trivy_skip_db_update:
             args.append("--skip-db-update")
         args.append(image)
         t0 = time.monotonic()
+        self._guard(binding, actor)
         try:
-            p = subprocess.run(args, capture_output=True, text=True, timeout=self.ctx.settings.trivy_timeout_s,
-                               encoding="utf-8", errors="replace")
+            try:
+                p = subprocess.run(args, capture_output=True, text=True, timeout=self.ctx.settings.trivy_timeout_s,
+                                   encoding="utf-8", errors="replace")
+            finally:
+                self._guard(binding, actor)
         except FileNotFoundError:
             return None, f"{self.ctx.settings.trivy_binary} not found"
         except subprocess.TimeoutExpired:
