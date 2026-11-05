@@ -143,6 +143,8 @@ export interface FindingPlus extends Finding {
   confidence?: FindingConfidence | null;
   review?: FindingReview | null;
   remediated?: { proposal_id: string; verified_at: string; scan_status: FindingStatus } | null;
+  needs_rescan?: boolean;
+  rollback?: { proposal_id: string; finished_at: string | null; ok: boolean } | null;
   categories: FindingCategory[];
   cat: string;
   explanation: Explanation | null;

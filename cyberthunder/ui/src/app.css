@@ -2,3 +2,6 @@
 *, *::before, *::after { transition: none !important; animation-duration: 0s !important; }
 .mantine-Progress-section, .mantine-Loader-root, .mantine-Loader-root * { animation-duration: revert !important; }
 [data-mantine-color-scheme='dark'] body { background: var(--mantine-color-dark-8); }
+.finding-row { cursor: pointer; }
+.finding-row:hover > td, .finding-row:focus-within > td { background: var(--mantine-color-blue-light) !important; }
+.finding-row:focus-visible { outline: 3px solid var(--mantine-color-blue-6); outline-offset: -3px; }

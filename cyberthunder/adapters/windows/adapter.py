@@ -123,19 +123,27 @@ class WindowsAdapter(Adapter):
                                  lambda params: run_json(transport, script_for(params), timeout=900))
 
     def _collect_scap(self, target: Target, transport: Transport, workdir: Path, col: Collected) -> None:
+        from cyberthunder.scan_content import scanner_observation
+        observation = scanner_observation(target, col, engine="windows-scap", location="operator")
         path, profile = self._scap_options(target)
         if not path:
+            observation.update(status="not_configured", warnings=["Windows SCAP is not configured; native checks do not cover the full STIG."])
             return
         try:
             ds, rules = self._scap_rules(path, profile, col.rule_filter)
         except (OSError, ValueError, KeyError, SyntaxError) as e:   # ParseError is a SyntaxError
+            observation.update(status="error", content_status="unavailable")
             col.errors.append(f"scap datastream {path}: {e}")
             return
         if not rules:
+            observation.update(status="no_rules", content_status="readable",
+                               warnings=["The selected benchmark/profile/filter contains no executable rules."])
             return
+        observation["content_status"] = "readable"
         try:
             data, rounds = self._scap_gather(transport, ds, rules)
         except (TransportError, ValueError) as e:
+            observation["status"] = "error"
             col.errors.append(f"scap collect: {e}")
             return
         p = workdir / "scap_collect.json"
@@ -143,6 +151,7 @@ class WindowsAdapter(Adapter):
         col.artifacts["scap_collect"] = str(p)
         col.raw["scap"] = data
         col.raw["scap_source"] = {"datastream": path, "profile": profile, "rounds": rounds}
+        observation.update(status="collected" if not data.get("errors") else "partial", selected_rules=len(rules))
         for e in data.get("errors") or []:
             col.errors.append(f"scap collect: {e}")
 

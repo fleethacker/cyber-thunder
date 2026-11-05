@@ -4,7 +4,9 @@ import { notifications } from '@mantine/notifications';
 import { IconPlayerPlay } from '@tabler/icons-react';
 import { useState } from 'react';
 import { api, errorText } from '../api/client';
-import type { ScanRun } from '../api/types';
+import type { ScanRunWithCoverage as ScanRun } from '../api/scanContent';
+import { ScanCoverage } from '../components/ScanCoverage';
+import { ScanContentPreflight } from '../components/ScanContentPreflight';
 import { AsyncView, Empty, ErrorBox, Mono, PageTitle } from '../components/common';
 import { IngestPanel } from '../components/IngestPanel';
 import { LinkControls } from '../components/LinkControls';
@@ -43,7 +45,7 @@ function RunRow({ run }: { run: ScanRun }) {
           <Text size="sm">Requested by {run.requested_by} · started {fmtTime(run.started_at)}{run.finished_at ? ` · finished ${fmtTime(run.finished_at)}` : ''} · {run.findings_count} findings</Text>
           {run.error && <ErrorBox error={run.error} />}
           <Table withTableBorder striped>
-            <Table.Thead><Table.Tr><Table.Th>Target</Table.Th><Table.Th>Status</Table.Th><Table.Th>Findings</Table.Th><Table.Th>Open</Table.Th><Table.Th>Errors</Table.Th></Table.Tr></Table.Thead>
+            <Table.Thead><Table.Tr><Table.Th>Target</Table.Th><Table.Th>Status</Table.Th><Table.Th>Findings</Table.Th><Table.Th>Open</Table.Th><Table.Th>Coverage and errors</Table.Th></Table.Tr></Table.Thead>
             <Table.Tbody>
               {run.targets.map((tid) => {
                 const r = run.results[tid];
@@ -53,7 +55,7 @@ function RunRow({ run }: { run: ScanRun }) {
                     <Table.Td><Badge color={statusColor(r?.status ?? 'pending')} variant="light">{r?.status ?? 'pending'}</Badge></Table.Td>
                     <Table.Td>{r?.findings ?? '-'}</Table.Td>
                     <Table.Td>{r?.open ?? '-'}</Table.Td>
-                    <Table.Td>{r?.errors.length ? <Text size="xs" c="red" ff="monospace" style={{ whiteSpace: 'pre-wrap' }}>{r.errors.join('\n')}</Text> : '-'}</Table.Td>
+                    <Table.Td><ScanCoverage coverage={r?.coverage} />{r?.errors.length ? <Text size="xs" c="red" ff="monospace" style={{ whiteSpace: 'pre-wrap' }}>{r.errors.join('\n')}</Text> : null}</Table.Td>
                   </Table.Tr>
                 );
               })}
@@ -126,6 +128,7 @@ export default function Scans() {
           </Group>
           {targets.error && <ErrorBox error={targets.error} />}
           {error && <ErrorBox error={error} />}
+          <ScanContentPreflight targetIds={sel} modules={modules} refreshKey={(runs.data ?? []).map((r) => r.finished_at ?? '').join(',')} />
         </Stack>
       </Paper>
 
