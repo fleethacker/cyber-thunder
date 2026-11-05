@@ -1,0 +1,29 @@
+kind: ZarfPackageConfig
+metadata:
+  name: nginx-bad
+  description: Deliberately misconfigured nginx on a stale RHEL image, used as the Cyber Thunder demo target.
+  version: 0.0.1
+
+components:
+  - name: nginx-bad
+    required: true
+    manifests:
+      - name: nginx-bad
+        namespace: default
+        files:
+          - nginx-bad.yaml
+    images:
+      - registry.access.redhat.com/ubi9/nginx-124:1-1756913337
+    actions:
+      onDeploy:
+        before:
+          # Zarf will not adopt the default namespace. The workload must stay there so
+          # CNTR-K8-000290 fires, so prepare it to pull from the internal registry.
+          - description: Let the Zarf agent rewrite images in the default namespace.
+            cmd: ./zarf tools kubectl label namespace default zarf.dev/agent-
+          - description: Copy the internal registry pull secret to the default namespace.
+            mute: true
+            cmd: >-
+              ./zarf tools kubectl get secret private-registry -n zarf -o json
+              | ./zarf tools yq '.metadata = {"name": "private-registry", "namespace": "default"}'
+              | ./zarf tools kubectl apply -f -
