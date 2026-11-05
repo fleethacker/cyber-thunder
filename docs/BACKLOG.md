@@ -215,7 +215,7 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 | Identity and credentials | Today an approval proves only that someone typed a name, and one shared account per target does every scan and every change | ZT-01 to ZT-31 (section 1) |
 | Proof across real platforms | Only Linux over SSH and a k3s/k3d cluster have met real systems; Windows, Cisco and Active Directory have not, so no detection or fix claim for them is evidence yet | VAL-01 to VAL-03, with RNG-01, SCAN-03, REM-02 |
 | Coverage and fix safety | A few dozen natively checked rules per benchmark against hundreds published, and nothing stops an approved sshd or firewall change from cutting off the node that must roll it back | COV-01 to COV-04, with REM-01, SCAN-02 |
-| Plumbing for scale | State is JSON files on one node and scans walk targets one at a time, which holds for a range of ten hosts and not for an enclave of hundreds | SCL-01 to SCL-05, with ZT-25 |
+| Plumbing for scale | Documents can use JSON files or SQLite on one node; proposals, policy and inventory remain locked files, and scans still walk targets one at a time. Multi-node storage and measured enclave-scale performance remain open | SCL-01 to SCL-05, with ZT-25 |
 | Accreditation path | The package includes an image SBOM, but full release evidence, control mapping, node hardening and a confirmed maintaining organization remain open | ATO-01 to ATO-04, with ZT-01, ZT-27, ZT-31, DEP-04 |
 
 ### 2.1 Proof across real platforms
