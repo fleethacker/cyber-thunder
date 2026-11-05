@@ -94,6 +94,26 @@ The adapters include deterministic checks and hunt logic for:
 
 The scanner orchestration is read-only. State-changing remediation is only available after proposal and approval.
 
+### 3.4 Kubernetes Cluster Scan Finding Provenance
+
+Kubernetes cluster scan findings come from the Kubernetes adapter, not from an LLM. The adapter collects Kubernetes API JSON with read-only `kubectl` commands, then evaluates that collected data with deterministic Python checks.
+
+For the finding "Unexpected pod in kube-system":
+
+| Field | Provenance |
+| --- | --- |
+| Finding source | `cyberthunder/adapters/kubernetes/hunt.py`, rule `k8s:hunt:unexpected-system-pod` |
+| Title | Static hunt rule title: `Unexpected pod in kube-system` |
+| Severity / CAT | Static hunt rule severity `high`, which the common finding schema displays as `CAT I` |
+| Evidence | Generated from the observed pod object in collected `kubectl get pods -A -o json` data, including namespace, pod name, and container images |
+| Detection logic | A pod in `kube-system` is flagged when its name does not match the built-in or target-configured known system component prefixes, or when a matching name is not owned by a controller/static-pod source expected for system components |
+| Citations | MITRE ATT&CK `T1610`, plus related STIG traceability identifiers `CNTR-K8-001360`, `V-242417`, and `CCI-001082` |
+| Source type | Cyber Thunder hunt indicator, benchmark `Cyber Thunder hunt` |
+
+The cited STIG rule `CNTR-K8-001360` says user pods running in `kube-system`, `kube-public`, or `kube-node-lease` are a finding and its fix summary is to move user pods to user-specific namespaces. In `stig_rules.json` that STIG rule is severity `medium`. Cyber Thunder's hunt rule intentionally treats an unknown pod hiding in `kube-system` as a higher-severity intrusion indicator and assigns severity `high` / `CAT I`. The LLM does not raise or lower that severity.
+
+The seeded demo/range pod for this case is `metrics-collector-7d9f4` in `kube-system`, using image `198.51.100.23:5000/collector:1.0`. That seed is defined in the simulated Kubernetes range data and is listed in the range answer key as intrusion indicator `I4`.
+
 ## 4. Ports, Services, and Network Connections
 
 ### 4.1 Inbound Application Exposure
@@ -199,6 +219,50 @@ The recommendation workflow is:
 8. Manual rollback is available for applied or verified proposals.
 
 The engine refuses to execute a fix if the current fix payload differs from what was approved.
+
+### 5.5 Kubernetes Fix Recommendation Provenance
+
+For the "Unexpected pod in kube-system" finding, the suggested fix comes from the Kubernetes adapter's vetted fix library, not from the LLM. The applicable fix is:
+
+| Fix field | Value / source |
+| --- | --- |
+| `fix_ref` | `k8s:fix:delete-pod` |
+| Title | `Delete the rogue stand-alone pod` |
+| Source file | `cyberthunder/adapters/kubernetes/fixes.py` |
+| Applies to | `k8s:hunt:host-escape`, `k8s:hunt:unexpected-system-pod`, and `k8s:hunt:masquerade` |
+| Payload template | `kubectl delete pod <name> -n <namespace>` |
+| Before-state | `kubectl get <kind> <name> -n <namespace> -o json` is saved before deletion |
+| Rollback | Re-apply the saved object manifest with server-owned fields removed |
+| Notes | Intended only for stand-alone pods. If a controller owns the pod, delete the owning Deployment, DaemonSet, or CronJob instead because deleting only the pod allows it to be recreated. |
+
+The Kubernetes adapter records object references on findings as `k8s-object:<namespace>/<kind>/<name>[/<container>]` tags. Fix payloads contain only placeholders such as `<namespace>`, `<kind>`, `<name>`, and `<container>`. Before execution, those placeholders are filled from the validated object reference. Kubernetes names, namespaces, RBAC object names, and container names are checked against strict Kubernetes naming patterns before substitution.
+
+The adapter also has object-kind fallback logic. If a manifest fix does not apply to the finding's object kind, the finding is pointed at a runbook instead. For `k8s:fix:delete-pod`, non-pod rogue-workload cases fall back to `k8s:runbook:remove-rogue-workload`.
+
+### 5.6 Kubernetes Control Descriptions and Code Fixes
+
+Kubernetes control descriptions are generated from three deterministic rule sources:
+
+| Rule source | File | Description source | Examples |
+| --- | --- | --- | --- |
+| DISA Kubernetes STIG metadata | `cyberthunder/adapters/kubernetes/stig_rules.json` and `checks.py` | STIG ID, V-ID, severity, title, CCI list, check summary, and fix summary are loaded into `Rule` objects | `CNTR-K8-*` controls |
+| CIS Kubernetes Benchmark mappings | `cyberthunder/adapters/kubernetes/checks.py` | Static Cyber Thunder rule definitions cite CIS section numbers and CCI-000366 when no exact STIG field exists | privileged container, hostPID, hostNetwork, automount default service account token, missing NetworkPolicy |
+| Cyber Thunder hunt indicators | `cyberthunder/adapters/kubernetes/hunt.py` | Static hunt rules cite MITRE ATT&CK techniques and, where relevant, related STIG identifiers | unexpected kube-system pod, untrusted registry, malicious CronJob, dashboard exposed |
+
+Kubernetes code fixes are generated from `FixEntry` objects in `cyberthunder/adapters/kubernetes/fixes.py`. There are two categories:
+
+- Manifest fixes: deterministic `kubectl` payload templates for a validated object, such as patching a Deployment security context, adding a default-deny NetworkPolicy, deleting a rogue pod, or deleting an exposed dashboard Service.
+- Runbook fixes: operator instructions for changes the tool should not make automatically, especially control-plane and kubelet configuration changes on cluster nodes.
+
+Kubernetes manifest fixes are constrained as follows:
+
+- Only `FixEntry` payloads from the fix library are eligible for execution.
+- The adapter refuses any Kubernetes payload line that does not start with `kubectl`.
+- Live `kubectl` execution does not hand command strings to a shell; heredoc bodies are passed to `kubectl` on stdin.
+- Before-state is captured before changes.
+- Rollback uses the saved object copy.
+- Verification re-runs detection and health checks, including API server reachability, node readiness, and `kube-system` pod health.
+- Human approval or signed automation policy approval is required before any state-changing Kubernetes fix executes.
 
 ## 6. Security Controls Relevant to Review
 
