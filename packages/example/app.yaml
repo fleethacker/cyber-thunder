@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example
+  namespace: example
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: example
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: example
+    spec:
+      # UDS Core rejects pods that run as root or keep extra privileges.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: example
+          image: ghcr.io/stefanprodan/podinfo:6.10.1
+          ports:
+            - name: http
+              containerPort: 9898
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: example
+  namespace: example
+spec:
+  selector:
+    app.kubernetes.io/name: example
+  ports:
+    - name: http
+      port: 9898
+      targetPort: http

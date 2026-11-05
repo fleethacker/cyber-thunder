@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: example
+---
+# Exposes the app at https://example.uds.dev.
+apiVersion: uds.dev/v1alpha1
+kind: Package
+metadata:
+  name: example
+  namespace: example
+spec:
+  network:
+    serviceMesh:
+      mode: sidecar
+    expose:
+      - service: example
+        selector:
+          app.kubernetes.io/name: example
+        gateway: tenant
+        host: example
+        port: 9898
