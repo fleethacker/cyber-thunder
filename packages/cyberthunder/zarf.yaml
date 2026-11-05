@@ -1,10 +1,27 @@
 kind: ZarfPackageConfig
 metadata:
   name: cyberthunder
-  description: Cyber Thunder API and web UI with persistent application state.
-  version: 0.2.1
+  description: Cyber Thunder API and web UI with UDS ingress, Keycloak SSO, and persistent state.
+  version: 0.2.2
+
+variables:
+  - name: DOMAIN
+    description: Domain used by UDS Core and Cyber Thunder SSO.
+    default: uds.dev
 
 components:
+  - name: uds-integration
+    required: true
+    manifests:
+      - name: cyberthunder-uds-config
+        namespace: cyberthunder
+        files:
+          - uds.yaml
+    actions:
+      onDeploy:
+        after:
+          - description: Wait for ingress and SSO configuration before starting Cyber Thunder.
+            cmd: ./zarf tools kubectl wait package/cyberthunder -n cyberthunder --for=jsonpath='{.status.phase}'=Ready --timeout=300s
   - name: cyberthunder
     required: true
     manifests:
@@ -13,4 +30,4 @@ components:
         files:
           - ../../deploy/kubernetes/cyberthunder.yaml
     images:
-      - cyberthunder:0.2.1
+      - cyberthunder:0.2.2

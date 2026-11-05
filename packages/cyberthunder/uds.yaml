@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cyberthunder
+---
+apiVersion: uds.dev/v1alpha1
+kind: Package
+metadata:
+  name: cyberthunder
+  namespace: cyberthunder
+spec:
+  network:
+    serviceMesh:
+      mode: sidecar
+    expose:
+      - service: cyberthunder
+        selector:
+          app: cyberthunder
+        gateway: tenant
+        host: cyberthunder
+        port: 80
+        targetPort: 8000
+  sso:
+    - name: Cyber Thunder
+      clientId: cyber-thunder-app
+      redirectUris:
+        - https://cyberthunder.###ZARF_VAR_DOMAIN###/login
+      enableAuthserviceSelector:
+        app: cyberthunder
+      groups:
+        anyOf:
+          - /UDS Core/Admin
