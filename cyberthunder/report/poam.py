@@ -11,9 +11,9 @@ from datetime import date, timedelta
 from typing import TYPE_CHECKING
 
 from cyberthunder.control.approvals import ProposalState
+from cyberthunder.findings.current import CurrentFindings
 from cyberthunder.findings.schema import Severity, Status
 from cyberthunder.report.assurance import build_assurance
-from cyberthunder.report.closure import verified_closure
 from cyberthunder.report.onepager import discovery_open, latest_proposals, resolve_scan
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -65,11 +65,13 @@ def poam_rows(ctx: "AppContext", scan_id: str | None = None) -> list[dict]:
     disc = [f for f in discovery_open(ctx) if f.id not in {x.id for x in findings}]
     findings = sorted([*findings, *disc], key=lambda f: (-f.severity.rank, f.host, f.rule_version or f.rule_id))
     assurance = build_assurance(ctx, findings)
+    lifecycle = CurrentFindings.for_context(ctx)
     for f, assessed in zip(findings, assurance["findings"]):
+        current = lifecycle.assess(f)
         review = assessed["review"]
         event = review["current"] or {}
         p = props.get(f.id)
-        incomplete = f.status in (Status.NOT_REVIEWED, Status.ERROR)
+        incomplete = current.finding.status in (Status.NOT_REVIEWED, Status.ERROR)
         if not f.is_open and not incomplete and not review["suppressed"] and not (p and p.state == ProposalState.VERIFIED):
             continue
         if p is None:
@@ -79,9 +81,9 @@ def poam_rows(ctx: "AppContext", scan_id: str | None = None) -> list[dict]:
             status, fix, pstate = _STATUS.get(p.state, "Open"), p.fix_ref, p.state.value
             milestone = _MILESTONE.get(p.state, "Apply and verify fix")
             if p.state == ProposalState.VERIFIED:
-                if verified_closure(f, p):
+                if current.remediated:
                     status, milestone = "Completed", "Closed: fix verified"
-                elif f.status == Status.NOT_A_FINDING:
+                elif current.finding.status == Status.NOT_A_FINDING:
                     status, milestone = "Completed", "Scanner reports not_a_finding"
                 else:
                     milestone = "Reassess observation; prior verification does not establish closure"
@@ -91,10 +93,14 @@ def poam_rows(ctx: "AppContext", scan_id: str | None = None) -> list[dict]:
         elif incomplete:
             status = "Needs investigation"
             milestone = "Resolve scanner error and rerun check" if f.status == Status.ERROR else "Run or complete the missing check"
+        if current.needs_rescan:
+            milestone = "Rescan after rollback; prior scanner evidence does not establish current compliance"
         due = "" if status == "Completed" else (today + timedelta(days=SCHEDULE_DAYS.get(f.severity, 180))).isoformat()
         comments = "Discovery sweep" if f.source == "discovery" else f"Scan {sid}"
         if p and p.decided_by:
             comments += f"; {p.state.value} by {p.decided_by}"
+        if current.rollback:
+            comments += f"; rollback attempt {current.rollback['proposal_id']} ok={current.rollback['ok']}"
         if not f.rule_version:
             comments += "; no STIG ID, see citations"
         rows.append({

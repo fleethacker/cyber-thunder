@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { HashRouter, StaticRouter } from 'react-router-dom';
 import { MantineProvider } from '@mantine/core';
 import ts from 'typescript';
-import { evaluate, helpers, mount, proposal, ui } from '../lib/rollbackTestSupport.mjs';
+import { proposal } from '../lib/rollbackTestSupport.mjs';
 
 const sourceRoot = new URL('../', import.meta.url).href;
 registerHooks({
@@ -34,6 +34,7 @@ registerHooks({
 });
 const { ProposalCard } = await import('./ProposalCard.tsx');
 const { AuditSubject } = await import('./AuditSubject.tsx');
+const { RollbackGuardView } = await import('./ProposalDiff.tsx');
 const { AppStateProvider } = await import('../state/AppState.tsx');
 const { default: App } = await import('../App.tsx');
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => '' } });
@@ -92,25 +93,50 @@ test('the emitted hash link opens the actual Decisions route without an alias', 
   assert.doesNotMatch(destination, /Page not found/);
 });
 
-test('confirmation describes saved state and newer-change risk and blocks gated direct handlers', async () => {
-  let confirms = 0;
-  const props = { proposal: proposal(), busy: false, blockedReason: null, error: null, onConfirm: () => confirms++, onClose() {} };
-  const panel = mount(() => evaluate(new URL('./RollbackConfirmation.tsx', import.meta.url), {
-    '@mantine/core': ui, '../lib/format': { fmtZonedTime: (value) => value }, '../lib/proposalHistory': helpers,
-    './ProposalDiff': ui, './common': ui,
-  }).RollbackConfirmation, props);
-  try {
-    await panel.settle();
-    const text = panel.nodes().map((node) => typeof node.props?.children === 'string' ? node.props.children : '').join(' ');
-    for (const phrase of ['may overwrite newer work', 'may restore the original vulnerability', 'does not guarantee a safe or complete restore', 'vary by platform and change type', 'Inspect both the saved state and the live target', 'saved diff does not inspect the live target', 'run a fresh scan']) assert.ok(text.includes(phrase), phrase);
-    assert.equal(confirms, 0);
-    await panel.click('Confirm rollback');
-    assert.equal(confirms, 1);
-    for (const change of [{ busy: true }, { busy: false, blockedReason: 'Kill switch engaged' }, { blockedReason: null, proposal: proposal('failed') }]) {
-      Object.assign(props, change); await panel.rerender(props);
-      assert.equal(panel.button('Confirm rollback').props.disabled, true);
-      panel.button('Confirm rollback').props.onClick();
-    }
-    assert.equal(confirms, 1);
-  } finally { panel.unmount(); }
+const guard = (overrides = {}) => ({
+  status: 'not_checked', coverage: 'partial', live_checked: false, identity_bound: true,
+  transition_allowed: true, conflicting_proposals: [], reasons: [], limitations: ['Service reload effects are not compared.'],
+  ...overrides,
+});
+
+test('static guard renders actual coverage, reasons, limits and escaped conflict links', () => {
+  const html = renderHash(RollbackGuardView, { guard: guard({ status: 'blocked',
+    reasons: ['Later apply attempt <script>alert(1)</script>'],
+    conflicting_proposals: ['later/change?&<x>'], limitations: ['External <writers> are not locked.'],
+  }) });
+  for (const text of ['Current static rollback checks', 'Status: blocked', 'Coverage: partial',
+    'Only some effects', 'without connecting to the target', 'Later recorded changes on this target block restoration',
+    'engine repeats its checks at restore time', 'external drift may remain unknown']) assert.ok(html.includes(text), text);
+  assert.match(html, /Later apply attempt &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(html, /External &lt;writers&gt; are not locked/);
+  assert.doesNotMatch(html, /<script\b|>safe</i);
+  assert.match(html, /href="#\/\?proposal=later%2Fchange%3F%26%3Cx%3E"/);
+});
+
+test('historical preflight is visibly separate from current static blockers and cannot read as current authorization', () => {
+  const html = render(RollbackGuardView, { guard: guard({ status: 'blocked', reasons: ['Later proposal changed the target'],
+    last_preflight: guard({ status: 'checked_files', coverage: 'files', live_checked: true, checked_at: '2026-11-01T12:00:00Z' }),
+  }) });
+  for (const text of ['Status: blocked', 'Later proposal changed the target', 'Live comparison reported: not performed',
+    'Last preflight (historical)', '2026-11-01', 'checked_files', 'earlier attempt', 'does not authorize a rollback now']) assert.ok(html.includes(text), text);
+});
+
+test('unsupported drift coverage and missing identity remain explicit without a safe label', () => {
+  const html = render(RollbackGuardView, { guard: guard({ coverage: 'unsupported', identity_bound: false }) });
+  for (const text of ['Coverage: unsupported', 'Live platform drift detection is unsupported',
+    'may overwrite newer external changes', 'no recorded binding', 'External drift may still be unknown']) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, />safe<|complete coverage confirmed|no impact/i);
+});
+
+test('file coverage names its bounds; missing guard reports unknown and failed lookup retains actual reasons', () => {
+  const files = render(RollbackGuardView, { guard: guard({ coverage: 'files' }) });
+  assert.match(files, /file bytes, type, mode and ownership/);
+  assert.match(files, /does not cover ACLs, extended attributes or unrelated host state/);
+  const missing = render(RollbackGuardView, { guard: null });
+  assert.match(missing, /Rollback checks are unavailable/);
+  assert.match(missing, /Coverage: unknown/);
+  assert.doesNotMatch(missing, /No static blockers reported/);
+  const failed = render(RollbackGuardView, { guard: { status: 'blocked', coverage: 'unknown', live_checked: false, reasons: ['Persisted inventory is unreadable'] } });
+  assert.match(failed, /Persisted inventory is unreadable/);
+  assert.match(failed, /Endpoint identity: unknown/);
 });

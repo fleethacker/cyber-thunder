@@ -13,8 +13,9 @@ from typing import TYPE_CHECKING
 
 from cyberthunder.control.approvals import Proposal, ProposalState
 from cyberthunder.findings.schema import RE_ATTACK, Finding, Severity
+from cyberthunder.findings.current import CurrentFindings
 from cyberthunder.report.assurance import build_assurance
-from cyberthunder.report.closure import state_time, verified_closure
+from cyberthunder.report.closure import state_time
 from cyberthunder.report.render import ReportError, render
 from cyberthunder.report.coverage import build_coverage
 
@@ -139,14 +140,15 @@ def _reverted(p: Proposal) -> dict:
 def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     sid, run, findings = resolve_scan(ctx, scan_id)
     v = ctx.audit.verify()
-    latest = latest_proposals(ctx)
     disc = discovery_open(ctx)
     finding_ids = {f.id for f in findings}
     assurance = build_assurance(ctx, [*findings, *(f for f in disc if f.id not in finding_ids)])
     assured = {row["id"]: row for row in assurance["findings"]}
     suppressed_ids = {row["id"] for row in assurance["findings"] if row["review"]["suppressed"]}
     # A subsequent open observation wins over an older verified fix.
-    closed = [f for f in findings if verified_closure(f, latest.get(f.id))]
+    lifecycle = CurrentFindings.for_context(ctx)
+    current = {f.id: lifecycle.assess(f) for f in findings}
+    closed = [f for f in findings if current[f.id].remediated]
     closed_ids = {f.id for f in closed}
     open_f = [f for f in findings if f.is_open and f.id not in closed_ids and f.id not in suppressed_ids]
     hunt = [f for f in open_f if is_hunt(f)]
@@ -201,6 +203,13 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
           f"{counts['rolled_back']} rolled back, {counts['failed']} failed; "
           f"audit chain {chain} over {v.count} records.")
     bluf = [s1, s2]
+    pending = [f for f in findings if current[f.id].needs_rescan]
+    if pending:
+        bluf.append(f"{len(pending)} finding(s) need a rescan after rollback; earlier scanner passes do not establish current compliance.")
+    for row in assurance["findings"]:
+        if row["id"] in current:
+            view = current[row["id"]]
+            row.update(current_status=view.finding.status.value, needs_rescan=view.needs_rescan, rollback=view.rollback)
     unknown = sorted({f.host.removeprefix("discovered:") for f in active_disc if f.rule_id == "discovery:unknown_asset"})
     if disc:
         bluf.append(f"Discovery found {len(disc)} open item(s) on the enclave"

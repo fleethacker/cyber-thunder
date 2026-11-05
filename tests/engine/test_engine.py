@@ -289,7 +289,7 @@ def test_diff_shape(make_ctx):
     p = root_login_proposal(ctx)
     ctx.engine.execute(p.id, actor=SAILOR)
     d = ctx.engine.diff(p.id)
-    assert set(d) == {"proposal", "fix", "before_state", "apply", "verify", "rollback", "files"}
+    assert set(d) == {"proposal", "fix", "before_state", "apply", "verify", "rollback", "files", "rollback_guard"}
     assert d["proposal"]["state"] == "verified" and d["fix"]["fix_ref"] == p.fix_ref
     assert d["apply"]["ok"] is True and d["verify"]["ok"] is True and d["rollback"] is None
     (fd,) = d["files"]

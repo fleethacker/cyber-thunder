@@ -129,6 +129,11 @@ def assurance_block_reason(ctx, finding: Finding) -> str | None:
     """Evidence/review can withhold standing approval; neither can grant it."""
     from cyberthunder.findings.confidence import assess_for_context
     from cyberthunder.findings.review import ReviewService
+    from cyberthunder.findings.current import policy_block_reason
+
+    blocked = policy_block_reason(ctx, finding)
+    if blocked:
+        return blocked
 
     review = ReviewService(ctx).summary(finding)
     if review["suppressed"] or review["disposition"] == "needs_investigation":
