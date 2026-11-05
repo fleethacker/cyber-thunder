@@ -164,7 +164,7 @@ class ClusterBaselineService:
         return {"surveyed_at": utcnow(), "namespaces": namespaces, "workloads": [w.to_dict() for w in workloads],
                 "errors": errors}
 
-    def scan(self, *, use_openai: bool = False) -> dict:
+    def scan(self, *, use_openai: bool = False, actor: str = "agent") -> dict:
         survey = self.survey()
         images = sorted({img for w in survey["workloads"] for img in w.get("images", [])})
         run_id = self.ctx.store.new_id("cluster-")
@@ -190,7 +190,7 @@ class ClusterBaselineService:
                "namespaces": profiles, "errors": errors}
         self.ctx.store.write_json(run_dir / "baseline.json", doc)
         self.ctx.store.write_json(self.root / "latest.json", doc)
-        self.ctx.audit.append("cluster.baseline", "agent", {"run_id": run_id, "namespaces": len(profiles),
+        self.ctx.audit.append("cluster.baseline", actor, {"run_id": run_id, "namespaces": len(profiles),
                                                             "images": len(images), "errors": len(errors)},
                               subject=run_id, outcome="ok" if not errors else "partial")
         return doc
