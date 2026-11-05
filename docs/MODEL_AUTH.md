@@ -22,7 +22,9 @@ Keep the key out of endpoint URLs, prompts, command-line arguments, checked-in
 configuration, and saved files. It is not a settings field and is not included
 in settings serialization, request bodies, application logs, status details,
 audit entries, or explanation reports. Responses reflecting the request's key
-are rejected before their content can become a saved explanation.
+are rejected before their content can become a saved explanation. Completion
+content is also checked after the same JSON extraction and decoding used by the
+explanation validator, including escaped text, code fences, and surrounding prose.
 
 ## Rotation and availability
 

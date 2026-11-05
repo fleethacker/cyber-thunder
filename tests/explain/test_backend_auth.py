@@ -1,11 +1,10 @@
-"""Optional backend authentication: mocked transport and loopback redirects only."""
+"""Optional backend authentication: mocked transport only, with no sockets opened."""
 import http.client
 import io
 import json
-import threading
 import urllib.error
-from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.response
+from email.message import Message
 from types import SimpleNamespace
 
 import pytest
@@ -18,11 +17,6 @@ KEY = "test-credential-alpha"
 NEXT_KEY = "test-credential-beta"
 MODEL_LIST = {"data": [{"id": "local"}]}
 COMPLETION = {"choices": [{"message": {"content": '{"ok": true}'}}]}
-
-
-@pytest.fixture(autouse=True)
-def isolated_credentials(monkeypatch):
-    monkeypatch.delenv("CT_LLM_API_KEY", raising=False)
 
 
 @pytest.fixture
@@ -209,6 +203,37 @@ def test_reflected_credentials_are_rejected_before_explanation_persistence(monke
     assert KEY not in detail + caplog.text and "Authorization" not in detail + caplog.text
 
 
+@pytest.mark.parametrize("wrapper", ["{}", "```json\n{}\n```", "Explanation follows:\n{}\nEnd."])
+def test_encoded_completion_credentials_never_reach_saved_explanation(
+    monkeypatch, transport, state_dir, caplog, wrapper,
+):
+    from cyberthunder.explain.validator import validate
+    from tests.explain.helpers import canned, make_ctx, ssh_root_finding
+
+    monkeypatch.setenv("CT_LLM_API_KEY", KEY)
+    finding = ssh_root_finding()
+    content = json.dumps(dict(json.loads(canned("valid")), risk=KEY)).replace(KEY, r"\u0074est-credential-alpha")
+    content = wrapper.format(content)
+    assert KEY not in content
+    # This is otherwise valid text that the normal validator would decode and save.
+    validated, _ = validate(content, finding)
+    assert validated is not None and validated["risk"] == KEY
+    response = {"choices": [{"message": {"content": content}}]}
+    transport.responses.extend([MODEL_LIST, response, response])
+    ctx = make_ctx(state_dir)
+    ctx.explain.backend = backend()
+    result = ctx.explain.explain(finding)
+    assert result.fallback and result.attempts == 2
+    assert ctx.explain.get(finding.id).fallback
+    serialized = json.dumps([result.to_dict(), ctx.store.load_explanation(finding.id), list(ctx.audit.records())])
+    assert KEY not in serialized + caplog.text
+    assert "Authorization" not in serialized + caplog.text
+    assert len(transport.calls) == 3
+    for path in state_dir.rglob("*"):
+        if path.is_file():
+            assert KEY.encode() not in path.read_bytes()
+
+
 def test_auth_failure_cannot_enter_service_status_audit_or_settings(monkeypatch, transport, state_dir, caplog):
     from tests.explain.helpers import make_ctx, ssh_root_finding
 
@@ -240,62 +265,42 @@ def test_shared_helper_and_local_backend_do_not_inherit_key(monkeypatch, transpo
     assert all(req.get_header("Authorization") is None for req in transport.calls)
 
 
-@contextmanager
-def loopback_server(respond):
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            respond(self)
-
-        do_POST = do_GET
-
-        def log_message(self, *args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    worker = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
-    worker.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=2)
-
-
 @pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
 @pytest.mark.parametrize("operation", ["probe", "generate"])
 @pytest.mark.parametrize("same_origin", [False, True])
 def test_authenticated_redirects_never_forward_credentials(monkeypatch, caplog, code, operation, same_origin):
     monkeypatch.setenv("CT_LLM_API_KEY", KEY)
-    monkeypatch.setattr(backends.urllib.request, "getproxies", lambda: {})
+    source_url = "http://127.0.0.1:1234"
+    destination_url = source_url if same_origin else "http://127.0.0.1:5678"
     destination_calls = []
     source_calls = []
 
-    def destination(req):
-        destination_calls.append(dict(req.headers))
-        req.send_response(200)
-        req.end_headers()
-        req.wfile.write(json.dumps(COMPLETION).encode())
-
-    with loopback_server(destination) as destination_url:
-        def redirect(req):
-            if req.path == "/destination":
-                destination(req)
-                return
-            source_calls.append(req.headers.get("Authorization"))
-            req.send_response(code, f"Authorization: Bearer {KEY}")
-            req.send_header("Location", "/destination" if same_origin else f"{destination_url}/destination")
-            req.end_headers()
-            req.wfile.write(f"Authorization: Bearer {KEY}".encode())
-
-        with loopback_server(redirect) as source_url:
-            b = OpenAICompatBackend(source_url, "local")
-            if operation == "probe":
-                ok, detail = b.available()
-                assert not ok
+    class MockHTTPHandler(backends.urllib.request.HTTPHandler):
+        def http_open(self, req):
+            headers = Message()
+            if req.full_url == f"{destination_url}/destination":
+                destination_calls.append(dict(req.header_items()))
+                status, reason, body = 200, "OK", json.dumps(COMPLETION)
             else:
-                assert b.generate("prompt", timeout=1) is None
-                detail = caplog.text
+                source_calls.append(req.get_header("Authorization"))
+                headers["Location"] = "/destination" if same_origin else f"{destination_url}/destination"
+                status, reason, body = code, f"Authorization: Bearer {KEY}", "redirect"
+            response = urllib.response.addinfourl(io.BytesIO(body.encode()), headers, req.full_url, status)
+            response.msg = reason
+            return response
+
+    build_opener = backends.urllib.request.build_opener
+    monkeypatch.setattr(
+        backends.urllib.request, "build_opener",
+        lambda *handlers: build_opener(backends.urllib.request.ProxyHandler({}), MockHTTPHandler(), *handlers),
+    )
+    b = OpenAICompatBackend(source_url, "local")
+    if operation == "probe":
+        ok, detail = b.available()
+        assert not ok
+    else:
+        assert b.generate("prompt", timeout=1) is None
+        detail = caplog.text
     assert source_calls == [f"Bearer {KEY}"]
     assert destination_calls == []
     assert "redirect refused" in detail

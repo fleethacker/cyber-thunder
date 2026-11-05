@@ -16,6 +16,8 @@ import urllib.error
 import urllib.request
 from typing import Protocol, runtime_checkable
 
+from .validator import extract_json_object
+
 log = logging.getLogger(__name__)
 
 AVAILABILITY_TTL_S = 30.0
@@ -64,6 +66,14 @@ def _contains_secret(value, secret: str) -> bool:
     if isinstance(value, list):
         return any(_contains_secret(item, secret) for item in value)
     return False
+
+
+def _completion_text(out: dict) -> str | None:
+    try:
+        text = out["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    return text if isinstance(text, str) and text.strip() else None
 
 
 def _compatible_failure(error: Exception) -> str:
@@ -166,7 +176,12 @@ class OpenAICompatBackend:
     def _request(self, method: str, url: str, body: dict | None, timeout: float) -> dict:
         # Read for every attempt, including the JSON-mode fallback; never retain the credential.
         key = os.environ.get("CT_LLM_API_KEY", "").strip()
-        return _http_json(method, url, body, timeout, bearer_token=key or None)
+        out = _http_json(method, url, body, timeout, bearer_token=key or None)
+        text = _completion_text(out)
+        # Match the validator's decoding, including JSON inside fences or surrounding prose.
+        if key and text and _contains_secret(extract_json_object(text), key):
+            raise ValueError("model server response contained a credential")
+        return out
 
     def _probe(self) -> tuple[bool, str]:
         try:
@@ -212,11 +227,7 @@ class OpenAICompatBackend:
             log.warning("compatible generate failed: %s", _compatible_failure(e))
             self._avail.clear()
             return None
-        try:
-            text = out["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError):
-            return None
-        return text if isinstance(text, str) and text.strip() else None
+        return _completion_text(out)
 
 
 class TemplateBackend:
