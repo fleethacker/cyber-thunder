@@ -1,0 +1,83 @@
+{
+  "screenshots": [
+    {
+      "name": "assets",
+      "route": "/assets",
+      "asset": "app-assets.jpg",
+      "captured_at": "2026-11-05T17:58:12.839392+00:00",
+      "viewport": {
+        "width": 1600,
+        "height": 1060
+      },
+      "source_commit": "d374cfe8db7b9e1905435dc9429b473013e528f6"
+    },
+    {
+      "name": "findings",
+      "route": "/findings",
+      "asset": "app-findings.jpg",
+      "captured_at": "2026-11-05T17:58:14.281525+00:00",
+      "viewport": {
+        "width": 1600,
+        "height": 1060
+      },
+      "source_commit": "d374cfe8db7b9e1905435dc9429b473013e528f6"
+    },
+    {
+      "name": "decisions",
+      "route": "/",
+      "asset": "app-decisions.jpg",
+      "captured_at": "2026-11-05T17:58:23.983621+00:00",
+      "viewport": {
+        "width": 1600,
+        "height": 1060
+      },
+      "source_commit": "d374cfe8db7b9e1905435dc9429b473013e528f6"
+    },
+    {
+      "name": "audit",
+      "route": "/audit",
+      "asset": "app-audit.jpg",
+      "captured_at": "2026-11-05T17:58:26.095660+00:00",
+      "viewport": {
+        "width": 1600,
+        "height": 1060
+      },
+      "source_commit": "d374cfe8db7b9e1905435dc9429b473013e528f6"
+    },
+    {
+      "name": "reports",
+      "route": "/reports",
+      "asset": "app-reports.jpg",
+      "captured_at": "2026-11-05T17:58:27.218393+00:00",
+      "viewport": {
+        "width": 1600,
+        "height": 1060
+      },
+      "source_commit": "d374cfe8db7b9e1905435dc9429b473013e528f6"
+    },
+    {
+      "name": "commander",
+      "route": "/commander",
+      "asset": "app-commander.jpg",
+      "captured_at": "2026-11-05T17:58:36.742621+00:00",
+      "viewport": {
+        "width": 1600,
+        "height": 1060
+      },
+      "source_commit": "d374cfe8db7b9e1905435dc9429b473013e528f6"
+    },
+    {
+      "name": "mission",
+      "route": "/mission",
+      "asset": "app-mission.jpg",
+      "captured_at": "2026-11-05T17:58:37.540471+00:00",
+      "viewport": {
+        "width": 1600,
+        "height": 1060
+      },
+      "source_commit": "d374cfe8db7b9e1905435dc9429b473013e528f6"
+    }
+  ],
+  "method": "Playwright Chromium, deployed application, read-only API access",
+  "blocked_mutations": []
+}

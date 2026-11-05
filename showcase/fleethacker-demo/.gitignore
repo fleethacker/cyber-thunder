@@ -1,0 +1,9 @@
+tools/capture-*.txt
+tools/qa-*.png
+tools/qa-results.json
+*.zip
+node_modules/
+
+# Buildless presentation source is intentionally tracked.
+!dist/
+!dist/**

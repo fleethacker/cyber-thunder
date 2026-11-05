@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#081311">
+  <meta name="description" content="Cyber Thunder turns scanner findings into approved, verified, reversible fixes. Explore the working FLEETHACKER prototype through real app screenshots and an interactive operator demo.">
+  <title>Cyber Thunder — Keep the Watch</title>
+  <link rel="icon" href="assets/bolt.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/fonts.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#mission">Skip to the interactive demo</a>
+  <header class="site-header">
+    <a class="wordmark" href="#top" aria-label="Cyber Thunder home"><span class="brand-bolt">ϟ</span><span>CYBER<br>THUNDER<span class="brand-period">.</span></span></a>
+    <nav aria-label="Main navigation"><a href="#mission">The mission</a><a href="#operator">Take the conn</a><a href="#proof">The proof</a><a href="#next">Path to fleet</a></nav>
+    <button class="header-brief button button-small" data-brief>Start briefing <span aria-hidden="true">↗</span></button>
+  </header>
+
+  <main id="top">
+    <section class="hero section-shell" aria-labelledby="hero-title">
+      <div class="hero-topline mono"><span><i class="status-dot"></i> FLEETHACKER / NORFOLK 2026</span><span>CYBER RESILIENCE & TRUSTED AUTONOMY</span></div>
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="mini-cross">+</span> AUTONOMOUS CYBER DEFENDER</p>
+          <h1 id="hero-title">CLOSE THE GAP.<br><span>KEEP THE WATCH.</span></h1>
+          <p class="hero-description">The next vulnerability won’t wait for a better connection. Turn scanner findings into <strong>approved, verified, reversible fixes</strong>—with the Sailor in control.</p>
+          <div class="hero-actions"><a class="button button-primary" href="#mission">Explore the working prototype <span aria-hidden="true">↗</span></a><button class="text-button" data-brief><span class="play-icon" aria-hidden="true">▷</span> Give me the pitch</button></div>
+          <div class="hero-footnote mono"><span class="status-dot"></span> BUILT. DEPLOYED. HUMAN-CONTROLLED.</div>
+        </div>
+        <div class="hero-visual">
+          <div class="coordinate mono">36°50′ N &nbsp; 76°17′ W <span>NORFOLK, VA</span></div>
+          <div class="scope-ring" aria-hidden="true"></div>
+          <div class="hero-screen screen-frame" data-zoom="assets/app-commander.jpg" data-caption="Commander view — real application screenshot. Range findings include simulated assets." role="button" tabindex="0" aria-label="Enlarge the commander view screenshot">
+            <div class="screen-bar mono"><span><i></i><i></i><i></i></span><span>CYBER THUNDER / COMMANDER VIEW</span><span>↗</span></div>
+            <img src="assets/app-commander.jpg" alt="Cyber Thunder commander dashboard displaying risk categories, decisions, verified changes and audit integrity" width="1600" height="1060" fetchpriority="high">
+          </div>
+          <div class="signal-note"><span class="signal-icon" aria-hidden="true">⌁</span><div><strong>The link is optional.<br>The watch isn’t.</strong><span class="mono">OFFLINE CORE · LOCAL STATE · LOCAL EXPLANATIONS</span></div></div>
+          <p class="capture-label mono"><span></span> REAL APP CAPTURE / ISOLATED DEMO RANGE</p>
+        </div>
+      </div>
+      <div class="hero-principles"><div><span class="principle-index mono">01 /</span><strong>Tools detect.</strong><p>Deterministic checks. Cited evidence.</p></div><div><span class="principle-index mono">02 /</span><strong>AI explains.</strong><p>Local model or offline templates.</p></div><div><span class="principle-index mono">03 /</span><strong>A Sailor decides.</strong><p>Approval before every remediation.</p></div></div>
+    </section>
+
+    <div class="adapter-strip mono"><span>ONE WORKFLOW. MIXED ENVIRONMENTS.</span><div>LINUX <b>+</b> WINDOWS <b>+</b> CISCO <b>+</b> KUBERNETES <b>+</b> CONTAINERS</div></div>
+
+    <section class="problem light-section section-shell" aria-labelledby="problem-title">
+      <div class="section-kicker mono"><span>THE DECKPLATE PROBLEM</span><span>01 / THE WHY</span></div>
+      <div class="problem-grid"><h2 id="problem-title">Another bulletin.<br>Same small team.<br><em>One slow link.</em></h2><div class="problem-right"><p class="large-copy">The hard part isn’t finding another red dot. It’s getting from “something is wrong” to “we know it’s fixed.”</p><p>New STIGs. Scanner exports. Device configs. Approval chains. Checklists. On an isolated enclave, that becomes a manual correlation job for people who already have a watch to stand.</p><div class="before-after"><div><span class="mono">THE HANDOFF TODAY</span><p>Scan → spreadsheet → research → approval → change → evidence → paperwork</p></div><div><span class="mono">THE CYBER THUNDER WORKFLOW</span><p>Evidence <span>→</span> decision <span>→</span> verified outcome</p></div></div></div></div>
+    </section>
+
+    <section class="mission section-shell" id="mission" aria-labelledby="mission-title">
+      <div class="section-kicker mono"><span>REAL SCREENS. ONE CONNECTED STORY.</span><span>02 / EXPLORE THE APP</span></div>
+      <div class="section-heading"><h2 id="mission-title">From signal<br>to <em>certainty.</em></h2><p>Follow the operator’s workflow. These are screenshots of the deployed application—not concept mockups.</p></div>
+      <div class="mission-tabs" role="tablist" aria-label="Application workflow">
+        <button id="tab-0" role="tab" aria-selected="true" aria-controls="tour-panel" data-step="0"><span>01</span> Discover <span class="tab-arrow">↗</span></button>
+        <button id="tab-1" role="tab" aria-selected="false" aria-controls="tour-panel" data-step="1" tabindex="-1"><span>02</span> Detect <span class="tab-arrow">↗</span></button>
+        <button id="tab-2" role="tab" aria-selected="false" aria-controls="tour-panel" data-step="2" tabindex="-1"><span>03</span> Decide <span class="tab-arrow">↗</span></button>
+        <button id="tab-3" role="tab" aria-selected="false" aria-controls="tour-panel" data-step="3" tabindex="-1"><span>04</span> Prove <span class="tab-arrow">↗</span></button>
+        <button id="tab-4" role="tab" aria-selected="false" aria-controls="tour-panel" data-step="4" tabindex="-1"><span>05</span> Report <span class="tab-arrow">↗</span></button>
+      </div>
+      <div id="tour-panel" role="tabpanel" aria-labelledby="tab-0" class="tour-panel" tabindex="0">
+        <div class="tour-visual"><div class="tour-image-wrap" role="button" tabindex="0" aria-label="Enlarge current app screenshot" id="tour-zoom"><img id="tour-image" src="assets/app-assets.jpg" alt="Cyber Thunder asset inventory and discovery interface" width="1600" height="1060" loading="lazy"><span class="zoom-cue mono">↗ ENLARGE SCREEN</span></div><div class="tour-image-footer mono"><span><i class="status-dot"></i> DEPLOYED APP / ACTUAL SCREENSHOT</span><span id="tour-route">ASSETS</span></div></div>
+        <div class="tour-copy"><span class="eyebrow" id="tour-kicker">KNOW YOUR ENCLAVE</span><h3 id="tour-title">Start with<br>what’s in scope.</h3><p id="tour-description">Bring Linux, Windows, network devices, containers and Kubernetes into one inventory. An operator explicitly controls what the system can touch.</p><ul class="evidence-list" id="tour-evidence"><li>Shared inventory across five adapter families</li><li>Scope is explicit and enforced</li><li>Host-cluster discovery in the packaged deployment</li></ul><div class="tour-takeaway"><span class="mono">THE PAYOFF</span><p id="tour-payoff">One operational picture. A clearly defined boundary.</p></div><div class="tour-controls"><span class="mono" id="tour-count">01 / 05</span><div><button id="tour-prev" class="icon-button" aria-label="Previous workflow step">←</button><button id="tour-next" class="icon-button" aria-label="Next workflow step">→</button></div></div></div>
+      </div>
+      <p class="evidence-note">Captured from the isolated demo deployment, November 5, 2026. The range includes simulated assets. Screenshots are recorded evidence, not a live status feed.</p>
+    </section>
+
+    <section class="operator light-section section-shell" id="operator" aria-labelledby="operator-title">
+      <div class="section-kicker mono"><span>HUMAN–MACHINE TEAMING, MADE TANGIBLE</span><span>03 / TAKE THE CONN</span></div>
+      <div class="operator-grid"><div class="operator-intro"><span class="outlined-number" aria-hidden="true">YOU.</span><h2 id="operator-title">The machine<br>can propose.<br><em>You have the conn.</em></h2><p>Try the moment that matters. An SSH configuration allows direct root login. The system has evidence and a vetted fix. It still needs your decision.</p><span class="simulation-label mono"><i></i> INTERACTIVE SIMULATION / NO LIVE CHANGES</span></div>
+        <div class="decision-sim">
+          <div class="sim-top"><span class="mono"><span class="amber-dot"></span> OPERATOR DECISION</span><button id="sim-reset" class="text-button" aria-label="Reset decision simulation">Reset ↺</button></div>
+          <div class="sim-main"><div class="sim-severity mono">CAT II <span>CONFIGURATION WEAKNESS</span></div><h3>Close the direct<br>root login path.</h3><p class="sim-host mono">ILLUSTRATIVE HOST / RANGE-LINUX-01</p><div class="sim-evidence"><div><span>OBSERVED</span><code>PermitRootLogin yes</code></div><span class="code-arrow" aria-hidden="true">→</span><div><span>PROPOSED</span><code>PermitRootLogin no</code></div></div><dl class="sim-facts"><div><dt>Source</dt><dd>RHEL-09-255045 · CCI-000770</dd></div><div><dt>Expected impact</dt><dd>Restrict direct root SSH access</dd></div><div><dt>Recovery</dt><dd>Restore captured before-state</dd></div></dl><div class="sim-risk"><strong>Operator check</strong><p>Confirm a working non-root admin path before applying. This scenario illustrates the gate; it does not execute a command.</p></div><div id="sim-status" class="sim-status" role="status" aria-live="polite"><span class="status-dot amber"></span> Waiting for your decision. No change has been made.</div><div class="sim-actions" id="sim-actions"><button class="button button-dark" id="sim-approve">Approve this fix <span>↗</span></button><button class="button button-outline" id="sim-deny">Deny & retain evidence</button></div><div class="verify-options" id="verify-options" hidden><p>Choose the simulated verification outcome:</p><div><button class="button button-dark" id="sim-pass">Verification passes ✓</button><button class="button button-outline" id="sim-fail">Test a failed verification ↺</button></div></div><ol class="sim-timeline" id="sim-timeline" aria-label="Simulated remediation stages"><li data-stage="0"><i></i>Scope checked</li><li data-stage="1"><i></i>Human decision</li><li data-stage="2"><i></i>Before-state</li><li data-stage="3"><i></i>Verify / restore</li></ol></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="guardrails section-shell" id="proof" aria-labelledby="proof-title">
+      <div class="section-kicker mono"><span>TRUST IS AN ENGINEERING REQUIREMENT</span><span>04 / THE PROOF</span></div>
+      <div class="section-heading"><h2 id="proof-title">Autonomy with<br><em>accountability.</em></h2><p>Useful at the edge means more than running a model. It means bounded actions, recoverable changes, and evidence you can inspect.</p></div>
+      <div class="proof-layout"><div class="proof-image"><div class="screen-bar mono"><span><i></i><i></i><i></i></span><span>CHAIN OF EVIDENCE</span><span>↗</span></div><button class="image-button" data-zoom="assets/app-audit.jpg" data-caption="Audit trail — actual app screenshot with hash-chain verification." aria-label="Enlarge the audit trail screenshot"><img src="assets/app-audit.jpg" alt="Cyber Thunder audit trail with chain verification, named actors, actions and outcomes" width="1600" height="1060" loading="lazy"></button><div class="proof-caption mono">APPEND-ONLY EVENTS / HASH-CHAIN VERIFICATION</div></div><div class="proof-points"><article><span class="proof-symbol">◎</span><div><h3>Authority stays human.</h3><p>Named operators approve or deny. Scope checks and the kill switch block unauthorized actions.</p></div></article><article><span class="proof-symbol">↺</span><div><h3>Recovery is part of the plan.</h3><p>Capture before-state, apply an approved library fix, verify the result, and automatically restore when verification fails.</p></div></article><article><span class="proof-symbol">⌁</span><div><h3>Disconnected by design.</h3><p>Local state and templates keep the core workflow useful offline. Model explanations can run locally; scanner content must be staged.</p></div></article><article><span class="proof-symbol">#</span><div><h3>Every decision leaves evidence.</h3><p>Hash-chained audit records connect the finding, actor, approval and outcome. Saved reports preserve the evidence for the next watch.</p></div></article></div></div>
+      <div class="proof-ribbon"><div><span class="mono">OBSERVED IN THE DEPLOYED RANGE</span><strong>7 assets. 5 adapter families. One workflow.</strong></div><div><span class="mono">BUILD VERIFIED</span><strong>main / <a href="https://github.com/fleethacker/cyber-thunder/commit/d374cfe8db7b9e1905435dc9429b473013e528f6" target="_blank" rel="noopener">d374cfe ↗</a></strong></div><div><span class="mono">VALIDATION AT DEPLOYMENT</span><strong>Repository gate + API + SSO checks passed.</strong></div></div>
+    </section>
+
+    <section class="next-section section-shell" id="next" aria-labelledby="next-title">
+      <div class="section-kicker mono"><span>FROM HACKATHON TO AN EVALUATION THAT MATTERS</span><span>05 / PATH TO FLEET</span></div>
+      <div class="section-heading"><h2 id="next-title">Built in a sprint.<br><em>Prove it on a range.</em></h2><p>A working prototype is the starting point. The next ask: a mission partner, a representative training enclave, and time with the people standing the watch.</p></div>
+      <div class="transition-grid"><article><span class="mono">01 / FIRST 30 DAYS</span><h3>Name the owner.<br>Measure the work.</h3><p>Confirm a mission owner and technical sponsor. Baseline today’s vulnerability-to-remediation workflow with an IT/cyber team.</p><span class="transition-outcome">OUTPUT / AGREED EVALUATION PLAN</span></article><article><span class="mono">02 / BY DAY 60</span><h3>Run the range.<br>Test the boundaries.</h3><p>Evaluate detection coverage, decision time, offline behavior, rollback and operator usability on representative systems.</p><span class="transition-outcome">OUTPUT / MEASURED RANGE RESULTS</span></article><article><span class="mono">03 / BY DAY 90</span><h3>Define the authority.<br>Make the decision.</h3><p>Review data handling and integration needs. Define the authorization path, resource needs and criteria for a limited pilot.</p><span class="transition-outcome">OUTPUT / PILOT GO / NO-GO CRITERIA</span></article></div>
+      <div class="transition-note"><span class="mono">PROPOSED TRANSITION PLAN</span><p>Mission and technical owners are to be confirmed. Required resources: a representative isolated range, an operator/approver, test content and evaluation support. Operational authorization is a future evaluation milestone.</p></div>
+    </section>
+
+    <section class="closing section-shell" aria-labelledby="closing-title"><span class="mono">LESS CORRELATION. MORE CONFIDENCE.</span><h2 id="closing-title">KEEP THE HUMAN.<br><em>CLOSE THE LOOP.</em></h2><div><button class="button button-primary" data-brief>Run the judge’s briefing <span>↗</span></button><a class="button button-ghost" href="https://cyberthunder.uds.dev" target="_blank" rel="noopener">Open the local app <span>↗</span></a><a class="text-button" href="https://github.com/fleethacker/cyber-thunder" target="_blank" rel="noopener">Inspect the source ↗</a></div><p>The local app requires your demo-network connection and authorized Keycloak sign-in.</p></section>
+  </main>
+
+  <footer class="site-footer"><a class="wordmark" href="#top"><span class="brand-bolt">ϟ</span><span>CYBER<br>THUNDER<span class="brand-period">.</span></span></a><p>Built for FLEETHACKER · Norfolk · November 4–6, 2026<br>Autonomous Cyber Defender / Working hackathon prototype</p><a href="assets/capture-provenance.json" class="mono" target="_blank" rel="noopener">SCREENSHOT PROVENANCE ↗</a></footer>
+
+  <dialog id="image-dialog" class="image-dialog" aria-labelledby="image-caption"><button class="dialog-close icon-button" aria-label="Close enlarged screenshot">×</button><img id="image-dialog-img" alt="" width="1600" height="1060"><p id="image-caption"></p></dialog>
+  <dialog id="brief-dialog" class="brief-dialog" aria-labelledby="brief-title"><div class="brief-top mono"><span>CYBER THUNDER / JUDGE’S BRIEFING</span><button class="icon-button dialog-close" aria-label="Close briefing">×</button></div><div class="brief-grid"><div class="brief-text"><span class="eyebrow" id="brief-kicker"></span><h2 id="brief-title"></h2><p id="brief-description"></p><div class="brief-line" id="brief-line"></div><div class="presenter-note"><span class="mono">TALK TRACK</span><p id="brief-note"></p></div></div><div class="brief-visual"><img id="brief-image" alt="" width="1600" height="1060"><span class="mono">REAL APPLICATION CAPTURE / ISOLATED DEMO RANGE</span></div></div><div class="brief-bottom"><span class="mono" id="brief-progress"></span><div class="brief-dots" id="brief-dots" aria-label="Briefing slides"></div><div><button class="button button-ghost" id="brief-prev">← Back</button><button class="button button-primary" id="brief-next">Next →</button></div></div><p class="brief-hint mono">← → TO NAVIGATE &nbsp; / &nbsp; ESC TO EXIT &nbsp; / &nbsp; APPROX. 3 MINUTES</p></dialog>
+</body>
+</html>
