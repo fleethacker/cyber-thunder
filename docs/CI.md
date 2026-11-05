@@ -33,7 +33,9 @@ gate semantics; they are not a scan of every historical commit.
 plugin hooks. It forces `CT_STATE_BACKENDS=json,sqlite`, disables live-model
 opt-in and third-party plugin autoload, clears `PYTEST_ADDOPTS`, and rejects
 command-line selectors. Each collected test using `state_dir` must have both
-backend cases, including each combination of its other parameters.
+backend cases, including each combination of its other parameter values. The
+checker compares values within the collection and preserves duplicate counts;
+pytest's Cartesian-product indices need not match between backends.
 
 Skips match an exact node ID and exact reason in `expected_skips()`. There are
 no directory wildcards, class-wide allowances or pooled skip budgets. Fewer
@@ -160,7 +162,7 @@ automation requiring new dependencies and release-time model checks remain
 separate work under TST-02. Branch-protection settings are also separate from
 adding this workflow.
 
-Initial implementation validation: all 17 focused helper tests passed on
+Initial implementation validation: all 19 focused helper tests passed on
 Windows with Python 3.12 and pytest 9.2. Their child processes run tiny synthetic
 suites only. Neither the full repository suite nor a hosted Linux/Windows
 workflow run is claimed here. The UI build is configured for GitHub and was not

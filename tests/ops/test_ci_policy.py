@@ -116,6 +116,34 @@ def test_missing_backend_is_red(tmp_path):
     assert any("Incomplete state backends" in error for error in report["errors"])
 
 
+def test_cartesian_parameters_match_values_across_backends(tmp_path):
+    result, report = run_suite(tmp_path, {"tests/test_cartesian.py": '''import pytest
+@pytest.mark.parametrize("action,value", [("read", {"active": True}), ("write", {"active": False})])
+@pytest.mark.parametrize("attempt", [1, 2])
+def test_combination(state_dir, action, value, attempt):
+    assert state_dir in ("json", "sqlite")
+'''})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(report["collected"]) == 10 and report["errors"] == []
+
+
+def test_duplicate_parameter_values_keep_backend_multiplicity(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_duplicate.py").write_text("def test_case(): pass\n", encoding="utf-8")
+    def item(backend, index):
+        return SimpleNamespace(nodeid=f"tests/test_duplicate.py::test_case[{backend}-{index}]",
+                               fixturenames=["state_dir"],
+                               callspec=SimpleNamespace(params={"state_dir": backend, "value": "same"},
+                                                        indices={"state_dir": 0, "value": index}))
+    items = [item("json", 0), item("json", 1), item("sqlite", 2), item("sqlite", 3)]
+    complete = RegressionPolicy(tmp_path, "win32")
+    complete.pytest_collection_finish(SimpleNamespace(items=items))
+    assert complete.errors == []
+    incomplete = RegressionPolicy(tmp_path, "win32")
+    incomplete.pytest_collection_finish(SimpleNamespace(items=items[:-1]))
+    assert any("Incomplete state backends" in error for error in incomplete.errors)
+
+
 @pytest.mark.parametrize("source, code", [
     ("def test_new(): assert False\n", 1),
     ("raise RuntimeError('collection error')\n", 2),

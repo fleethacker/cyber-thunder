@@ -104,7 +104,7 @@ class RegressionPolicy:
         self.errors.extend(f"Module not collected: {name}" for name in sorted(omitted - allowed_omissions))
 
         # Check every state fixture test, including each combination of other parameters.
-        state_cases = defaultdict(set)
+        state_cases = defaultdict(Counter)
         for item in session.items:
             if "state_dir" not in item.fixturenames:
                 continue
@@ -112,14 +112,18 @@ class RegressionPolicy:
             if spec is None or "state_dir" not in spec.params:
                 self.errors.append(f"State backend not parametrized: {item.nodeid}")
                 continue
-            other = tuple(sorted((key, value) for key, value in spec.indices.items() if key != "state_dir"))
+            # Pytest may number other parameter indices across the entire Cartesian product,
+            # so their indices differ between backends. Compare the actual parameter values
+            # within this collection and retain multiplicity for duplicate values.
+            other = tuple(sorted((key, type(value).__module__, type(value).__qualname__, repr(value))
+                                 for key, value in spec.params.items() if key != "state_dir"))
             key = (item.nodeid.split("[", 1)[0], other)
-            state_cases[key].add(spec.params["state_dir"])
+            state_cases[key][spec.params["state_dir"]] += 1
         if not state_cases:
             self.errors.append("No state backend cases collected")
         for (node, other), backends in state_cases.items():
-            if backends != set(BACKENDS):
-                self.errors.append(f"Incomplete state backends: {node} {other}: {sorted(backends)}")
+            if set(backends) != set(BACKENDS) or len(set(backends.values())) != 1:
+                self.errors.append(f"Incomplete state backends: {node}: {dict(backends)}")
 
     def pytest_runtest_logreport(self, report):
         self.outcomes[f"{report.when}:{report.outcome}"] += 1
