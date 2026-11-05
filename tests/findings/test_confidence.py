@@ -395,6 +395,8 @@ def test_substantive_fixture_observations_are_not_downgraded_by_port_suffixes():
 
 
 def test_stored_nessus_version_match_withholds_matching_policy_both_backends(state_dir):
+    from cyberthunder.config import Settings
+    from cyberthunder.context import AppContext
     from cyberthunder.control.policy import AutomationPolicy, PolicyRule, evaluate, evaluate_for_context
     from cyberthunder.remediation.library import FixEntry
 
@@ -404,7 +406,9 @@ def test_stored_nessus_version_match_withholds_matching_policy_both_backends(sta
                               rules=[PolicyRule(name="fixture patch rule", allow_patch=True)])
     fix = FixEntry(fix_ref=f.fix_ref, title="Fixture patch", asset_type="linux",
                    applies_to=[f.rule_id], patch=True)
-    store = StateStore(state_dir)
+    ctx = AppContext(Settings.from_env(state_dir=state_dir, llm_backend="template",
+                                      explain_precompute=False, auto_propose=False))
+    store = ctx.store
     try:
         # Exercise a pre-provenance stored document, not only a new in-memory finding.
         legacy = f.to_dict()
@@ -412,7 +416,8 @@ def test_stored_nessus_version_match_withholds_matching_policy_both_backends(sta
         store.write_json(store.scan_dir("legacy-version") / "findings.json",
                          {"schema_version": "1.0", "findings": [legacy]})
         restored = store.load_findings("legacy-version")[0]
-        ctx = SimpleNamespace(store=store, policy=policy, inventory=Inventory(targets=[target]))
+        ctx.policy = policy
+        ctx.inventory = Inventory(targets=[target])
         assert evaluate(policy, fix, restored, target).auto_eligible
         decision = evaluate_for_context(ctx, fix, restored, target)
         assert not decision.auto_eligible

@@ -7,6 +7,8 @@ from __future__ import annotations
 import contextlib
 import copy
 import json
+import os
+import stat
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -90,6 +92,50 @@ class Inventory:
             data = json.loads(text or "{}")
         return {d["id"]: d for d in data.get("targets", [])}
 
+    @staticmethod
+    def read_persisted(p: Path) -> dict[str, dict]:
+        """Bounded, explicit declarations for registration and connection authorization."""
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+            with os.fdopen(os.open(p, flags), "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024:
+                    raise ValueError("invalid inventory file")
+                raw = stream.read(1024 * 1024 + 1)
+                if len(raw) > 1024 * 1024:
+                    raise ValueError("inventory too large")
+            if p.suffix in {".yaml", ".yml"}:
+                import yaml
+                depth = 0
+                for i, event in enumerate(yaml.parse(raw)):
+                    if i > 32768 or isinstance(event, yaml.AliasEvent):
+                        raise ValueError("inventory complexity")
+                    if isinstance(event, (yaml.MappingStartEvent, yaml.SequenceStartEvent)):
+                        depth += 1
+                    elif isinstance(event, (yaml.MappingEndEvent, yaml.SequenceEndEvent)):
+                        depth -= 1
+                    if depth > 16:
+                        raise ValueError("inventory depth")
+                document = yaml.safe_load(raw)
+            else:
+                document = json.loads(raw)
+            if not isinstance(document, dict) or not isinstance(document.get("targets"), list):
+                raise ValueError("inventory shape")
+            rows = document["targets"]
+            if any(not isinstance(row, dict) or not isinstance(row.get("id"), str)
+                   or type(row.get("in_scope")) is not bool for row in rows):
+                raise ValueError("target or explicit scope flag missing/invalid")
+            if len({row["id"] for row in rows}) != len(rows):
+                raise ValueError("duplicate target")
+            for row in rows:
+                Target.from_dict(row)
+            after = p.stat()
+            if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+                raise ValueError("inventory changed while reading")
+            return {row["id"]: row for row in rows}
+        except Exception:
+            raise ScopeViolation("persisted inventory is missing, unreadable or invalid") from None
+
     def _file_sig(self) -> tuple[int, int] | None:
         try:
             st = self.path.stat()
@@ -97,11 +143,11 @@ class Inventory:
             return None
         return st.st_mtime_ns, st.st_size
 
-    def _merge_from_disk(self) -> None:
+    def _merge_from_disk(self, disk: dict[str, dict] | None = None) -> None:
         sig = self._file_sig()
         if sig is None:
             return
-        disk = self._read(self.path)
+        disk = self._read(self.path) if disk is None else disk
         for tid, d in disk.items():
             cur, base = self._targets.get(tid), self._base.get(tid)
             if cur is None:
@@ -133,18 +179,42 @@ class Inventory:
         with lock:
             if own:
                 self._merge_from_disk()
-            data = {"targets": [t.to_dict() for t in self._targets.values()]}
-            if p.suffix in (".yaml", ".yml"):
-                import yaml
-                text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
-            else:
-                text = json.dumps(data, indent=2)
-            tmp = p.with_name(p.name + ".tmp")
-            tmp.write_text(text, encoding="utf-8")
-            replace_file(tmp, p)               # another process may be reading the file at this moment (Windows)
-            if own:
-                self._base = {d["id"]: copy.deepcopy(d) for d in data["targets"]}
-                self._sig = self._file_sig()
+            self._save_locked(p, own=own)
+
+    def _save_locked(self, p: Path, *, own: bool) -> None:
+        data = {"targets": [t.to_dict() for t in self._targets.values()]}
+        if p.suffix in (".yaml", ".yml"):
+            import yaml
+            text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+        else:
+            text = json.dumps(data, indent=2)
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        replace_file(tmp, p)
+        if own:
+            self._base = {d["id"]: copy.deepcopy(d) for d in data["targets"]}
+            self._sig = self._file_sig()
+
+    def add_new(self, target: Target) -> Target:
+        """Create once under the same cross-process lock used by save; preserve other writers."""
+        if self.path is None:
+            if target.id in self._targets:
+                raise FileExistsError("target id already exists")
+            self._targets[target.id] = target
+            return target
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with file_lock(self.path.with_name(self.path.name + ".lock")):
+            if not self.path.exists() and (self._base or self._targets):
+                raise ScopeViolation("persisted inventory disappeared; reload before registering a target")
+            disk = self.read_persisted(self.path) if self.path.exists() else {}
+            if target.id in disk:
+                raise FileExistsError("target id already exists")
+            self._merge_from_disk(disk)
+            if target.id in self._targets:
+                raise FileExistsError("target id already exists")
+            self._targets[target.id] = target
+            self._save_locked(self.path, own=True)
+        return target
 
     # -- access --------------------------------------------------------------------
     def all(self) -> list[Target]:

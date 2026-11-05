@@ -8,6 +8,7 @@ import { api, errorText } from '../api/client';
 import type { FindingPlus, ProposalPlus } from '../api/types';
 import { fmtAgo, fmtTime } from '../lib/format';
 import { isSuppressed } from '../lib/findingAssurance';
+import { findingResultLabel } from '../lib/findingRow';
 import { useAsync } from '../lib/hooks';
 import { CitationChips } from './CitationChips';
 import { CodeBlock, Collapsible, ErrorBox, Loading, Mono, SeverityBadge, StateBadge, StatusBadge } from './common';
@@ -113,7 +114,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
 
       <Section title="Scanner observation">
         <Group gap="xs"><Text size="sm">Original result:</Text><StatusBadge status={scannerStatus} /><Mono>{scannerStatus}</Mono></Group>
-        {scannerStatus !== f.status && <Group gap="xs"><Text size="sm">Current result after verified fix:</Text><StatusBadge status={f.status} /></Group>}
+        {(f.needs_rescan || scannerStatus !== f.status) && <Group gap="xs"><Text size="sm" c={f.needs_rescan ? 'orange' : undefined}>{findingResultLabel(f)}:</Text><StatusBadge status={f.status} /></Group>}
         <Text size="xs" c="dimmed">Human review keeps this scanner observation intact.</Text>
         {f.evidence ? <CodeBlock code={f.evidence} maxHeight={220} /> : <Text size="sm" c="dimmed">No scanner evidence was recorded.</Text>}
       </Section>

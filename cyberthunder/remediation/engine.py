@@ -44,7 +44,9 @@ import logging
 import os
 import re
 import threading
+import uuid
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Iterable
 
 from cyberthunder.control import policy as policy_mod
@@ -54,10 +56,12 @@ from cyberthunder.control.identity import require_human
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.findings.schema import Finding
 from cyberthunder.findings.lifecycle import ReviewConflict
+from cyberthunder.findings.current import policy_block_reason
 from cyberthunder.inventory.targets import ScopeViolation
 from cyberthunder.remediation import snapshot
+from cyberthunder.remediation import rollback_guard
 from cyberthunder.remediation.library import FixEntry
-from cyberthunder.remediation.models import ApplyResult, BeforeState, HealthResult, VerifyResult
+from cyberthunder.remediation.models import ApplyResult, BeforeState, HealthResult, RollbackResult, VerifyResult
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -252,7 +256,7 @@ class RemediationEngine:
         if not (proposal.decided_by or "").startswith("policy:"):
             return
         current = self.ctx.store.get_finding(finding.id) or finding
-        reason = policy_mod.assurance_block_reason(self.ctx, current)
+        reason = policy_block_reason(self.ctx, current) or policy_mod.assurance_block_reason(self.ctx, current)
         if reason:
             self.ctx.audit.append("policy.apply_blocked", actor, {"reason": reason, "finding_id": finding.id},
                                   subject=proposal.id, outcome="blocked")
@@ -331,6 +335,9 @@ class RemediationEngine:
                                   subject=p.id, outcome="blocked")
             return
         decision = policy_mod.evaluate_for_context(self.ctx, fix, finding, target)
+        blocked = policy_block_reason(self.ctx, finding)
+        if blocked:
+            decision = policy_mod.PolicyDecision(False, decision.rule, [blocked])
         if not decision.auto_eligible:
             self.ctx.audit.append("policy.evaluate", "agent", {"decision": decision.to_dict(), "fix_ref": p.fix_ref},
                                   subject=p.id, outcome="declined")
@@ -351,7 +358,7 @@ class RemediationEngine:
     # -- execution ---------------------------------------------------------------------
     def _target(self, p: Proposal, action: str, actor: str):
         try:
-            return self.ctx.inventory.assert_in_scope(p.host)
+            return rollback_guard.inventory_target(self.ctx, p.host)
         except ScopeViolation as e:
             self.ctx.audit.append("action.blocked", actor, {"action": action, "target": p.host, "reason": str(e)},
                                   subject=p.id, outcome="blocked")
@@ -393,11 +400,14 @@ class RemediationEngine:
         except Exception:  # noqa: BLE001
             log.warning("transport close failed for %s", target.id)
 
+    @rollback_guard.serialized
     def execute(self, proposal_id: str, *, actor: str, simulate_verify_fail: bool = False) -> Proposal:
+        from cyberthunder.control.assessment import AssessmentBlocked, guard_approved_assessment
         gate = self.ctx.gate
         p = gate.get(proposal_id)
         if p.state is not ProposalState.APPROVED:
             gate.start_apply(proposal_id, actor)            # records the rejection and raises IllegalTransition
+        guard_approved_assessment(self.ctx, p)
         target = self._target(p, "execute", actor)
         finding = self._finding(p.finding_id)
         if finding is None:
@@ -415,6 +425,10 @@ class RemediationEngine:
         applied = False
         step = "connect"
         try:
+            bound_identity = rollback_guard.identity(target)
+            rollback_guard.bind_execution(self.ctx, p, target, fix)
+            if rollback_guard.identity(self._target(p, "execute", actor)) != bound_identity:
+                raise rollback_guard.RollbackBlocked("target connection identity changed before connection")
             transport = self.ctx.transport_for(target)
             step = "before_state"
             before = adapter.capture_before_state(target, transport, fix, finding, snap)
@@ -427,9 +441,15 @@ class RemediationEngine:
                 if self._review_suppressed(finding, actor, "apply"):
                     raise ReviewSuppressed("A review suppressed the finding before apply; no fix was executed")
                 self._guard_policy_evidence(p, finding, actor)
+                guard_approved_assessment(self.ctx, p)
+                current_target = self._target(p, "execute", actor)
+                if rollback_guard.identity(current_target) != bound_identity:
+                    raise rollback_guard.RollbackBlocked("target connection identity changed during before-state capture")
                 if fix.kind == "runbook":
                     return self._issue_runbook(p, target, fix)
                 self.ctx.killswitch.guard(f"remediation.apply:{p.id}", actor)
+                if rollback_guard.identity(self._target(p, "execute", actor)) != bound_identity:
+                    raise rollback_guard.RollbackBlocked("target connection identity changed before apply")
                 step = "apply"
                 ar = adapter.apply(target, transport, fix, finding, before)
             snapshot.save_result(snap, "apply", ar)
@@ -441,12 +461,14 @@ class RemediationEngine:
             gate.applied(p.id, "agent", note=f"applied {fix.fix_ref} on {target.id}; changed={ar.changed}; "
                                              f"{_short(ar.output, 160)}")
             self._copy_files(transport, snap, list(before.files), after=True)
+            rollback_guard.capture_post_apply(self.ctx, p, target, adapter, transport, fix, before)
 
             step = "verify"
             if simulate_verify_fail:
                 vr = VerifyResult(ok=False, rule_passed=False, health=HealthResult(ok=True),
                                   evidence="verification failure simulated for demonstration")
             else:
+                self._target(p, "verify", actor)
                 vr = adapter.verify(target, transport, fix, finding)
             snapshot.save_result(snap, "verify", vr)
             passed = vr.ok and vr.rule_passed is True
@@ -466,7 +488,8 @@ class RemediationEngine:
                                             f"{_short(vr.evidence, 200)}")
             self._auto_rollback(p, target, adapter, transport, fix, before, why)
             return gate.get(p.id)
-        except (ReviewSuppressed, PolicyEvidenceBlocked, ReviewConflict):
+        except (ReviewSuppressed, PolicyEvidenceBlocked, ReviewConflict, AssessmentBlocked,
+                ScopeViolation, rollback_guard.RollbackBlocked):
             # Before-state capture is read-only. Do not run a rollback when apply never ran.
             if gate.get(p.id).state is ProposalState.APPLYING:
                 gate.failed(p.id, actor, note="stopped before apply by finding evidence or review")
@@ -528,8 +551,7 @@ class RemediationEngine:
                        reason: str) -> None:
         try:
             self.ctx.killswitch.guard(f"proposal.rolled_back:{p.id}", "agent")
-            rr = adapter.rollback(target, transport, fix, before)
-            snapshot.save_result(self.ctx.store.snapshot_dir(p.id), "rollback", rr)
+            rr = self._run_rollback(p, target, adapter, transport, fix, before, "agent", reason)
         except KillSwitchEngaged:
             self.ctx.audit.append("proposal.rollback_error", "agent", {"reason": reason, "error": "kill switch engaged"},
                                   subject=p.id, outcome="error")
@@ -540,12 +562,50 @@ class RemediationEngine:
                                   subject=p.id, outcome="error")
             return
         if rr.ok:
-            self._copy_files(transport, self.ctx.store.snapshot_dir(p.id), list(before.files), after=True)
             self._record_rolled_back(p.id, "agent", f"automatic rollback after {reason}: {_short(rr.output, 200)}")
         else:
-            self.ctx.audit.append("proposal.rollback_error", "agent", {"reason": reason, "output": _short(rr.output)},
+            details = {"reason": reason, "output": _short(rr.output)}
+            if rr.details.get("exception"):
+                details["error"] = _short(rr.output)
+            self.ctx.audit.append("proposal.rollback_error", "agent", details,
                                   subject=p.id, outcome="error")
 
+    def _run_rollback(self, p, target, adapter, transport, fix, before, actor: str, reason: str) -> RollbackResult:
+        """Persist the actual attempt independently of its gate transition and scanner evidence."""
+        self._target(p, "rollback", actor)
+        self.ctx.audit.append("remediation.rollback_started", actor, {"target_id": p.host, "reason": reason}, subject=p.id)
+        self.ctx.killswitch.guard(f"proposal.rolled_back:{p.id}", actor)
+        rollback_guard.check_execution_target(self.ctx, p, self._target(p, "rollback", actor))
+        attempt_id = uuid.uuid4().hex
+        # Failure to durably record this boundary stops the write. Earlier preflight/start events
+        # are not mutation evidence; an unmatched boundary remains uncertain after interruption.
+        self.ctx.audit.append("remediation.rollback_mutation", actor,
+                              {"attempt_id": attempt_id, "finding_id": p.finding_id, "target_id": p.host,
+                               "started_at": datetime.now(timezone.utc).isoformat(), "reason": reason}, subject=p.id)
+        try:
+            result = adapter.rollback(target, transport, fix, before)
+        except Exception as exc:  # noqa: BLE001  a partial restore is not success
+            result = RollbackResult(ok=False, output=_short(str(exc)), details={"exception": type(exc).__name__})
+        # Adapter defaults may be stamped before the work finishes. Order observations against
+        # engine completion, retaining the adapter's timestamp for provenance.
+        data = result.to_dict()
+        data["adapter_finished_at"] = data.get("finished_at")
+        data["finished_at"] = datetime.now(timezone.utc).isoformat()
+        data["finding_id"] = p.finding_id
+        data["target_id"] = p.host
+        data["attempt_id"] = attempt_id
+        try:
+            self.ctx.audit.append("remediation.rollback", actor, {**data, "reason": reason},
+                                  subject=p.id, outcome="ok" if result.ok else "error")
+        finally:
+            # Either durable receipt can invalidate stale scanner evidence if the other write fails.
+            # Propagate storage errors; never report the gate transition as successful on failure.
+            snapshot.save_result(self.ctx.store.snapshot_dir(p.id), "rollback", data)
+        # Keep apply-time after/ copies immutable: overwriting them loses the change diff and
+        # the only available candidate baseline for a future drift preflight.
+        return result
+
+    @rollback_guard.serialized
     def rollback(self, proposal_id: str, *, actor: str) -> Proposal:
         gate = self.ctx.gate
         p = gate.get(proposal_id)
@@ -565,19 +625,26 @@ class RemediationEngine:
         fix = self._applied_fix(p)
         adapter = self._adapter(target)
         self.ctx.killswitch.guard(f"proposal.rolled_back:{p.id}", actor)
+        rollback_guard.preflight(self.ctx, p, target, fix, before, actor=actor, adapter=adapter)
         transport = self.ctx.transport_for(target)
         try:
-            rr = adapter.rollback(target, transport, fix, before)
-            snapshot.save_result(snap, "rollback", rr)
+            rollback_guard.preflight(self.ctx, p, target, fix, before, actor=actor, adapter=adapter,
+                                     transport=transport, live=True)
+            # Recheck mutable inventory scope/identity and kill state immediately before the write.
+            current_target = self._target(p, "rollback", actor)
+            self.ctx.killswitch.guard(f"proposal.rolled_back:{p.id}", actor)
+            rollback_guard.preflight(self.ctx, p, current_target, fix, before,
+                                     actor=actor, adapter=adapter, record=False)
+            rr = self._run_rollback(p, target, adapter, transport, fix, before, actor, "manual")
             if not rr.ok:
                 self.ctx.audit.append("proposal.rollback_error", actor, {"reason": "manual", "output": _short(rr.output)},
                                       subject=p.id, outcome="error")
                 raise EngineError(f"rollback of {p.id} failed: {_short(rr.output)}")
-            self._copy_files(transport, snap, list(before.files), after=True)
             return self._record_rolled_back(p.id, actor, f"manual rollback by {actor}: {_short(rr.output, 200)}")
         finally:
             self._close(transport, target)
 
+    @rollback_guard.serialized
     def verify(self, proposal_id: str, *, actor: str) -> Proposal:
         """Operator re-check of an APPLIED proposal (a runbook after its steps are done, or a fix whose rule
         could not be re-checked automatically). Read-only on the host; a failed payload fix is rolled back."""
@@ -593,8 +660,13 @@ class RemediationEngine:
         fix = self._applied_fix(p)
         adapter = self._adapter(target)
         snap = self.ctx.store.snapshot_dir(p.id)
+        before = snapshot.load_before_state(snap)
+        rollback_guard.preflight(self.ctx, p, target, fix, before, actor=actor, adapter=adapter, require_baseline=False)
         transport = self.ctx.transport_for(target)
         try:
+            current_target = self._target(p, "verify", actor)
+            rollback_guard.preflight(self.ctx, p, current_target, fix, before, actor=actor, adapter=adapter,
+                                     require_baseline=False, record=False)
             try:
                 vr = adapter.verify(target, transport, fix, finding)
             except Exception as e:  # noqa: BLE001
@@ -618,6 +690,10 @@ class RemediationEngine:
                                           f"{_short(vr.evidence, 200)}")
             before = snapshot.load_before_state(snap)
             if fix.kind != "runbook" and before is not None:
+                # This is a later operator verification, not immediate recovery during execute().
+                current_target = self._target(p, "rollback", actor)
+                rollback_guard.preflight(self.ctx, p, current_target, fix, before, actor=actor, adapter=adapter,
+                                         transport=transport, live=True)
                 self._auto_rollback(p, target, adapter, transport, fix, before, "verify failed")
             return gate.get(p.id)
         finally:
@@ -642,6 +718,7 @@ class RemediationEngine:
             files.append({"path": rp, "before_excerpt": b, "after_excerpt": a, "diff": snapshot.text_diff(b, a, rp)})
         return {
             "proposal": p.to_dict(),
+            "rollback_guard": self.rollback_status(p.id),
             "fix": fix.to_dict() if fix else snapshot.load_result(snap, "fix"),
             "before_state": before.to_dict() if before else None,
             "apply": snapshot.load_result(snap, "apply"),
@@ -649,6 +726,19 @@ class RemediationEngine:
             "rollback": snapshot.load_result(snap, "rollback"),
             "files": files,
         }
+
+    def rollback_status(self, proposal_id: str) -> dict:
+        """Static guard coverage for clients; no live connection or safety claim."""
+        p = self.ctx.gate.get(proposal_id)
+        try:
+            target = rollback_guard.inventory_target(self.ctx, p.host)
+            before = snapshot.load_before_state(self.ctx.store.snapshots_dir / p.id)
+            status = rollback_guard.inspect(self.ctx, p, target, self._applied_fix(p), before,
+                                            adapter=self._adapter(target))
+            status["last_preflight"] = snapshot.load_result(self.ctx.store.snapshots_dir / p.id, "rollback_preflight")
+            return status
+        except (KeyError, OSError, ValueError, EngineError) as exc:
+            return {"status": "blocked", "coverage": "unknown", "live_checked": False, "reasons": [str(exc)]}
 
 
 class _RecordOnly:

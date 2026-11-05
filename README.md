@@ -60,7 +60,7 @@ These are recorded real-target results, not full benchmark coverage. Windows/Win
 | Linux, Cisco, Kubernetes, container, Windows adapters | `cyberthunder/adapters/<type>/` | built |
 | DISA SCAP benchmarks run by the tool itself (OVAL evaluator for Windows, DISA datastreams through oscap on Linux) | `cyberthunder/scap/` | built |
 | Local-model explanations with citation validation | `cyberthunder/explain/` | built |
-| STIG delta ingest, link emulation, outbox | `cyberthunder/ingest/` | built |
+| STIG delta ingest, observed link state, explicit test mode and local outbox staging | `cyberthunder/ingest/` | built |
 | STIG Library (saved product/type subscriptions, catalog versions, validated uploads, resumable downloads and offline manifests) | `cyberthunder/ingest/content/` | built |
 | Reports (one-pager, POA&M, checklist, searchable history) | `cyberthunder/report/` | built |
 | HTTP API | `cyberthunder/api/` | built |
@@ -149,10 +149,10 @@ Start the server and open the UI at <http://127.0.0.1:8000>:
 python -m cyberthunder serve
 ```
 
-In the UI, set your name in Settings, open **Decisions**, press **Approve** on a card, then **Apply**. The card
+In the UI, set your name in Settings, open **Decisions**, press **Approve** to review the assessment or record an explicit bypass reason, then confirm the decision and choose **Apply**. The card
 shows the step timeline: scope check, before-state captured, applied, verified.
 
-Open **STIG Library** for uploads, downloads, versions and separate live-check/download/import times.
+Open **STIG Library** for Downloaded, Maintained, Updates, Browse all and Import/transfer views, with versions and separate live-check/download/import times.
 Subscriptions default to inventory matches; choose manual product/type checkboxes and **Save selections**
 before checking or pulling. XML/ZIP uploads work offline (32 MiB per file), as do manifest/folder imports.
 Reconnect options apply only on reconnect; periodic checks are server-configured. Bundled references and
@@ -162,7 +162,13 @@ See [content and subscriptions](docs/CONTENT.md).
 Force a failure and watch the rollback: in Settings turn on "force verification failure on next apply", then
 apply another approved fix. Verification fails, the engine rolls back automatically, and **Diff** shows
 before and after. From the CLI the same flow is `proposals approve <id>`, `apply <id> [--simulate-verify-fail]`, `diff <id>`, `rollback <id>`; `apply` refuses a proposal that has not been approved.
-Before approving, **Preview change** or `apply <id> --plan` shows the stored change plan and declared
+Before approving, **Assess impact** collects bounded dependency evidence and asks the configured model
+to explain disruption, management-access risks, unknowns, checks and rollback limits. The decision records
+the reviewed receipt; stale or changed receipts must be reviewed again before applying. Model failures
+are labelled as deterministic fallback, and proceeding without assessment is explicit. See
+[change impact](docs/CHANGE_IMPACT.md) for coverage and limitations.
+
+**Preview change** or `apply <id> --plan` shows the stored change plan and declared
 capture, verification and rollback instructions. The preview is audited and makes no target connection;
 it does not establish host readiness or approve the change.
 
@@ -176,7 +182,7 @@ Other commands: `targets ...` (inventory; `targets discover <id>` reads asset fa
 (network discovery, needs a saved scope first), `scap info|plan|eval|subset` (DISA SCAP benchmarks run by the tool;
 [docs/SCAP.md](docs/SCAP.md)), `ingest stig|bulletin` (constrained-link updates by file), `ingest check|pull|updates|content|manifest|fetch-manifest|import-dir`
 (STIG content from cyber.mil when the link is up, a manifest round trip when it is not; [docs/CONTENT.md](docs/CONTENT.md)),
-`link show|set` (kbps, latency, connected), `outbox list|sync` (reports queued for sync), `verify` and `diff` (a proposal
+`link show|set` (observed conditions, offline control and explicit test mode), `outbox list|sync` (local report staging; remote delivery remains open), `verify` and `diff` (a proposal
 after apply), `kill engage|release`, `audit verify|tail`, `parse` (scanner output files to findings), `report ...` (one-pager,
 POA&M, checklist), `demo reset|run`, `state info|migrate` (where the documents live: json files or SQLite;
 [docs/STATE.md](docs/STATE.md)).
@@ -194,15 +200,22 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/FINDING_REVIEW.md](docs/FINDING_REVIEW.md) | reasoned reviews, false positives, expiry, history and remediation guards |
 | [docs/REPORT_ASSURANCE.md](docs/REPORT_ASSURANCE.md) | raw scanner results and review decisions in commander and POA&M reports |
 | [docs/REMEDIATION_PLAN.md](docs/REMEDIATION_PLAN.md) | static change previews, declared capture paths, verification and rollback instructions |
+| [docs/CHANGE_HISTORY.md](docs/CHANGE_HISTORY.md) | persistent change history, finding status after rollback, restore guards and coverage limits |
+| [docs/KUBERNETES_FIX_SAFETY.md](docs/KUBERNETES_FIX_SAFETY.md) | investigation-first Kubernetes guidance, retired deletion actions and recovery limits |
+| [docs/HOST_SCOPE.md](docs/HOST_SCOPE.md) | container-host setup, explicit host access and reviewed IP/range scope |
+| [docs/SCAN_CONTENT.md](docs/SCAN_CONTENT.md) | missing content, scanner configuration, applicability and incomplete scan coverage |
+| [docs/LINK.md](docs/LINK.md) | observed request conditions, offline control and explicit demonstration mode |
 | [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |
 | [docs/CONTENT.md](docs/CONTENT.md) | STIG Library, saved subscriptions, versions and sync times, uploads/downloads and offline transfers |
 | [docs/VULNERABILITY_DATA.md](docs/VULNERABILITY_DATA.md) | public CVE database updates, freshness, offline transfer and cluster findings |
 | [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |
+| [docs/CHANGE_IMPACT.md](docs/CHANGE_IMPACT.md) | dependency evidence, model assessment, unknowns and review before applying a fix |
 | [docs/API.md](docs/API.md) | HTTP API v1 |
 | [docs/STATE.md](docs/STATE.md) | the state directory: documents (json files or SQLite) and files, `state migrate` and `state info`, WAL on a local volume only, backups |
 | [docs/UI.md](docs/UI.md) | screens and behaviour |
 | [docs/FINDINGS.md](docs/FINDINGS.md) | finding categories, filters, search, sorting and saved views |
 | [docs/DEMO.md](docs/DEMO.md) | 10-minute demo runbook |
+| [docs/TESTING_CHECKPOINT.md](docs/TESTING_CHECKPOINT.md) | separate home rehearsal, operator checks and checkpoint recovery boundaries |
 | [docs/SUBMISSION.md](docs/SUBMISSION.md) | portal submission draft |
 | [docs/BACKLOG.md](docs/BACKLOG.md) | what should be done and is not: identity and zero trust first, then what stands between the prototype and a limited deployment, then every other known gap |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | working in this repo |
@@ -219,7 +232,7 @@ Automated regression configuration and its explicit platform limitations are des
 | What needs human approval | Every state-changing action | `ApprovalGate` human-only edges reject actors `agent`, `llm`, `system` |
 | How is it logged | Every scan, finding, proposal, approval, denial, apply, verify, rollback, kill, scope and policy change | hash-chained audit log; head hash shown in the UI and on every report |
 | How is it stopped | Kill switch (file, `CT_KILL`, or `KILL` sentinel) blocks every apply, rollback and content pull | `KillSwitch.guard()` |
-| Can it be undone | Every library fix declares a rollback; before-state is captured first; failed verify rolls back automatically | `FixEntry.rollback_kind`, `BeforeState` |
+| Can it be undone | Library fixes declare rollback capabilities; before-state is captured first and failed verify attempts recovery. History restores check later changes and supported Linux file drift; recovery still depends on the adapter and access | [Change history and rollback](docs/CHANGE_HISTORY.md) |
 
 ## Cluster deployment
 

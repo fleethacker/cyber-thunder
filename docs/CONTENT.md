@@ -1,10 +1,17 @@
 # STIG Library and content updates
 
-How new STIG releases and SCAP benchmarks reach a Cyber Thunder node, with the link up or down.
+How new STIG releases and SCAP benchmarks reach a Cyber Thunder node. Production link state begins unknown; explicit network attempts are permitted unless operator offline or a recent failed probe blocks them. See [LINK.md](LINK.md) for observed application rates, separate offline controls, and explicit test emulation.
 
 Open **STIG Library** (`/content`) for local files, catalog releases, product/type subscriptions,
 downloads and offline imports. Settings links here. Opening the page or refreshing its local view reads
 the cached catalog (or bundled snapshot); it does not check cyber.mil or download files.
+
+The five task views separate different decisions: **Downloaded** shows local files/imports and bundled
+references; **Maintained** edits saved product/type subscriptions; **Updates** selects missing/newer files
+for a transfer; **Browse all** searches every recognized product in the saved catalog, including products
+outside inventory; **Import / transfer** handles offline uploads, manifests and transfer history. A shared
+unsaved selection draft survives task switches. Browse all does not claim every raw cyber.mil publication
+format is supported; unrecognized formats remain backlog CON-05.
 
 Content pulls never change a host. They are read-only downloads from two DoD web hosts, verified before
 use, and every step is written to the audit log.
@@ -15,8 +22,8 @@ use, and every step is written to the audit log.
 |---|---|
 | Link up | **Check live index** or `ingest check` reads the public index; **Download selected** or `ingest pull` downloads the chosen files. |
 | Link down | `ingest manifest` writes the list of wanted-but-missing files. A connected machine runs `ingest fetch-manifest` and the folder comes back on removable media for `ingest import-dir`. |
-| Hand import | **Transfers / import** uploads XML or ZIP files from the browser computer, even offline: one file per request, at most 32 MiB each. Multiple selections upload sequentially with individual results. Legacy `ingest stig <zip\|xml>` remains available. |
-| Reconnect | After the outbox flush, saved `check_on_reconnect` enables a live check; saved `auto_pull` enables a check followed by a pull of matching updates. Defaults come from server settings (normally true/false). |
+| Hand import | **Import / transfer** uploads XML or ZIP files from the browser computer, even offline: one file per request, at most 32 MiB each. Multiple selections upload sequentially with individual results. Legacy `ingest stig <zip\|xml>` remains available. |
+| Reconnect | After the outbox flush, saved `check_on_reconnect` enables a live check; saved `auto_pull` enables a check followed by a pull of matching updates. Defaults come from server settings (both off). Local outbox staging is not shore delivery. |
 
 Every accepted manual STIG or SRG goes through the catalog import: the delta
 against the catalog copy is stored, and the changed rules can be rescanned from the delta (the

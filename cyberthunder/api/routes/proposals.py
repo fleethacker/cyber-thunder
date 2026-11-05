@@ -11,7 +11,8 @@ from fastapi import APIRouter, HTTPException
 
 from cyberthunder.api import util
 from cyberthunder.api.errors import MappedRoute, feature, status_for, unavailable
-from cyberthunder.api.schemas import ApplyBody, BulkBody, NoteBody
+from cyberthunder.api.schemas import (ApplyBody, ApprovalBody, AssessmentReviewBody,
+                                     BulkBody, ImpactBody, NoteBody)
 from cyberthunder.api.util import ActorDep, CtxDep, proposal_plus
 from cyberthunder.control.approvals import IllegalTransition, ProposalState
 
@@ -77,8 +78,44 @@ def bulk(body: BulkBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
 
 
 @router.post("/proposals/{pid}/approve")
-def approve(pid: str, body: NoteBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
-    return proposal_plus(ctx, _decide(ctx, pid, "approve", actor, (body or NoteBody()).note))
+def approve(pid: str, body: ApprovalBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    util.get_proposal(ctx, pid)
+    body = body or ApprovalBody()
+    return proposal_plus(ctx, ctx.gate.approve(pid, actor, body.note,
+                         assessment_id=body.assessment_id, assessment_note=body.assessment_note))
+
+
+def _impact(ctx):
+    service = getattr(ctx, "impact", None)
+    if service is None:
+        raise unavailable("dependency assessment")
+    return service
+
+
+@router.post("/proposals/{pid}/impact")
+def assess_impact(pid: str, body: ImpactBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    util.get_proposal(ctx, pid)
+    return _impact(ctx).assess(pid, actor=actor, live=(body or ImpactBody()).live)
+
+
+@router.get("/proposals/{pid}/impact")
+def latest_impact(pid: str, ctx=CtxDep) -> dict:
+    util.get_proposal(ctx, pid)
+    return {"assessment": _impact(ctx).latest(pid)}
+
+
+@router.get("/change-assessments/{assessment_id}")
+def get_impact(assessment_id: str, ctx=CtxDep) -> dict:
+    receipt = _impact(ctx).get(assessment_id)
+    if receipt is None:
+        raise KeyError("unknown dependency assessment")
+    return receipt
+
+
+@router.post("/proposals/{pid}/review-impact")
+def review_impact(pid: str, body: AssessmentReviewBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    util.get_proposal(ctx, pid)
+    return proposal_plus(ctx, ctx.gate.review_assessment(pid, actor, body.assessment_id, body.note))
 
 
 @router.post("/proposals/{pid}/deny")
@@ -118,6 +155,8 @@ def apply(pid: str, body: ApplyBody | None = None, ctx=CtxDep, actor: str = Acto
     if p.state != ProposalState.APPROVED:
         raise IllegalTransition(f"proposal {pid} is {p.state.value}; only an approved proposal can be applied")
     ctx.killswitch.guard(f"proposal.apply:{pid}", actor)
+    from cyberthunder.control.assessment import guard_approved_assessment
+    guard_approved_assessment(ctx, p)
     from cyberthunder.findings.review import ReviewService
     from cyberthunder.control.policy import assurance_block_reason
     finding = util.get_finding(ctx, p.finding_id)

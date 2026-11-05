@@ -157,3 +157,58 @@ def test_unrelated_full_scan_does_not_need_cluster_lifecycle_lock(state_dir):
         publish(store, "full", 2, [stig], trigger="manual")
     assert {f.id for f in store.current_findings()} == {a.id, stig.id}
     store.close()
+
+
+@pytest.mark.parametrize("status", ["done", "partial", "failed", "running"])
+def test_incomplete_full_scan_retains_unobserved_findings_and_remains_latest(state_dir, status):
+    store = StateStore(state_dir)
+    before, unassessed = host_finding(), host_finding("other-rule", host="server-b")
+    cve = cluster()
+    publish(store, "full", 1, [before, unassessed], trigger="manual")
+    publish(store, "cluster", 2, [cve])
+    observed = replace(before, status="not_a_finding", evidence="Observed corrected setting")
+    publish(store, "limited", 3, [observed], trigger="manual", status=status, coverage_incomplete=True)
+    current = {f.id: f for f in store.current_findings()}
+    assert set(current) == {before.id, unassessed.id, cve.id}
+    assert current[before.id].status.value == "not_a_finding"
+    assert current[unassessed.id].to_dict() == unassessed.to_dict()
+    assert store.latest_scan_id() == "limited"
+    assert [f.id for f in store.load_findings("limited")] == [before.id]
+    store.close()
+
+
+def test_only_incomplete_scans_accumulate_without_disabling_cluster_reconciliation(state_dir):
+    store = StateStore(state_dir)
+    a, b, cve = host_finding(), host_finding("second-rule", host="server-b"), cluster()
+    publish(store, "native-a", 1, [a], trigger="manual", coverage_incomplete=True)
+    publish(store, "native-b", 2, [b], trigger="manual", coverage_incomplete=True)
+    publish(store, "cluster", 3, [cve])
+    publish(store, "empty-incomplete", 4, [], trigger="manual", coverage_incomplete=True)
+    assert {f.id for f in store.current_findings()} == {a.id, b.id, cve.id}
+    publish(store, "cluster-clean", 5, [], assessed_scopes=["scope-a"])
+    assert {f.id for f in store.current_findings()} == {a.id, b.id}
+    assert store.latest_scan_id() == "empty-incomplete"
+    store.close()
+
+
+def test_incomplete_scan_preserves_review_and_projection_matches_publication(state_dir):
+    store = StateStore(state_dir)
+    audit = AuditLog(store.audit_log)
+    ctx = SimpleNamespace(store=store, audit=audit, killswitch=KillSwitch(state_dir, audit))
+    reviews, finding = ReviewService(ctx), host_finding()
+    publish(store, "full", 1, [finding], trigger="manual")
+    summary = reviews.summary(finding)
+    reviews.save(finding, actor="ITC Rivera", disposition="false_positive", reason="Reviewed applicability",
+                 supporting_evidence="Fixture evidence", expected_revision=summary["revision"],
+                 evidence_fingerprint=summary["evidence_fingerprint"],
+                 expires_at=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat())
+    run = {"id": "limited", "started_at": "2026-11-05T10:02:00Z", "status": "done",
+           "trigger": "manual", "coverage_incomplete": True}
+    store.save_findings("limited", [])
+    projected, _ = store.projected_observations("limited", run, "run")
+    assert set(projected) == {finding.id}
+    store.save_scan_run(run)
+    assert {f.id for f in store.current_findings()} == set(projected)
+    assert reviews.summary(finding)["suppressed"]
+    assert audit.verify().ok
+    store.close()

@@ -1,7 +1,7 @@
 """Scans: start a read-only scan in the background and poll it."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from cyberthunder.adapters.base import MODULES
 from cyberthunder.api.errors import MappedRoute, feature
@@ -43,6 +43,13 @@ def post_scan(body: ScanRequest | None = None, ctx=CtxDep, actor: str = ActorDep
 @router.get("/scans")
 def list_scans(ctx=CtxDep) -> dict:
     return {"scans": [scan_plus(r) for r in ctx.scanner.list()]}
+
+
+@router.get("/scans/preflight")
+def scan_preflight(target_ids: list[str] | None = Query(default=None),
+                   modules: list[str] | None = Query(default=None), ctx=CtxDep) -> dict:
+    from cyberthunder.scan_content import ScanContentService
+    return ScanContentService(ctx).preflight(target_ids, modules=modules)
 
 
 @router.get("/scans/{scan_id}")

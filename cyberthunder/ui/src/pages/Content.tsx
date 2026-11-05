@@ -2,6 +2,7 @@ import { Accordion, Alert, Badge, Button, Group, Paper, SimpleGrid, Stack, Table
 import { IconBooks, IconCloudDownload, IconRefresh, IconSettings } from '@tabler/icons-react';
 import { useCallback, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { linkLabel } from '../lib/linkPresentation';
 import { api, errorText } from '../api/client';
 import { actorProblem } from '../components/ActorChip';
 import { ContentUpdates, jobRunning } from '../components/ContentUpdates';
@@ -11,10 +12,11 @@ import { ErrorBox, Loading, PageTitle } from '../components/common';
 import { fmtZonedTime } from '../lib/format';
 import { useAsync, useInterval } from '../lib/hooks';
 import { useAppState } from '../state/AppState';
+import { contentTask, isMaintained, type ContentTask } from '../lib/contentTasks';
 
 export default function Content() {
   const state = useAsync(api.stigLibrary, []);
-  const { status, actor } = useAppState();
+  const { status, statusError, actor } = useAppState();
   const [params, setParams] = useSearchParams();
   const [dirty, setDirty] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -35,10 +37,19 @@ export default function Content() {
   const running = library?.jobs.some(jobRunning) ?? false;
   useInterval(() => { if (!state.loading && !checking && !refreshRequest.current) void refresh().catch(() => {}); }, running ? 1500 : 10000, !!library);
   const connected = status?.link.connected ?? library?.connected ?? false;
-  const blocked = !status || status.kill.engaged || !!actorProblem(actor) || !!refreshError;
-  const selectedTab = params.get('tab');
-  const tab = selectedTab === 'selections' || selectedTab === 'transfers' ? selectedTab : 'library';
+  const blocked = !status || !!statusError || status.kill.engaged || !!actorProblem(actor) || !!refreshError;
+  const productKey = params.get('product');
+  const tab = contentTask(params.get('tab'), productKey);
+  const selectTask = (value: ContentTask) => {
+    const next = new URLSearchParams(params); next.set('tab', value); setParams(next, { replace: true });
+  };
+  const selectProduct = (key: string | null) => {
+    const next = new URLSearchParams(params);
+    if (key) { next.set('product', key); next.set('tab', 'browse'); } else next.delete('product');
+    setParams(next, { replace: true });
+  };
   const check = async () => {
+    if (!library || !connected || dirty || blocked || running || checking) return;
     setChecking(true);
     setError(null);
     try { await api.checkUpdates('live'); }
@@ -46,9 +57,9 @@ export default function Content() {
     finally { await refresh().catch(() => {}); setChecking(false); }
   };
   return <Stack gap="md">
-    <PageTitle title="STIG Library" subtitle="Local releases, saved update selections, and content transfers."
+    <PageTitle title="STIG Library" subtitle="See local content, choose products to maintain, and download or import releases."
       right={<><Button variant="default" leftSection={<IconRefresh size={16} />} loading={state.loading} disabled={checking} onClick={() => void (library ? refresh().catch(() => {}) : state.reload())}>Refresh local view</Button>
-        <Button leftSection={<IconCloudDownload size={16} />} loading={checking} disabled={!library || !connected || dirty || blocked || running} onClick={() => void check()}>Check live index</Button></>} />
+        <Button leftSection={<IconCloudDownload size={16} />} loading={checking} disabled={!library || !connected || dirty || blocked || running} onClick={() => void check()}>Check cyber.mil for updates</Button></>} />
     {!library ? state.error ? <ErrorBox error={state.error} onRetry={() => void state.reload()} /> : <Loading what="Reading STIG Library" /> : <>
       {state.error && <ErrorBox error={`Could not refresh the library. Displaying the last loaded view. ${state.error}`} onRetry={() => void state.reload()} />}
       {refreshError && <ErrorBox error={`Could not refresh the library. Displaying the last loaded view. ${refreshError}`} onRetry={() => void refresh().catch(() => {})} />}
@@ -58,12 +69,12 @@ export default function Content() {
         <Stack gap="sm">
           <Group justify="space-between">
             <Group gap="xs"><Badge variant="light" color={library.catalog.source === 'live' ? 'blue' : 'orange'}>{library.catalog.source === 'live' ? 'Last live index' : 'Snapshot index'}</Badge><Text size="sm">{library.catalog.total_entries.toLocaleString()} index entries · {library.products.length.toLocaleString()} products</Text></Group>
-            <Badge variant="light" color={connected ? 'teal' : 'orange'}>{connected ? 'Connected' : 'Offline'}</Badge>
+            <Badge variant="light" color={connected ? 'teal' : 'orange'}>{linkLabel(status?.link)}</Badge>
           </Group>
           <Text size="xs" c="dimmed">Index saved: {fmtZonedTime(library.catalog.saved_at)}. Publisher dates are shown as supplied; local event times include the timezone offset.</Text>
           <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
             {[
-              ['Last successful live check', library.sync.last_successful_check_at, 'Never checked live'],
+              ['Last successful cyber.mil check', library.sync.last_successful_check_at, 'No successful check recorded'],
               ['Last download', library.sync.last_download_at, 'No download recorded'],
               ['Last local import', library.sync.last_import_at, 'No import recorded'],
             ].map(([label, time, empty]) => <Paper key={label} withBorder p="sm" radius="md"><Text size="xs" c="dimmed" fw={600}>{label}</Text><Text size="sm" fw={600} mt={4}>{fmtZonedTime(time, empty ?? undefined)}</Text></Paper>)}
@@ -72,8 +83,13 @@ export default function Content() {
           {library.sync.last_attempt_at && <Text size="xs" c="dimmed">Last check attempt: {fmtZonedTime(library.sync.last_attempt_at)} · {library.sync.last_attempt_status ?? 'Status unavailable'}</Text>}
           {library.sync.last_error && <Alert color="orange" title="Last check did not complete">{library.sync.last_error}</Alert>}
           {dirty && <Text size="sm" c="orange">Unsaved selections. Save or discard them before checking for updates.</Text>}
+          <Text size="sm">Checking updates refreshes the release list. Downloads require an explicit action or your saved automatic-download setting.</Text>
         </Stack>
       </Paper>
+      <Alert color="blue" title="Local content and scan coverage are different">
+        Manual STIGs and SRGs provide rules and guidance. SCAP benchmarks contain automated checks, but need a compatible, configured scanner and deployment for the target.
+        Downloaded content and bundled rule catalogs do not confirm scan coverage.
+      </Alert>
       {library.held.quarantine.length > 0 && <Alert color="red" title={`${library.held.quarantine.length} quarantined file(s)`}>
         <Text size="sm">Quarantined files are excluded from the local library.</Text>
         <Accordion variant="contained" mt="sm"><Accordion.Item value="quarantine"><Accordion.Control>Review quarantine</Accordion.Control><Accordion.Panel>
@@ -90,23 +106,33 @@ export default function Content() {
             render={(item, index) => <Table.Tr key={`${item.filename}-${index}`}><Table.Td>{item.filename}</Table.Td><Table.Td>{item.reason}</Table.Td></Table.Tr>} />
         </Accordion.Panel></Accordion.Item></Accordion>
       </Alert>}
-      <Tabs value={tab} onChange={(value) => setParams(value === 'library' ? {} : { tab: value ?? 'library' }, { replace: true })}>
+      <Tabs value={tab} keepMounted onChange={(value) => selectTask(contentTask(value))}>
         <Tabs.List>
-          <Tabs.Tab value="library" leftSection={<IconBooks size={16} />}>Library</Tabs.Tab>
-          <Tabs.Tab value="selections" leftSection={<IconSettings size={16} />}>Update selections{dirty ? ' •' : ''}</Tabs.Tab>
-          <Tabs.Tab value="transfers" leftSection={<IconCloudDownload size={16} />}>Transfers / import{running ? ' •' : ''}</Tabs.Tab>
+          <Tabs.Tab value="downloaded" leftSection={<IconBooks size={16} />}>Downloaded ({library.held.files.length})</Tabs.Tab>
+          <Tabs.Tab value="maintained" leftSection={<IconSettings size={16} />}>Maintained ({library.products.filter((p) => isMaintained(p, library.preferences)).length}){dirty ? ' •' : ''}</Tabs.Tab>
+          <Tabs.Tab value="updates">Updates ({library.selection.updates.length})</Tabs.Tab>
+          <Tabs.Tab value="browse">Browse all ({library.products.length})</Tabs.Tab>
+          <Tabs.Tab value="transfers" leftSection={<IconCloudDownload size={16} />}>Import / transfer{running ? ' •' : ''}</Tabs.Tab>
         </Tabs.List>
-        <Tabs.Panel value="library" pt="lg">
+        <Tabs.Panel value="downloaded" pt="lg">
           <Stack gap="lg">
-            <Group justify="space-between"><Text fw={700}>Local files ({library.held.files.length})</Text><Text size="xs" c="dimmed">{library.held.scap.length} indexed SCAP datastream(s)</Text></Group>
-            <HeldTable files={library.held.files} />
-            <Text fw={700}>Rule catalogs ({library.catalogs.length})</Text>
-            <Text size="sm" c="dimmed">Includes previous imports and bundled reference XMLs. Bundled references do not represent content synchronized from cyber.mil.</Text>
+            <Group justify="space-between"><Text fw={700}>Downloaded and imported files ({library.held.files.length})</Text><Text size="xs" c="dimmed">{library.held.scap.length} indexed SCAP datastream(s), scanner setup not verified</Text></Group>
+            <Text size="sm">These files are local, whether or not their products are selected for maintenance. Manual STIG, SRG and SCAP content are listed separately by type.</Text>
+            <Group><Button variant="light" onClick={() => selectTask('browse')}>Find another product</Button><Button variant="light" onClick={() => selectTask('transfers')}>Import local content</Button></Group>
+            <HeldTable files={library.held.files} onProductSelect={selectProduct} />
+            <Text fw={700}>Imported and bundled rule catalogs ({library.catalogs.length})</Text>
+            <Text size="sm" c="dimmed">Parsed reference rules are listed separately from downloaded files. Bundled references came with this build; they are not evidence of a cyber.mil download or configured scanner.</Text>
             <CatalogTable catalogs={library.catalogs} />
           </Stack>
         </Tabs.Panel>
-        <Tabs.Panel value="selections" pt="lg"><LibrarySelections library={library} disabled={blocked || checking} onSaved={refresh} onDirtyChange={setDirty} /></Tabs.Panel>
-        <Tabs.Panel value="transfers" pt="lg"><ContentUpdates library={library} dirty={dirty} disabled={blocked || checking} onRefresh={refresh} /></Tabs.Panel>
+        <Tabs.Panel value={tab === 'browse' ? 'browse' : 'maintained'} pt="lg">
+          <LibrarySelections library={library} disabled={blocked || checking} onSaved={refresh} onDirtyChange={setDirty}
+            view={tab === 'browse' ? 'browse' : 'maintained'} productKey={productKey} onProductChange={selectProduct} onBrowse={() => selectTask('browse')} />
+        </Tabs.Panel>
+        <Tabs.Panel value={tab === 'updates' ? 'updates' : 'transfers'} pt="lg">
+          <ContentUpdates library={library} dirty={dirty} disabled={blocked || checking} onRefresh={refresh}
+            view={tab === 'updates' ? 'updates' : 'transfers'} onProductSelect={selectProduct} onMaintained={() => selectTask('maintained')} onTransfers={() => selectTask('transfers')} />
+        </Tabs.Panel>
       </Tabs>
     </>}
   </Stack>;

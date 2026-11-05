@@ -27,7 +27,8 @@ def simulated(tmp_path_factory):
     mp.delenv("CT_KILL", raising=False)
     mp.delenv("CT_ANSWER_KEY_DIR", raising=False)
     try:
-        ctx = AppContext(Settings.from_env(state_dir=state))
+        # Scoring consumes deterministic scan output, not background model work.
+        ctx = AppContext(Settings.from_env(state_dir=state, explain_precompute=False, llm_backend="template"))
         demo.load(ctx, "sailor1")
         run = ctx.scanner.start(requested_by="sailor1", background=False)
         ctx.discovery.sweep(mode="simulated", actor="sailor1", background=False)
@@ -69,7 +70,7 @@ def test_linux_hunt_items_match_by_check_prefix(simulated):
 
 def test_discovery_items_need_a_finished_sweep(tmp_path, monkeypatch):
     monkeypatch.setenv("CT_STATE_DIR", str(tmp_path))
-    ctx = AppContext(Settings.from_env(state_dir=tmp_path))
+    ctx = AppContext(Settings.from_env(state_dir=tmp_path, explain_precompute=False, llm_backend="template"))
     demo.load(ctx, "sailor1")
     sid = ctx.scanner.start(["sim-linux-01"], requested_by="sailor1", background=False).id
     res = score(ctx, sid, KEYS)

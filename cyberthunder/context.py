@@ -40,6 +40,9 @@ class AppContext:
         self.scanner = Scanner(self)
         self.engine = RemediationEngine(self)
         self.explain = ExplainService(self)
+        self.impact = self._optional("cyberthunder.impact.service", "ImpactService")
+        from cyberthunder.control.assessment import bind_assessment
+        self.gate.assessment_validator = lambda pid, aid, note: bind_assessment(self, pid, aid, note)
         self.ingest = self._optional("cyberthunder.ingest.service", "IngestService")
         self.reports = self._optional("cyberthunder.report.service", "ReportService")
         self.discovery = self._optional("cyberthunder.discovery.service", "DiscoveryService")

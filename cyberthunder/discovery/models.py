@@ -166,6 +166,15 @@ def parse_network(cidr: str):
         raise ValueError(f"invalid CIDR {cidr!r}: {e}") from None
 
 
+def network_normalization(value: str):
+    """Expose a host-bit CIDR's wider network before it becomes a saved authorization."""
+    text = str(value).strip()
+    net = parse_network(text)
+    if "/" in text and ipaddress.ip_interface(text).ip != net.network_address:
+        return {"input": text, "normalized": str(net)}
+    return None
+
+
 @dataclass
 class DiscoveryScope:
     cidr: str
@@ -176,6 +185,7 @@ class DiscoveryScope:
     scanner_target: str | None = None   # inventory target (ssh) that runs nmap from inside the enclave
 
     def __post_init__(self) -> None:
+        self._normalization = network_normalization(self.cidr)
         self.cidr = str(parse_network(self.cidr))
 
     @property

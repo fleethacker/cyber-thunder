@@ -57,9 +57,11 @@ class IngestService:
         return self._link.state()
 
     def set_link(self, *, actor: str, **changes) -> LinkState:
+        self.ctx.killswitch.guard("link.change", actor)
         return self._link.set(actor=actor, **changes)
 
     def _flush_on_reconnect(self, actor: str) -> dict:
+        self.ctx.killswitch.guard("link.reconnect", actor)
         result = self._outbox.sync(actor=actor)
         try:
             content = self.content.on_reconnect(actor)

@@ -82,6 +82,7 @@ class Proposal:
     decision_note: str | None = None
     before_state_ref: str | None = None   # snapshot/backup handle captured before apply
     history: list[dict] = field(default_factory=list)
+    assessment: dict | None = None   # immutable receipt reference reviewed by the approving person
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -107,6 +108,7 @@ class ApprovalGate:
         self.audit = audit
         self.ks = killswitch
         self.policy_path = Path(policy_path) if policy_path else None
+        self.assessment_validator = None
         self._items: dict[str, Proposal] = {}
         self._sig: tuple[int, int] | None = None
         self._tlock = threading.RLock()
@@ -259,8 +261,54 @@ class ApprovalGate:
             _copy_into(p, q)
             return p
 
-    def approve(self, pid: str, actor: str, note: str | None = None) -> Proposal:
-        return self._move(pid, ProposalState.APPROVED, actor, note)
+    def approve(self, pid: str, actor: str, note: str | None = None, *,
+                assessment_id: str | None = None, assessment_note: str | None = None) -> Proposal:
+        actor = normalize_actor(actor) or actor
+        with self._locked():
+            p = self._items[pid]
+            try:
+                self._check_actor(ProposalState.APPROVED, actor, False)
+                if assessment_id and is_policy_actor(actor):
+                    raise PermissionError("assessment review requires a named human decision")
+            except PermissionError as exc:
+                self.audit.append("proposal.approved", actor, {"from": p.state.value, "reason": str(exc)},
+                                  subject=pid, outcome="rejected")
+                raise
+            if assessment_id and self.assessment_validator is None:
+                raise IllegalTransition("dependency assessment service unavailable")
+            try:
+                assessment = (self.assessment_validator(pid, assessment_id, assessment_note)
+                              if self.assessment_validator else
+                              {"status": "not_assessed", "id": None, "note": assessment_note or
+                               "No dependency assessment was attached to this decision."})
+            except Exception:
+                self.audit.append("proposal.approved", actor,
+                                  {"from": p.state.value, "reason": "dependency assessment rejected"},
+                                  subject=pid, outcome="rejected")
+                raise
+            return self._move(pid, ProposalState.APPROVED, actor, note, assessment=assessment)
+
+    def review_assessment(self, pid: str, actor: str, assessment_id: str,
+                          note: str | None = None) -> Proposal:
+        """Refresh a named human's receipt on an approved, not-yet-started change."""
+        actor = require_human(actor)
+        if not assessment_id:
+            raise ValueError("an assessment receipt is required to review an approved change")
+        with self._locked():
+            p = self._items[pid]
+            if p.state != ProposalState.APPROVED:
+                raise IllegalTransition("only an approved, not-yet-started proposal can be re-reviewed")
+            if self.assessment_validator is None:
+                raise IllegalTransition("dependency assessment service unavailable")
+            assessment = self.assessment_validator(pid, assessment_id, note)
+            self.audit.append("proposal.assessment_reviewed", actor, {"assessment": assessment}, subject=pid)
+            q = Proposal.from_dict(p.to_dict())
+            q.assessment = assessment
+            q.history.append({"ts": utcnow(), "state": q.state.value, "actor": actor,
+                              "note": "Dependency assessment reviewed", "assessment_id": assessment_id})
+            self._save([q if x.id == pid else x for x in self._items.values()])
+            _copy_into(p, q)
+            return p
 
     def approve_by_policy(self, pid: str, policy, note: str | None = None) -> Proposal:
         """Approve under a standing policy. The policy must be enabled and signed by a named person (and match
@@ -273,7 +321,9 @@ class ApprovalGate:
             self.audit.append("proposal.approved", f"{POLICY_PREFIX}{signer or '?'}", {"reason": why},
                               subject=pid, outcome="rejected")
             raise PermissionError(f"policy approval refused: {why}")
-        return self._move(pid, ProposalState.APPROVED, f"{POLICY_PREFIX}{signer}", note, _policy_checked=True)
+        return self._move(pid, ProposalState.APPROVED, f"{POLICY_PREFIX}{signer}", note, _policy_checked=True,
+                          assessment={"status": "not_assessed", "id": None,
+                                      "note": "Standing policy approval; dependency assessment was not reviewed."})
 
     def deny(self, pid: str, actor: str, note: str | None = None) -> Proposal:
         return self._move(pid, ProposalState.DENIED, actor, note)

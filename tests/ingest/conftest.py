@@ -66,7 +66,7 @@ def ctx(state_dir, monkeypatch):
         monkeypatch.delenv(k, raising=False)
     from cyberthunder.config import Settings
     from cyberthunder.context import AppContext
-    return AppContext(Settings.from_env(state_dir=str(state_dir)))
+    return AppContext(Settings.from_env(state_dir=str(state_dir), explain_precompute=False, llm_backend="template"))
 
 
 def write_collected(store, scan_id: str, target_id: str, packages: list[dict], os_name="Rocky Linux",

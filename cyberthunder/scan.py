@@ -39,6 +39,7 @@ class TargetScanResult:
     open: int = 0
     errors: list[str] = field(default_factory=list)
     facts: dict | None = None
+    coverage: dict | None = None
 
 
 @dataclass
@@ -56,6 +57,7 @@ class ScanRun:
     findings_count: int = 0
     summary: dict = field(default_factory=dict)   # findings.schema.summarize() output
     error: str | None = None
+    coverage_incomplete: bool | None = None       # None for legacy runs without coverage observations
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -96,7 +98,7 @@ class Scanner:
         run = ScanRun(id=self.ctx.store.new_id("scan-"), targets=ids,
                       modules=list(modules) if modules else list(MODULES),
                       rule_filter=list(rule_filter) if rule_filter else None,
-                      trigger=trigger, requested_by=requested_by)
+                      trigger=trigger, requested_by=requested_by, coverage_incomplete=True)
         run.results = {tid: TargetScanResult(tid) for tid in ids}
         self._save(run)
         if background:
@@ -285,6 +287,8 @@ class Scanner:
             res.errors.append(str(e).strip("'\""))
             finish("skipped", outcome="skipped")
             return None
+        from cyberthunder.scan_content import ScanContentService
+        res.coverage = ScanContentService(ctx).preflight([tid], modules=run.modules)["targets"][0]
         try:
             transport = ctx.transport_for(target)
         except Exception as e:  # noqa: BLE001  TransportError or a connect failure inside the factory
@@ -311,6 +315,9 @@ class Scanner:
                 f.collection_provenance["simulated"] = bool(target.simulated)
                 f.scan_id = run.id
                 f.asset_type = f.asset_type or target.asset_type
+            res.coverage = ScanContentService(ctx).observed(target, collected, findings)
+            collected.raw["coverage"] = res.coverage
+            run.coverage_incomplete = True
             ctx.store.write_json(workdir / "collected.json", collected.to_dict())
             res.errors.extend(collected.errors)
             res.findings = len(findings)

@@ -10,6 +10,9 @@ from fastapi import APIRouter, Body, HTTPException
 from cyberthunder.api.errors import MappedRoute
 from cyberthunder.api.util import ActorDep, CtxDep, to_plain
 from cyberthunder.inventory.targets import Target
+from cyberthunder.inventory.host import HostConnectionTransport, host_registration, persisted_target, readiness
+from cyberthunder.inventory.targets import ScopeViolation
+from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.transport.base import TransportError
 
 log = logging.getLogger(__name__)
@@ -62,11 +65,31 @@ def add_target(data: dict = Body(...), ctx=CtxDep, actor: str = ActorDep) -> dic
     if not data.get("name"):
         data = {**data, "name": tid}
     t = _build({**data, "id": tid})
-    if tid in {x.id for x in ctx.inventory.all()}:
+    try:
+        ctx.inventory.add_new(t)
+    except FileExistsError:
         raise HTTPException(409, f"target {tid!r} already exists")
-    ctx.inventory.add(t)
-    ctx.save_inventory(actor, "inventory.add", {"target": t.to_dict()})
+    ctx.audit.append("inventory.add", actor, {"target": t.to_dict()})
     return t.to_dict()
+
+
+@router.post("/targets/register-host", status_code=201)
+def register_host(data: dict = Body(...), ctx=CtxDep, actor: str = ActorDep) -> dict:
+    target, reason = host_registration(data)
+    try:
+        ctx.inventory.add_new(target)
+    except FileExistsError:
+        raise HTTPException(409, f"target {target.id!r} already exists") from None
+    ctx.audit.append("inventory.add", actor, {"target": target.to_dict(), "registration": "deployment_host", "reason": reason},
+                     subject=target.id)
+    ctx.audit.append("scope.change", actor, {"target": target.id, "before": None,
+                     "after": {"in_scope": target.in_scope}, "reason": reason, "explicit_choice": True}, subject=target.id)
+    return target.to_dict()
+
+
+@router.get("/targets/{target_id}/readiness")
+def target_readiness(target_id: str, ctx=CtxDep) -> dict:
+    return readiness(ctx, persisted_target(ctx.inventory, target_id))
 
 
 @router.put("/targets/{target_id}")
@@ -105,25 +128,51 @@ def remove_target(target_id: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
 @router.post("/targets/{target_id}/discover")
 def discover_target(target_id: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
     """Read-only: open the transport and ask the adapter what the asset is. Scope is enforced first."""
-    target = ctx.inventory.assert_in_scope(target_id)
     try:
-        adapter = ctx.adapter_for(target)
-    except KeyError:
-        raise NotImplementedError(f"adapter for {target.asset_type} not available on this build") from None
-    try:
-        transport = ctx.transport_for(target)
-    except KeyError as e:
-        raise TransportError(f"cannot open transport for {target_id}: {e}") from e
-    try:
+        target = persisted_target(ctx.inventory, target_id, require_scope=True)
+        ctx.killswitch.guard(f"inventory.discover:{target_id}", actor)
+        try:
+            adapter = ctx.adapter_for(target)
+        except KeyError:
+            raise NotImplementedError(f"adapter for {target.asset_type} not available on this build") from None
+        fields = ("asset_type", "transport", "address", "port", "username", "credential_ref", "sudo", "simulated", "options")
+        declared = {key: getattr(target, key) for key in fields}
+
+        def guard():
+            current = persisted_target(ctx.inventory, target_id, require_scope=True)
+            if any(getattr(current, key) != value for key, value in declared.items()):
+                raise ScopeViolation("target connection declarations changed; retry with the current inventory")
+            ctx.killswitch.guard(f"inventory.discover:{target_id}", actor)
+
+        ctx.audit.append("inventory.discover_started", actor, {"target": target_id}, subject=target_id)
+        guard()
+        try:
+            transport = ctx.transport_for(target)
+        except KeyError as e:
+            raise TransportError(f"cannot open transport for {target_id}: {e}") from e
+        try:
+            guard()
+        except Exception:
+            transport.close()
+            raise
         with transport:
-            facts = adapter.discover(target, transport)
-    except (TransportError, NotImplementedError):
+            guard()
+            checked = HostConnectionTransport(transport, guard) if target.asset_type in {"linux", "windows"} else transport
+            facts = adapter.discover(target, checked)
+            guard()
+    except (ScopeViolation, KillSwitchEngaged):
+        ctx.audit.append("inventory.discover", actor, {"target": target_id, "reason": "scope or kill guard refused access"},
+                         subject=target_id, outcome="blocked")
         raise
-    except Exception as e:  # noqa: BLE001  adapter failures surface as 503 with the message
-        log.warning("discover failed on %s: %s", target_id, e)
-        ctx.audit.append("inventory.discover", actor, {"target": target_id, "error": str(e)},
+    except (TransportError, NotImplementedError, KeyError) as e:
+        ctx.audit.append("inventory.discover", actor, {"target": target_id, "error_type": type(e).__name__},
                          subject=target_id, outcome="error")
-        raise TransportError(f"discover failed on {target_id}: {e}") from e
+        raise
+    except Exception as e:  # noqa: BLE001  adapter diagnostics can contain sensitive connection data
+        log.warning("discover failed on %s (%s)", target_id, type(e).__name__)
+        ctx.audit.append("inventory.discover", actor, {"target": target_id, "error_type": type(e).__name__},
+                         subject=target_id, outcome="error")
+        raise TransportError(f"connection test failed on {target_id} ({type(e).__name__})") from None
     result = to_plain(facts)
     ctx.audit.append("inventory.discover", actor, {"target": target_id, "hostname": result.get("hostname"),
                                                    "os_name": result.get("os_name")}, subject=target_id)

@@ -10,7 +10,7 @@ from tests.api.conftest import ACTOR
 API = "/api/v1"
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 # Read-only computations that happen to take a POST body; they change nothing and write no audit line.
-NO_ACTOR = {("POST", f"{API}/policy/evaluate")}
+NO_ACTOR = {("POST", f"{API}/policy/evaluate"), ("POST", f"{API}/discovery/scopes/preview")}
 # Engaging the kill switch must never wait for a name; it records an unidentified operator instead.
 UNNAMED_OK = {("POST", f"{API}/kill/engage")}
 REFUSED = [None, "", "   ", "agent", "LLM", "system",

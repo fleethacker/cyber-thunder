@@ -6,8 +6,9 @@ import type {
   DiscoveryStatus, Explanation, FindingPlus, FindingsPage, FindingsQuery, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
   Outbox, PolicyDecision, ProposalDiff, ProposalPlan, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
   ReportHistory, SavedReportContent, TargetOutcome, TargetReport, UpdateCheck,
-  ContentUploadResult, LibraryPreferences, LibraryPreferencesInput, StigLibrary, FindingReviewHistory, FindingReviewInput,
+  ContentUploadResult, LibraryPreferences, LibraryPreferencesInput, StigLibrary, FindingReviewHistory, FindingReviewInput, ImpactReceipt,
   VulnerabilityJob, VulnerabilitySettings, VulnerabilitySettingsInput, VulnerabilityStatus,
+  HostRegistration, RuntimeContext, TargetReadiness, ScopeRangeInput, ScopeRangePreview, SavedScopeRanges,
 } from './types';
 
 export const API_BASE = '/api/v1';
@@ -131,12 +132,17 @@ export const api = {
   exportVulnerabilityBundle: async (): Promise<Blob> => (await vulnerabilityZip('export')).blob(),
 
   targets: () => get<{ targets: Target[] }>('/targets'),
+  runtimeContext: () => get<RuntimeContext>('/runtime/context'),
+  registerHost: (body: HostRegistration) => post<Target>('/targets/register-host', body),
+  targetReadiness: (id: string) => get<TargetReadiness>(`/targets/${enc(id)}/readiness`),
   addTarget: (t: Partial<Target>) => post<Target>('/targets', t),
   updateTarget: (id: string, t: Partial<Target> & { reason?: string }) => put<Target>(`/targets/${enc(id)}`, t),
   removeTarget: (id: string) => del<{ ok: boolean }>(`/targets/${enc(id)}`),
   discover: (id: string) => post<AssetFacts>(`/targets/${enc(id)}/discover`),
 
   discovery: () => get<DiscoveryOverview>('/discovery'),
+  previewScopeRanges: (body: ScopeRangeInput) => post<ScopeRangePreview>('/discovery/scopes/preview', body),
+  saveScopeRanges: (body: ScopeRangeInput & { reason: string }) => put<SavedScopeRanges>('/discovery/scopes/ranges', body),
   putDiscoveryScopes: (scopes: { cidr: string; allow_public?: boolean; scanner_target?: string | null }[], reason: string) =>
     put<{ scopes: DiscoveryScope[] }>('/discovery/scopes', { scopes, reason }),
   sweep: (mode: DiscoveryMode, scopes?: string[]) =>
@@ -164,7 +170,13 @@ export const api = {
   proposals: (q?: Query) => get<{ proposals: ProposalPlus[] }>('/proposals', q),
   proposal: (id: string) => get<ProposalPlus>(`/proposals/${enc(id)}`),
   plan: (id: string) => post<ProposalPlan>(`/proposals/${enc(id)}/plan`),
-  approve: (id: string, note?: string) => post<ProposalPlus>(`/proposals/${enc(id)}/approve`, { note }),
+  approve: (id: string, note?: string, assessmentId?: string, assessmentNote?: string) =>
+    post<ProposalPlus>(`/proposals/${enc(id)}/approve`, { note, assessment_id: assessmentId, assessment_note: assessmentNote }),
+  assessImpact: (id: string, live = true) => post<ImpactReceipt>(`/proposals/${enc(id)}/impact`, { live }),
+  latestImpact: (id: string) => get<{ assessment: ImpactReceipt | null }>(`/proposals/${enc(id)}/impact`),
+  impactReceipt: (id: string) => get<ImpactReceipt>(`/change-assessments/${enc(id)}`),
+  reviewImpact: (id: string, assessmentId: string, note?: string) =>
+    post<ProposalPlus>(`/proposals/${enc(id)}/review-impact`, { assessment_id: assessmentId, note }),
   deny: (id: string, note?: string) => post<ProposalPlus>(`/proposals/${enc(id)}/deny`, { note }),
   cancel: (id: string, note?: string) => post<ProposalPlus>(`/proposals/${enc(id)}/cancel`, { note }),
   apply: (id: string, simulate_verify_fail?: boolean) =>
@@ -186,6 +198,7 @@ export const api = {
   evaluatePolicy: (proposal_id: string) => post<PolicyDecision>('/policy/evaluate', { proposal_id }),
 
   link: () => get<LinkState>('/ingest/link'),
+  probeLink: () => post<unknown>('/ingest/link/probe'),
   putLink: (l: Partial<LinkState>) => put<LinkState>('/ingest/link', l),
   ingestStig: (file: File) => {
     const form = new FormData();

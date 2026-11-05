@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cyberthunder.control.approvals import Proposal, ProposalState
+from cyberthunder.findings.current import CurrentFindings
 from cyberthunder.findings.schema import Finding, Status, utcnow
-from cyberthunder.report.closure import state_time, verified_closure
 from cyberthunder.report.onepager import latest_proposals, resolve_scan
 from cyberthunder.report.render import ReportError
 
@@ -37,10 +37,19 @@ def _cklb_severity(f: Finding) -> str:
     return "medium" if v == "unknown" else "low"
 
 
-def _status_for(f: Finding, p: Proposal | None) -> tuple[str, str]:
+def _status_for(f: Finding, p: Proposal | None, lifecycle: CurrentFindings | None = None) -> tuple[str, str]:
     """(cklb status, comment). Only a dated verification covering the observation closes it."""
-    if verified_closure(f, p):
-        when = state_time(p, ProposalState.VERIFIED) or "unknown time"
+    current = (lifecycle or CurrentFindings([p] if p else [])).assess(f)
+    if current.needs_rescan:
+        attempt = current.rollback
+        return CKLB_STATUS[current.finding.status], (
+            f"Rollback attempt {attempt['proposal_id']} ok={attempt['ok']} at {attempt['finished_at'] or 'unknown time'}; "
+            f"{'rolled_back' if attempt['ok'] else 'restore failed'}; rescan required. "
+            f"Original scanner status: {f.status.value}.")
+    if current.remediated:
+        p = next(candidate for candidate in (lifecycle.proposals[(f.id, f.host)] if lifecycle else [p])
+                 if candidate.id == current.remediated["proposal_id"])
+        when = current.remediated["verified_at"]
         return "not_a_finding", f"Fixed by approved change {p.id} ({p.fix_ref}), approved by {p.decided_by}, verified {when}."
     status = CKLB_STATUS[f.status]
     note = ""
@@ -78,14 +87,15 @@ def _find_input(raw_dir: Path, host: str | None) -> tuple[Path, dict] | None:
     return parsed[0] if parsed else None
 
 
-def _update_existing(doc: dict, by_key: dict[str, Finding], props: dict[str, Proposal], sid: str) -> int:
+def _update_existing(doc: dict, by_key: dict[str, Finding], props: dict[str, Proposal], sid: str,
+                     lifecycle: CurrentFindings) -> int:
     touched = 0
     for stig in doc.get("stigs", []):
         for rule in stig.get("rules", []):
             f = next((by_key[k] for k in _rule_keys(rule) if k in by_key), None)
             if f is None:
                 continue
-            status, note = _status_for(f, props.get(f.id))
+            status, note = _status_for(f, props.get(f.id), lifecycle)
             rule["status"] = status
             rule["finding_details"] = _details(f, sid)
             old = (rule.get("comments") or "").strip()
@@ -94,7 +104,8 @@ def _update_existing(doc: dict, by_key: dict[str, Finding], props: dict[str, Pro
     return touched
 
 
-def _synthesise(host: str, findings: list[Finding], props: dict[str, Proposal], sid: str) -> dict:
+def _synthesise(host: str, findings: list[Finding], props: dict[str, Proposal], sid: str,
+                lifecycle: CurrentFindings) -> dict:
     groups: dict[str, list[Finding]] = {}
     for f in findings:
         groups.setdefault(f.benchmark or f"{f.source} findings", []).append(f)
@@ -105,7 +116,7 @@ def _synthesise(host: str, findings: list[Finding], props: dict[str, Proposal], 
         stig_id = name.lower().replace(" ", "_")
         release = next((f.benchmark_release for f in fl if f.benchmark_release), "") or ""
         for f in sorted(fl, key=lambda f: (f.rule_version or "", f.rule_id)):
-            status, note = _status_for(f, props.get(f.id))
+            status, note = _status_for(f, props.get(f.id), lifecycle)
             group_id = f.group_id or f.rule_version or f.id
             rules.append({
                 # the fields STIG Viewer 3 writes for every rule; stig_uuid links the rule to its STIG
@@ -149,6 +160,7 @@ def build_checklist(ctx: "AppContext", scan_id: str | None = None, host: str | N
     if not mine:
         raise ReportError(f"no findings for host {host!r} in scan {sid}; hosts: {', '.join(hosts)}")
     props = latest_proposals(ctx)
+    lifecycle = CurrentFindings.for_context(ctx)
     found = _find_input(ctx.store.scans_dir / sid / "raw", host)
     if found:
         _path, doc = found
@@ -158,8 +170,8 @@ def build_checklist(ctx: "AppContext", scan_id: str | None = None, host: str | N
             for k in (f.rule_id, f.rule_version, f.group_id):
                 if k:
                     by_key.setdefault(k, f)
-        _update_existing(doc, by_key, props, sid)
+        _update_existing(doc, by_key, props, sid, lifecycle)
         doc.setdefault("target_data", {}).setdefault("host_name", host)
         doc["target_data"]["comments"] = (doc["target_data"].get("comments") or "") + f" Updated by Cyber Thunder {utcnow()} from scan {sid}."
         return doc
-    return _synthesise(host, mine, props, sid)
+    return _synthesise(host, mine, props, sid, lifecycle)

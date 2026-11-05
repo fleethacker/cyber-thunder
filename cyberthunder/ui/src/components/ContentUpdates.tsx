@@ -1,6 +1,7 @@
 import { Accordion, Alert, Badge, Button, Checkbox, FileInput, Group, Paper, Progress, Stack, Switch, Table, Text, TextInput } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useEffect, useRef, useState } from 'react';
+import { linkLabel } from '../lib/linkPresentation';
 import { api, errorText } from '../api/client';
 import type { ContentUploadResult, ImportDirResult, PullDelta, PullJob, StigLibrary } from '../api/types';
 import { fmtBytes, fmtSeconds, fmtZonedTime } from '../lib/format';
@@ -53,7 +54,7 @@ function JobProgress({ job }: { job: PullJob }) {
             {f.datastream_path && <Text size="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>Datastream: {f.datastream_path}</Text>}</Table.Td>
           <Table.Td miw={160}><Progress value={pct} size="sm" color={STATE_COLOR[f.state]} animated={f.state === 'downloading'} aria-label={`${f.filename} transfer progress`} />
             <Text size="xs" mt={4}>{fmtBytes(f.bytes)} / {fmtBytes(f.total)}</Text>
-            {!!f.estimate_seconds && <Text size="xs" c="dimmed">About {fmtSeconds(f.estimate_seconds)} at the link rate</Text>}</Table.Td>
+            {!!f.estimate_seconds && <Text size="xs" c="dimmed">Test estimate: {fmtSeconds(f.estimate_seconds)} at the configured test rate</Text>}</Table.Td>
           <Table.Td><Badge size="xs" color={STATE_COLOR[f.state]} variant="light">{f.state}</Badge></Table.Td>
         </Table.Tr>;
       }} />
@@ -74,8 +75,9 @@ function downloadJson(name: string, doc: unknown) {
 
 interface UploadItem { file: File; state: 'queued' | 'uploading' | 'done' | 'failed'; result?: ContentUploadResult; error?: string }
 
-export function ContentUpdates({ library, dirty, disabled, onRefresh }: {
+export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'all', onProductSelect, onMaintained, onTransfers }: {
   library: StigLibrary; dirty: boolean; disabled: boolean; onRefresh: () => Promise<void>;
+  view?: 'all' | 'updates' | 'transfers'; onProductSelect?: (key: string) => void; onMaintained?: () => void; onTransfers?: () => void;
 }) {
   const { status } = useAppState();
   const [selected, setSelected] = useState<string[]>([]);
@@ -117,6 +119,7 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh }: {
   }, [newJob, library.jobs, onRefresh]);
 
   const act = async (what: string, fn: () => Promise<void>) => {
+    if (blocked || (['pull', 'manifest'].includes(what) && (dirty || running)) || (what === 'pull' && !connected)) return;
     setBusy(what);
     setError(null);
     try { await fn(); }
@@ -147,28 +150,32 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh }: {
   };
 
   return <Stack gap="lg">
-    {dirty && <Alert color="yellow" title="Save your update selections">Save or discard changes in Update selections before checking, downloading, or writing a manifest.</Alert>}
+    {dirty && <Alert color="yellow" title="Unsaved maintenance selections">Save or discard changes in Maintained or Browse all before checking, downloading, or writing a manifest.</Alert>}
     {error && <ErrorBox error={error} />}
+    {view !== 'transfers' && <>
     <Paper withBorder p="md" radius="md">
       <Stack gap="sm">
-        <Group justify="space-between"><Text fw={700}>Matching updates ({updates.length})</Text><Badge variant="light" color={connected ? 'teal' : 'orange'}>{connected ? 'Link connected' : 'Link disconnected'}</Badge></Group>
-        <Text size="sm" c="dimmed">Based on saved products and types in the {library.catalog.source === 'snapshot' ? 'snapshot' : 'last live index'}. Select files explicitly to download.</Text>
-        <LibraryTable rows={updates} label="matching updates" empty={library.selection.wanted.length ? 'No newer releases are listed for your saved selections. This does not establish freshness beyond the index shown above.' : 'No files match your saved selections. Choose products and content types in Update selections.'}
+        <Group justify="space-between"><Text fw={700}>Downloads for maintained products ({updates.length})</Text><Badge variant="light" color={connected ? 'teal' : 'orange'}>{linkLabel(status?.link)}</Badge></Group>
+        <Text size="sm" c="dimmed">New releases and missing downloads for saved products and content types, compared with the {library.catalog.source === 'snapshot' ? 'snapshot' : 'last live index'}. Select files explicitly to download. A listed update does not establish scanner readiness.</Text>
+        <Group>{onMaintained && <Button variant="light" onClick={onMaintained}>Change maintained products</Button>}{onTransfers && <Button variant="light" onClick={onTransfers}>Import or view transfers{running ? ' · active' : ''}</Button>}</Group>
+        <LibraryTable rows={updates} label="matching updates" empty={library.selection.wanted.length ? 'No newer or missing releases are listed for your saved selections. This does not establish freshness beyond the index shown above.' : 'No files match your saved selections. Choose products and content types in Maintained.'}
           searchText={(r) => `${r.filename} ${r.product_key} ${r.version_label} ${kindLabel(r.kind)}`}
-          toolbar={(displayed) => <DisplayedSelection displayed={displayed} selected={selected} keyOf={(r) => r.filename} onChange={setSelected} disabled={blocked || dirty} />}
-          headings={<><Table.Th>Download</Table.Th><Table.Th>File</Table.Th><Table.Th>Available / held</Table.Th><Table.Th>Publisher date</Table.Th><Table.Th>Size</Table.Th></>}
+          toolbar={(displayed) => <DisplayedSelection displayed={displayed} selected={selected} keyOf={(r) => r.filename} onChange={setSelected} disabled={selectionBlocked} />}
+          headings={<><Table.Th>Download</Table.Th><Table.Th>File</Table.Th><Table.Th>Listed / local version</Table.Th><Table.Th>Publisher date</Table.Th><Table.Th>Size</Table.Th></>}
           render={(r) => <Table.Tr key={r.filename}>
-            <Table.Td><Checkbox aria-label={`Download ${r.filename}`} checked={selected.includes(r.filename)} disabled={blocked || dirty} onChange={(e) => setSelected(e.currentTarget.checked ? [...selected, r.filename] : selected.filter((name) => name !== r.filename))} /></Table.Td>
-            <Table.Td><Text size="xs" style={{ overflowWrap: 'anywhere' }}>{r.filename}</Text><Text size="xs" c="dimmed">{kindLabel(r.kind)}{r.targets?.length ? ` · ${r.targets.join(', ')}` : ''}</Text></Table.Td>
-            <Table.Td>{r.version_label ?? 'Not provided'}<Text size="xs" c="dimmed">Held: {r.held_version?.join('.') ?? 'none'}</Text></Table.Td>
+            <Table.Td><Checkbox aria-label={`Download ${r.filename}`} checked={selected.includes(r.filename)} disabled={selectionBlocked} onChange={(e) => setSelected(e.currentTarget.checked ? [...selected, r.filename] : selected.filter((name) => name !== r.filename))} /></Table.Td>
+            <Table.Td><Text size="xs" style={{ overflowWrap: 'anywhere' }}>{r.filename}</Text><Text size="xs" c="dimmed">{kindLabel(r.kind)}{r.targets?.length ? ` · ${r.targets.join(', ')}` : ''}</Text>
+              {r.product_key && onProductSelect && <Button variant="subtle" size="compact-xs" onClick={() => onProductSelect(r.product_key!)}>Product versions and maintenance</Button>}</Table.Td>
+            <Table.Td>{r.version_label ?? 'Not provided'}<Text size="xs" c="dimmed">Local: {r.held_version?.join('.') ?? 'none'}</Text></Table.Td>
             <Table.Td>{fmtZonedTime(r.upload_date, 'Not provided')}</Table.Td><Table.Td>{fmtBytes(r.expected_bytes)}</Table.Td>
           </Table.Tr>} />
         <Group>
           <Button loading={busy === 'pull'} disabled={selectionBlocked || !connected || !selected.length} onClick={() => void act('pull', async () => {
-            setNewJob(await api.pullUpdates({ filenames: selected.filter((name) => updates.some((r) => r.filename === name)), pace }));
+            setNewJob(await api.pullUpdates({ filenames: selected.filter((name) => updates.some((r) => r.filename === name)), pace: pace && status?.link.mode === 'test' }));
+            onTransfers?.();
             await onRefresh();
           })}>Download selected ({selected.length})</Button>
-          <Switch label="Pace downloads to the link rate" checked={pace} disabled={blocked} onChange={(e) => setPace(e.currentTarget.checked)} />
+          <Switch label="Pace downloads to the configured TEST rate" checked={pace && status?.link.mode === 'test'} disabled={blocked || status?.link.mode !== 'test'} onChange={(e) => setPace(e.currentTarget.checked)} />
         </Group>
         {!connected && <Text size="sm" c="orange">Use a manifest and local import while disconnected.</Text>}
         {library.selection.skipped.length > 0 && <Accordion variant="contained"><Accordion.Item value="skipped"><Accordion.Control>Unmatched or skipped ({library.selection.skipped.length})</Accordion.Control><Accordion.Panel>
@@ -178,7 +185,8 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh }: {
         </Accordion.Panel></Accordion.Item></Accordion>}
       </Stack>
     </Paper>
-
+    </>}
+    {view !== 'updates' && <>
     <Paper withBorder p="md" radius="md">
       <Stack gap="sm">
         <Text fw={700}>Upload from this computer</Text>
@@ -202,7 +210,7 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh }: {
 
     <Paper withBorder p="md" radius="md">
       <Stack gap="sm">
-        <Text fw={700}>Offline transfer</Text>
+        <Text fw={700}>Transfer with a manifest</Text>
         <Text size="sm" c="dimmed">Export a manifest for your saved selections. Retrieve its files on a connected machine, then import the folder available to this server.</Text>
         <Group align="flex-end">
           <Button variant="light" loading={busy === 'manifest'} disabled={selectionBlocked || !library.selection.wanted.length} onClick={() => void act('manifest', async () => {
@@ -233,5 +241,6 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh }: {
         </Accordion.Item>)}
       </Accordion>}
     </Stack>
+    </>}
   </Stack>;
 }

@@ -16,3 +16,9 @@ def get_status(ctx=CtxDep) -> dict:
     st["link"] = util.link_state(ctx)
     st["outbox"] = {"pending": util.outbox_pending(ctx)}
     return st
+
+
+@router.get("/runtime/context")
+def get_runtime_context() -> dict:
+    from cyberthunder.inventory.deployment import runtime_context
+    return runtime_context()

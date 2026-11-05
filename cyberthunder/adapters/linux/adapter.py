@@ -132,44 +132,61 @@ class LinuxAdapter(Adapter):
         example the DISA RHEL 9 SCAP benchmark copied over); otherwise the SSG content the scap-security-guide
         package installs is found automatically. options.profile picks the XCCDF profile; without it the
         profile is chosen from `oscap info` output (see _oscap_profile)."""
-        if not transport.run("command -v oscap").ok:
+        from cyberthunder.scan_content import scanner_observation
+        observation = scanner_observation(target, collected, engine="openscap", location="target")
+        if "check" not in collected.modules:
+            observation["status"] = "not_requested"
             return
+        if not transport.run("command -v oscap").ok:
+            observation.update(status="unavailable", warnings=["OpenSCAP was not found on the target; only native checks can contribute STIG results."])
+            collected.errors.append("oscap: scanner not found on the host; SCAP coverage is unavailable")
+            return
+        observation["status"] = "available"
         opts = target.options or {}
         bench = str(opts.get("benchmark_path") or "").strip()
         if bench:
             if not transport.run(f"test -r {shlex.quote(bench)}").ok:
+                observation["content_status"] = "unavailable"
                 collected.errors.append(f"oscap: benchmark_path {bench} is not readable on the host")
                 return
             ds = bench
         else:
-            ds = self._oscap_datastream(transport)
+            ds = self._oscap_datastream(transport, collected.facts)
             if not ds:
-                collected.errors.append("oscap present but no SSG datastream under /usr/share/xml/scap/ssg/content/")
+                observation.update(content_status="unavailable", warnings=["No unique installed SSG datastream matches the observed distribution and release."])
+                collected.errors.append("oscap present but no uniquely matching SSG datastream for the observed OS under /usr/share/xml/scap/ssg/content/")
                 return
+            observation["applicability"] = "filename_matched"
+        observation["content_status"] = "readable"
         profile = str(opts.get("profile") or "").strip() or self._oscap_profile(transport, ds)
         if not profile:
+            observation["status"] = "error"
             collected.errors.append(f"oscap: no XCCDF profile found in {ds}; set options.profile")
             return
         remote = f"{REMOTE_TMP}/ct-oscap-results.xml"
         rules = [f"--rule {shlex.quote(r)}" for r in (rule_filter or []) if r.startswith("xccdf_")]
         cmd = (f"oscap xccdf eval --profile {shlex.quote(profile)} {' '.join(rules)} "
                f"--results {remote} {shlex.quote(ds)}")
-        transport.run(cmd, sudo=True, timeout=600)
+        result = transport.run(cmd, sudo=True, timeout=600)
+        if result.exit_code not in (0, 2):
+            observation["status"] = "error"
+            collected.errors.append(f"oscap: evaluation failed (exit {result.exit_code}); no SCAP results accepted")
+            return
         collected.raw["oscap"] = {"datastream": ds, "profile": profile, "source": "benchmark_path" if bench else "ssg"}
         local = workdir / "oscap_results.xml"
         try:
             transport.fetch(remote, str(local))
             collected.artifacts["oscap_results"] = str(local)
+            observation["status"] = "collected"
         except Exception as e:  # noqa: BLE001
+            observation["status"] = "error"
             collected.errors.append(f"oscap results fetch: {e}")
 
-    def _oscap_datastream(self, transport) -> str | None:
+    def _oscap_datastream(self, transport, facts=None) -> str | None:
+        from .content import select_datastream
         r = transport.run("ls /usr/share/xml/scap/ssg/content/ssg-*-ds.xml 2>/dev/null")
         files = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
-        for f in files:
-            if re.search(r"ssg-(rhel|ubuntu|centos|ol)\d", f):
-                return f
-        return files[0] if files else None
+        return select_datastream(files, facts) if r.ok else None
 
     # DISA benchmarks name their profiles by mission assurance category and confidentiality level. MAC-1
     # Classified selects every rule, so it is the default when no profile is configured.
@@ -192,7 +209,7 @@ class LinuxAdapter(Adapter):
         if profiles:
             return profiles[0]
         other = re.findall(r"(xccdf_\S+_profile_\S+)", r.stdout)
-        return other[0] if other else "xccdf_org.ssgproject.content_profile_stig"
+        return other[0] if other else ""
 
     def _maybe_trivy(self, transport, workdir, collected) -> None:
         if not transport.run("command -v trivy").ok:
@@ -387,6 +404,42 @@ class LinuxAdapter(Adapter):
         checks_out.append(HealthCheck("system_running", state in ("running", "starting", "degraded"),
                                       f"is-system-running: {state or 'unknown'}"))
         return HealthResult(ok=all(c.ok for c in checks_out), checks=checks_out)
+
+    def rollback_file_state(self, target, transport, fix: FixEntry, before: BeforeState) -> dict:
+        """Fingerprint exactly the files this restore would overwrite; never infer script completeness."""
+        if fix.rollback_kind != "restore_files" or fix.kind == "runbook":
+            return {"coverage": "unsupported", "resources": {}, "reasons": ["not a file restore"]}
+        meta = before.extra.get("files", {})
+        if not meta or set(meta) != set(before.files):
+            raise ValueError("missing or inconsistent captured Linux file resources")
+        resources = {}
+        for path, saved in meta.items():
+            if not saved.get("exists"):
+                # The existing adapter leaves originally absent files alone. Do not claim a full restore.
+                raise ValueError(f"{path}: originally absent file has no supported restoration baseline")
+            local = Path(before.dir) / "files" / saved["local"]
+            if not saved.get("sha256") or hashlib.sha256(local.read_bytes()).hexdigest() != saved["sha256"]:
+                raise ValueError(f"{path}: captured file is missing or fails its integrity check")
+            cmd = f"stat -c '%F|%a|%u|%g|%U|%G' -- {shlex.quote(path)}"
+            stat = transport.run(cmd, sudo=True)
+            parts = stat.stdout.strip().split("|")
+            if not stat.ok or len(parts) != 6 or parts[0] not in {"regular file", "regular empty file"}:
+                raise ValueError(f"{path}: cannot establish readable regular-file metadata (symlinks are unsupported)")
+            data = transport.read_file(path)
+            again = transport.run(cmd, sudo=True)
+            if not again.ok or again.stdout != stat.stdout:
+                raise ValueError(f"{path}: metadata changed while reading")
+            resources[path] = {"sha256": hashlib.sha256(data).hexdigest(), "type": "regular file",
+                               "mode": int(parts[1], 8), "uid": int(parts[2]), "gid": int(parts[3]),
+                               "owner": parts[4], "group": parts[5]}
+        # Library identity alone is insufficient: dynamic scripts can share a native fix ref.
+        known = next((entry for entry in self.fixes() if entry.to_dict() == fix.to_dict()), None)
+        extra_effects = any(before.extra.get(k) for k in ("services", "sysctl", "selinux", "packages", "path_modes"))
+        partial = known is None or extra_effects or bool(fix.restarts_services) or bool(fix.before_state.get("quarantine"))
+        return {"coverage": "partial" if partial else "files", "resources": resources, "reasons": [],
+                "limitations": ["Only captured restoration file bytes, type, mode and ownership are compared; "
+                                "external writers are not excluded and script side effects are not proven complete."]
+                + (["Dynamic script or non-file effects: file checks do not cover every effect of this restore."] if partial else [])}
 
     def rollback(self, target, transport, fix: FixEntry, before: BeforeState) -> RollbackResult:
         if fix.kind == "runbook":

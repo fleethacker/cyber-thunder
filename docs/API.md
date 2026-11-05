@@ -4,7 +4,7 @@ Base path `/api/v1`. JSON in and out. Served by `cyberthunder serve` from the sa
 Interactive docs at `/api/docs`.
 
 **Identity.** Every request may carry `X-Actor: <name>` (the UI sends the name the Sailor typed).
-Every POST, PUT, PATCH and DELETE route except `POST /policy/evaluate` requires it to name a person: a missing or
+Every POST, PUT, PATCH and DELETE route except the read-only `POST /policy/evaluate` and `POST /discovery/scopes/preview` requires it to name a person: a missing or
 blank header, a bare or prefixed machine identity (`agent`, `llm`, `system`, `agent:*`, `llm:*`, `system:*`) and any
 `policy:*` value are refused with `400`. Approvals, denials, kill switch, scope and policy changes are recorded under
 that actor. Request validation errors return `400` with a string `detail`, not the framework default `422`.
@@ -27,14 +27,17 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | Method | Path | Body → Response |
 |---|---|---|
 | GET | `/status` | → `AppContext.status()` + `link` {kbps, latency_ms, connected} + `outbox` {pending} |
+| GET | `/runtime/context` | → local runtime kind/OS markers, container-local boundary and nonsecret hints; no DNS or network; physical host remains unknown ([host setup](HOST_SCOPE.md)) |
 
 ## Targets (inventory = scope)
 | GET | `/targets` | → `{targets: [Target]}` |
 |---|---|---|
 | POST | `/targets` | Target fields → Target, `201`. Audit `inventory.add` |
+| POST | `/targets/register-host` | Explicit host OS/transport/address/account/credential reference, `in_scope` and reason → Target, `201`. No connection; audited registration and scope choice ([fields](HOST_SCOPE.md#api)) |
+| GET | `/targets/{id}/readiness` | → declaration-only readiness, scope/kill checks and runtime hints; no DNS, transport creation or connection |
 | PUT | `/targets/{id}` | partial fields → Target. `in_scope` changes audited as `scope.change` with before/after |
 | DELETE | `/targets/{id}` | → `{ok: true}`. Audit `inventory.remove` |
-| POST | `/targets/{id}/discover` | → `AssetFacts` (read-only; opens transport, runs adapter.discover) |
+| POST | `/targets/{id}/discover` | → `AssetFacts` (explicit read-only connection test; persisted scope and kill guards before target I/O; success/failure audited) |
 
 ## Scans
 | POST | `/scans` | `{target_ids?: [..], modules?: ["check","hunt","cve"], rule_filter?: [..], trigger?: str}` → ScanRun, `202`. Runs in a background thread. Omitted target_ids = all in-scope targets |
@@ -106,14 +109,18 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/proposals` | `?state&host&asset_type` (each takes comma-separated values; an unknown `state` is `400`) → `{proposals: [Proposal+]}` oldest first |
 |---|---|---|
 | GET | `/proposals/{id}` | → Proposal+ |
-| POST | `/proposals/{id}/approve` | `{note?}` → Proposal+ |
+| POST | `/proposals/{id}/approve` | `{note?, assessment_id?, assessment_note?}` → Proposal+. An attached impact receipt must match current bindings and be unexpired; unknown dependencies require a review note. Without a receipt the decision is explicitly not assessed |
+| POST | `/proposals/{id}/impact` | `{live?: true}` → immutable dependency/model assessment; explicit actor, scoped target and released kill switch required. Bounded read-only collection, no execution or approval |
+| GET | `/proposals/{id}/impact` | → `{assessment: receipt or null}` with computed freshness; no collection or model call |
+| GET | `/change-assessments/{id}` | → saved receipt with computed freshness, or 404 |
+| POST | `/proposals/{id}/review-impact` | `{assessment_id, note?}` → Proposal+. A named human can refresh the reviewed receipt while a proposal remains APPROVED; does not execute it |
 | POST | `/proposals/{id}/deny` | `{note?}` → Proposal+ |
 | POST | `/proposals/{id}/cancel` | `{note?}` → Proposal+ |
 | POST | `/proposals/{id}/plan` | → static remediation plan; named actor and kill switch checked, one `remediation.plan` audit event. Includes target identity, bound fix/digests, declared capture/verification/rollback metadata, checks and limitations. Makes no target connection, changes no proposal state and does not approve or apply anything. See [REMEDIATION_PLAN](REMEDIATION_PLAN.md) |
 | POST | `/proposals/{id}/apply` | `{simulate_verify_fail?: bool}` → `202 {proposal_id, state: "applying"}`; engine.execute runs in background: before-state → apply → verify → verified, or failed → automatic rollback. `409` unless APPROVED, `423` if kill switch engaged |
-| POST | `/proposals/{id}/rollback` | → `202`; manual rollback of APPLIED, VERIFIED or FAILED |
+| POST | `/proposals/{id}/rollback` | → `202`; queues manual rollback of APPLIED, VERIFIED or FAILED. The engine checks current scope, target serialization, later recorded changes, saved identity and supported file drift before restoring. A queued response is not proof of restoration; inspect proposal, diff and audit outcome |
 | POST | `/proposals/{id}/verify` | → Proposal+; re-checks an APPLIED proposal (used after an operator completes a runbook): VERIFIED or FAILED. `501` on a node whose engine lacks it |
-| GET | `/proposals/{id}/diff` | → `{proposal, fix, before_state, before: {...}, after: {...}, verify: VerifyResult, apply: ApplyResult, rollback, files: [{path, before, after}]}` |
+| GET | `/proposals/{id}/diff` | → `{proposal, fix, before_state, before: {...}, after: {...}, verify: VerifyResult, apply: ApplyResult, rollback, rollback_guard, files: [{path, before, after}]}`. `rollback_guard` is a local static inspection with coverage, reasons, limitations and conflicting proposal ids; `last_preflight` is historical. GET does not probe the target. See [CHANGE_HISTORY](CHANGE_HISTORY.md) |
 | POST | `/proposals/bulk` | `{action: "approve"|"deny", ids: [..], note?}` → `{results: [{id, state} | {id, error, status}]}` (`status` is the HTTP code the single call would have returned) |
 
 ## Audit
@@ -135,15 +142,16 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/policy/evaluate` | `{proposal_id}` → PolicyDecision |
 
 ## Ingest and the constrained link
-| GET | `/ingest/link` | → `{kbps, latency_ms, connected}` |
+| GET | `/ingest/link` | → production/test mode, offline override, endpoint reachability, bounded observations and optional observed application rate. Configured kbps/latency are null in production. `connected` is attempt permission, including unknown. See [LINK.md](LINK.md) |
 |---|---|---|
-| PUT | `/ingest/link` | partial → link state. Audit `link.change`. `connected` false→true flushes the outbox |
+| PUT | `/ingest/link` | `{mode?, offline_override?, kbps?, latency_ms?, connected?, probe_enabled?, probe_endpoint?}`. Numeric inputs require test mode; probes default off and expire after 15 minutes. Audit `link.change`. Kill-switch guarded. |
+| POST | `/ingest/link/probe` | One fixed-source HEAD probe, five-second deadline, no redirects or body; audits `link.probe`. No arbitrary URLs. |
 | POST | `/ingest/stig` | multipart `file` (XCCDF/datastream xml or DISA zip) or `{path}` → DeltaReport `{id, benchmark_id, old_release, new_release, rules_added: [RuleRef], rules_removed: [RuleRef], rules_changed: [RuleRef+{change}], counts, sizes: {full_bytes, delta_bytes, compressed_bytes, ratio}, transfer: {full_s, delta_s, kbps}, rescan_rule_ids: [..]}` where RuleRef = `{rule_id, stig_id, title, severity}` |
 | POST | `/ingest/stig/{delta_id}/rescan` | → ScanRun with `trigger: "stig_delta"` and `rule_filter` = changed rules, `202` |
 | POST | `/ingest/bulletin` | multipart `file` (JSON) or Bulletin JSON `{id, title, severity, cves: [..], affected: [{product?, package?, versions_below?, cpe?}], source}` → `{bulletin_id, hosts_affected: [..], findings: [Finding+], scan_id}` (matches against the latest package inventory per host; findings source `iavm`) |
 | GET | `/ingest/history` | → `{deltas: [DeltaReport], bulletins: [...]}` |
-| GET | `/outbox` | → `{connected, pending: [{name, kind, bytes, created_at}], synced: [{name, kind, bytes, synced_at, seconds}]}` |
-| POST | `/outbox/sync` | → `{sent, bytes, seconds}`; `409` if disconnected |
+| GET | `/outbox` | → `{connected, pending: [{name, kind, bytes, created_at}], synced: [{name, kind, bytes, synced_at, seconds, test_estimate_seconds}]}`. Entry `seconds` is null: historical transfer timings were estimates, exposed separately as `test_estimate_seconds`, not measured delivery. |
+| POST | `/outbox/sync` | → `{sent, bytes, seconds, transfer_kind: "local_move", test_estimate_seconds}`; seconds is local elapsed time, never network throughput or shore delivery. `409` if attempts are blocked. |
 | GET | `/ingest/updates` | → last-check metadata `{checked_at, source, index_entries, index_wire_bytes, gzip, estimate_seconds_at_link}` plus `wanted`, `updates`, `current`, `skipped`, `index_estimate: {bytes, seconds, link}` and `connected`. Selection is always recomputed from saved subscriptions and eligible held files, including before the first check; `checked_at` remains null until a check runs. `selection_source` identifies the local cached/snapshot index used. See [CONTENT.md](CONTENT.md) |
 | POST | `/ingest/updates/check` | `{source?: "live"|"snapshot"}` → the check report. `409` (naming the manifest path) when the link is down and source is live. Audit `content.check` |
 | POST | `/ingest/updates/pull` | `{filenames?: [..]}` or `{all_matching: true}`, `pace?` → `202` job `{id, state, files: [{filename, state, bytes, total, error, delta?, datastream_path?}], deltas}`. `409` when the link is down; pulls are blocked while the kill switch is engaged. Audit `content.fetch`, `content.fetch_failed`, `content.quarantine`, and `ingest.stig` per manual STIG |
@@ -228,6 +236,10 @@ sequential requests. Legacy STIG import, check, pull, job, manifest and folder-i
 ## Discovery
 The `/discovery/*` routes (scopes, sweeps, discovered assets, discovery findings, applicable benchmarks) are
 documented in [DISCOVERY.md](DISCOVERY.md). They follow the same actor and error rules as above.
+
+`POST /discovery/scopes/preview` accepts include/exclude IP, CIDR and inclusive start-end ranges and returns bounded effective CIDRs and exact decimal-string counts without probes or state changes. `PUT /discovery/scopes/ranges` adds a required reason and named actor, recomputes validation and saves ordinary CIDR scopes. Neither grants inventory scope or starts discovery. See [range limits and fields](HOST_SCOPE.md#preview-and-save-discovery-ranges).
+
+Host-bit CIDRs such as `192.168.1.20/24` are reported explicitly as `192.168.1.0/24`; both scope save APIs require `acknowledge_normalization=true` for such inputs. Preview returns `normalizations` and `requires_normalization_acknowledgment`, and save recomputes the exact submitted input rather than trusting a prior preview.
 
 ## Vulnerability data
 

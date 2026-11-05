@@ -42,6 +42,13 @@ pytest's Cartesian-product indices need not match between backends.
 Skips match an exact node ID and exact reason in `expected_skips()`. There are
 no directory wildcards, class-wide allowances or pooled skip budgets. Fewer
 skips are acceptable. Another test cannot consume an unused allowance.
+
+Unhandled background thread exceptions fail both ordinary pytest and the CI
+runner. Scan tests that do not exercise explanations disable precomputation;
+worker tests explicitly start, wait for, and stop their workers.
+The shared fixture also fails the test that leaves an explanation worker running
+and stops that worker before later tests install their own network guards.
+
 New skips, changed reasons, duplicate skips, teardown skips, xfail/xpass,
 deselection and collection skips fail the job. Files matching pytest's normal
 `test_*.py` / `*_test.py` names must contribute collected items, except the
@@ -53,6 +60,7 @@ The reviewed allowances at the initial baseline are:
 | Platform | Exact test(s) | Maximum skips | Required reason |
 | --- | --- | ---: | --- |
 | Both | `tests/explain/test_service.py::test_real_local_model[json]` and `[sqlite]` | 2 | `set CT_TEST_LLM=1 to test against a local model server` |
+| Windows | `tests/engine/test_inventory_guard.py::test_fifo_or_link_replacement_refuses_promptly_and_releases_target_lock` for `existing_fifo`, `fifo_at_open`, and `symlink_at_open` | 3 | `POSIX FIFO and O_NOFOLLOW semantics` |
 | Linux | `tests/report/test_reports.py::test_commander_reproduce_command_runs_in_cmd` | 1 | `runs the command through cmd.exe` |
 | Linux | `tests/test_approval_io.py::test_deny_survives_windows_delete_handle[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |
 | Linux | `tests/state/test_file_read_sharing.py::test_deny_response_survives_windows_inventory_sharing[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |
@@ -91,10 +99,15 @@ test_standalone_setup_rejects_other_contexts_before_creating_password
 test_standalone_setup_rejects_arguments
 ```
 
-That permits at most **30 skipped cases on Linux and 2 on Windows**, with every
+That permits at most **30 skipped cases on Linux and 5 on Windows**, with every
 case individually constrained. Missing Git or Bash is not an allowed skip on
 either runner. Windows runs the command-shell and file-sharing tests that
 Linux skips.
+
+Linux runs the three FIFO/no-follow inventory races that Windows cannot execute.
+Those cases were also exercised in WSL during rollback review. The remaining
+inventory validation tests run on both platforms; limited Windows link-creation
+privileges use a metadata fixture rather than skipping the rejection check.
 
 `tests/conftest.py` already excludes these Windows modules before collection:
 

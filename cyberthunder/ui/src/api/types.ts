@@ -143,6 +143,8 @@ export interface FindingPlus extends Finding {
   confidence?: FindingConfidence | null;
   review?: FindingReview | null;
   remediated?: { proposal_id: string; verified_at: string; scan_status: FindingStatus } | null;
+  needs_rescan?: boolean;
+  rollback?: { proposal_id: string; finished_at: string | null; ok: boolean } | null;
   categories: FindingCategory[];
   cat: string;
   explanation: Explanation | null;
@@ -216,6 +218,30 @@ export interface Proposal {
   decision_note: string | null;
   before_state_ref: string | null;
   history: HistoryEntry[];
+  assessment?: { status: 'reviewed' | 'not_assessed'; id: string | null; note: string;
+    risk_level?: string; has_unknowns?: boolean; model_used?: boolean; valid_until?: string } | null;
+}
+
+export interface ImpactEvidence {
+  id: string; kind: string; source: string; observed_at: string; subject: string;
+  facts: Record<string, unknown>;
+}
+export interface ImpactDependency {
+  id: string; from: string; to: string; relation: string; evidence_ids: string[];
+}
+export interface ImpactReceipt {
+  version: number; id: string; proposal_id: string; target_id: string;
+  generated_at: string; valid_until: string; evidence_sha256: string; fix_sha256: string;
+  evidence_packet: { mode: 'live' | 'stored'; complete: boolean; generated_at?: string; evidence: ImpactEvidence[] };
+  assessment: { advisory_only: boolean; approval_authority: boolean;
+    source: 'model_advisory' | 'deterministic_fallback'; risk_level: 'unknown' | 'low' | 'medium' | 'high' | 'critical';
+    summary: string; evidence_ids: string[]; complete: boolean;
+    risks: { id: string; severity: string; summary: string; deterministic: boolean; evidence_ids: string[] }[];
+    dependencies: ImpactDependency[]; unknowns: string[]; required_checks: string[]; rollback_limits: string[] };
+  model: { backend: string | null; name: string | null; used: boolean; validated: boolean;
+    fallback_reason: string | null; attempts: number; input_coverage?: { limited: boolean } };
+  freshness: { ready: boolean; status: string; stale: boolean; reasons: string[]; unknowns: string[];
+    age_seconds: number | null; approval_authority: false };
 }
 
 export interface ProposalPlus extends Proposal {
@@ -235,6 +261,20 @@ export interface DiffFile {
   diff: string | null;
 }
 
+/** Static restore checks; missing fields on a failed lookup are unknown, never permission. */
+export interface RollbackGuard {
+  status: 'not_checked' | 'blocked' | 'checked_files' | 'limited';
+  coverage: 'files' | 'partial' | 'unsupported' | 'unavailable' | 'unknown';
+  live_checked: boolean;
+  identity_bound?: boolean;
+  transition_allowed?: boolean;
+  conflicting_proposals?: string[];
+  reasons: string[];
+  limitations?: string[];
+  /** An earlier attempt, not current authorization or a fresh live check. */
+  last_preflight?: Omit<RollbackGuard, 'last_preflight'> & { checked_at?: string } | null;
+}
+
 /** GET /proposals/{id}/diff: the engine's record of what changed and how it was checked. */
 export interface ProposalDiff {
   proposal?: Record<string, unknown>;
@@ -245,6 +285,7 @@ export interface ProposalDiff {
   apply: Record<string, unknown> | null;
   verify: Record<string, unknown> | null;
   rollback?: Record<string, unknown> | null;
+  rollback_guard?: RollbackGuard | null;
   files: DiffFile[];
 }
 
@@ -271,6 +312,43 @@ export interface Target {
 }
 
 export type AssetFacts = Record<string, unknown>;
+
+/** Local runtime markers only; neither the physical deployment host nor connectivity is inferred. */
+export interface RuntimeContext {
+  kind: 'native' | 'container' | 'kubernetes' | 'unknown';
+  detection: 'local_markers' | 'no_container_markers' | 'unknown';
+  runtime_os: 'linux' | 'windows' | 'darwin' | 'unknown';
+  physical_host_os: 'unknown';
+  host_address: null;
+  host_address_required: true;
+  local_transport: { boundary: 'container' | 'runtime' | 'unknown'; description: string };
+  supported_host_transports: ('ssh' | 'winrm')[];
+  hints: { code: string; message: string }[];
+}
+
+export interface HostRegistration {
+  id: string;
+  name: string;
+  asset_type: 'linux' | 'windows';
+  transport: 'ssh' | 'winrm';
+  address: string;
+  port?: number | null;
+  username: string;
+  credential_ref: string;
+  sudo?: boolean;
+  in_scope: boolean;
+  reason: string;
+}
+
+export interface TargetReadiness {
+  target_id: string;
+  ready_for_connection_test: boolean;
+  checked: 'declarations_only';
+  connection_test_route: string;
+  checks: { code: string; status: 'ok' | 'blocked' | 'unknown'; message: string }[];
+  warnings: string[];
+  runtime: RuntimeContext;
+}
 
 export interface TargetScanResult {
   target_id: string;
@@ -325,7 +403,14 @@ export interface AuditVerify { ok: boolean; count: number; head: string; bad_seq
 
 export interface KillStatus { engaged: boolean; by: string | null; reason: string | null; at: string | null; via: string | null }
 
-export interface LinkState { kbps: number; latency_ms: number; connected: boolean }
+export interface LinkObservation { at: string; endpoint: string; method: string; application_bytes: number; elapsed_seconds: number; success: boolean; status: number | null; observed_kbps: number | null; test_mode: boolean; error?: string | null }
+export interface LinkState {
+  kbps: number | null; latency_ms: number | null; connected: boolean;
+  mode: "production" | "test"; offline_override: boolean; test_connected: boolean;
+  reachability: string; observed_kbps: number | null; last_observation: LinkObservation | null;
+  rate_observation?: LinkObservation | null;
+  observations: LinkObservation[]; probe_enabled: boolean; probe_until: number | null; probe_endpoint: string;
+}
 
 export interface LlmStatus { backend: string; model: string | null; available: boolean; detail?: string; queue?: number }
 
@@ -388,8 +473,8 @@ export interface BulletinResult { bulletin_id: string; hosts_affected: string[];
 
 export interface IngestHistory { deltas: DeltaReport[]; bulletins: Record<string, unknown>[] }
 
-export interface OutboxEntry { id?: string; name: string; kind: string; bytes: number; created_at?: string; synced_at?: string; seconds?: number }
-export interface Outbox { connected: boolean; pending: OutboxEntry[]; synced: OutboxEntry[] }
+export interface OutboxEntry { id?: string; name: string; kind: string; bytes: number; created_at?: string; synced_at?: string; seconds?: number | null; transfer_kind?: string; test_estimate_seconds?: number | null }
+export interface Outbox { link?: LinkState; connected: boolean; pending: OutboxEntry[]; synced: OutboxEntry[] }
 export interface SyncResult { sent: number; bytes: number; seconds: number }
 
 export interface ScoreItem { id: string; kind: string; what: string; found: boolean; finding_ids: string[] }
@@ -429,6 +514,34 @@ export interface DiscoveryScope {
   added_at: string;
   reason: string;
   scanner_target: string | null;
+}
+
+export interface ScopeRangeInput {
+  include: string[];
+  exclude?: string[];
+  allow_public?: boolean;
+  scanner_target?: string | null;
+  acknowledge_normalization?: boolean;
+}
+
+export interface ScopeRangePreview {
+  networks: string[];
+  network_count: number;
+  input_address_count: string;
+  excluded_address_count: string;
+  address_count: string;
+  truncated: boolean;
+  can_save: boolean;
+  blocking_reasons: string[];
+  warnings: string[];
+  normalizations: { field: 'include' | 'exclude'; input: string; normalized: string }[];
+  requires_normalization_acknowledgment: boolean;
+  limits: { max_entries: number; max_networks: number; max_addresses: number };
+}
+
+export interface SavedScopeRanges {
+  scopes: DiscoveryScope[];
+  preview: ScopeRangePreview;
 }
 
 export interface DiscoveryRun {

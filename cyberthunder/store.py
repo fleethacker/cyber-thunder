@@ -236,7 +236,9 @@ class StateStore:
                 continue
             findings = findings_from_doc(doc)
             terminal = run.get("status") in {None, "done"}
-            if not is_partial_run(run) and terminal:
+            # A requested full scan can still lack scanners, benchmarks or target coverage.
+            # Keep it selectable as the newest full run, but omissions cannot erase evidence.
+            if not is_partial_run(run) and terminal and run.get("coverage_incomplete") is not True:
                 merged = {fid: f for fid, f in merged.items() if self._cluster_scope(f) is not None}
                 can_remove = True
             if (run.get("trigger") == "cluster_vulnerabilities"

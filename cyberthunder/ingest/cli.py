@@ -52,8 +52,10 @@ def cmd_ingest(a: argparse.Namespace) -> int:
             s, t = rep["sizes"], rep["transfer"]
             print(f"{rep['benchmark_id']}: {rep['old_release'] or '(none)'} -> {rep['new_release']}  "
                   f"added {rep['counts']['added']}, changed {rep['counts']['changed']}, removed {rep['counts']['removed']}")
-            print(f"full {s['full_bytes']} B ({t['full_seconds']} s) vs delta {s['compressed_bytes']} B "
-                  f"{s['method']} ({t['delta_seconds']} s) at {t['link']['kbps']} kbps; {s['ratio']}x smaller")
+            timing = (f"TEST estimate {t['delta_seconds']} s at {t['link']['kbps']} kbps"
+                      if t["link"].get("mode") == "test" else "transfer time unknown; no network observation")
+            print(f"full {s['full_bytes']} B vs delta {s['compressed_bytes']} B "
+                  f"{s['method']}; {s['ratio']}x smaller; {timing}")
             print(f"delta id: {rep['id']}")
             if a.rescan and rep["rescan_rule_ids"]:
                 run = svc.rescan_for_delta(rep["id"], a.actor)
@@ -249,7 +251,8 @@ def cmd_link(a: argparse.Namespace) -> int:
         _print(svc.link_state().to_dict())
         return 0
     try:
-        st = svc.set_link(actor=a.actor, kbps=a.kbps, latency_ms=a.latency_ms, connected=a.connected)
+        st = svc.set_link(actor=a.actor, mode=a.mode, kbps=a.kbps, latency_ms=a.latency_ms,
+                          connected=a.connected, offline_override=a.offline, probe_enabled=a.probe_enabled)
     except ValueError as e:
         return _fail(str(e))
     _print(st.to_dict())
@@ -292,14 +295,17 @@ def register_cli(subparsers) -> None:
     p.add_argument("--out", help="manifest: file to write; fetch-manifest: folder to download into")
     p.set_defaults(fn=_dispatch_ingest)
 
-    p = subparsers.add_parser("link", help="emulated constrained link state")
+    p = subparsers.add_parser("link", help="observed link state and explicit test controls")
     p.add_argument("sub", choices=["show", "set"])
     p.add_argument("--kbps", type=float)
     p.add_argument("--latency-ms", dest="latency_ms", type=int)
+    p.add_argument("--mode", choices=["production", "test"])
+    p.add_argument("--offline", choices=["true", "false"], help="intentional operator offline override")
+    p.add_argument("--probe-enabled", choices=["true", "false"], help="enable probes for 15 minutes")
     p.add_argument("--connected", choices=["true", "false"])
     p.set_defaults(fn=cmd_link)
 
-    p = subparsers.add_parser("outbox", help="queue for shore, sent on reconnect")
+    p = subparsers.add_parser("outbox", help="local staging queue; network delivery is not implemented")
     p.add_argument("sub", choices=["list", "sync"])
-    p.add_argument("--force", action="store_true", help="send even when the link is marked down")
+    p.add_argument("--force", action="store_true", help="stage locally for manual courier even while offline")
     p.set_defaults(fn=cmd_outbox)

@@ -23,9 +23,8 @@ def test_ingest_stig_full_then_delta(ctx, bench_pair):
     assert cat.read_bytes() == new.read_bytes()
     s, t = rep["sizes"], rep["transfer"]
     assert s["ratio"] > 1 and s["compressed_bytes"] < s["full_bytes"]
-    assert t["link"]["kbps"] == 56.0
-    assert t["full_seconds"] == pytest.approx(s["full_bytes"] * 8 / 56000 + 0.5, abs=1e-3)
-    assert t["delta_seconds"] < t["full_seconds"]
+    assert t["link"]["kbps"] is None
+    assert t["full_seconds"] is None and t["delta_seconds"] is None
     stored = ctx.ingest.get_delta(rep["id"])
     assert stored["rescan_rule_ids"] == rep["rescan_rule_ids"]
     hist = ctx.ingest.history()["deltas"]
@@ -78,7 +77,8 @@ def test_outbox_enqueue_list_sync(ctx):
     assert len(lst["pending"]) == 2 and lst["synced"] == []
     res = ob.sync(actor="it2.smith")
     assert res["sent"] == 2 and res["bytes"] == 7011
-    assert res["seconds"] == pytest.approx(11 * 8 / 56000 + 0.5 + 7000 * 8 / 56000 + 0.5, abs=2e-3)
+    assert res["seconds"] >= 0 and res["transfer_kind"] == "local_move"
+    assert res["test_estimate_seconds"] is None
     lst = ob.list()
     assert lst["pending"] == [] and len(lst["synced"]) == 2
     assert (ctx.store.synced_dir / e["id"]).read_bytes() == b'{"open": 3}'
@@ -97,7 +97,7 @@ def test_outbox_disconnected_and_reconnect_flush(ctx):
     assert svc.link.last_flush["sent"] == 1
     assert svc.outbox.list()["pending"] == []
     # staying connected does not flush again
-    svc.set_link(actor="it2.smith", kbps=19.2)
+    svc.set_link(actor="it2.smith", mode="test", kbps=19.2)
     assert svc.link.last_flush is None
 
 
@@ -133,7 +133,7 @@ def test_cli_smoke(state_dir, bench_pair, capsys, monkeypatch):
     old, new = bench_pair
     assert _cli(state_dir, "ingest", "stig", str(new), "--old", str(old)) == 0
     out = capsys.readouterr().out
-    assert "added 1, changed 2, removed 1" in out and "kbps" in out
+    assert "added 1, changed 2, removed 1" in out and "transfer time unknown" in out
     assert _cli(state_dir, "ingest", "history") == 0
     assert json.loads(capsys.readouterr().out)["deltas"]
 
@@ -146,7 +146,7 @@ def test_cli_smoke(state_dir, bench_pair, capsys, monkeypatch):
     assert _cli(state_dir, "ingest", "bulletin", str(INGEST_FIXTURES / "iavm_openssh.json")) == 0
     assert json.loads(capsys.readouterr().out)["hosts_affected"] == ["web01"]
 
-    assert _cli(state_dir, "link", "set", "--kbps", "9.6", "--connected", "false") == 0
+    assert _cli(state_dir, "link", "set", "--mode", "test", "--kbps", "9.6", "--connected", "false") == 0
     assert json.loads(capsys.readouterr().out)["connected"] is False
     assert _cli(state_dir, "link", "show") == 0
     assert json.loads(capsys.readouterr().out)["kbps"] == 9.6

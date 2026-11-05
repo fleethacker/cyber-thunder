@@ -1,9 +1,14 @@
 # Finding and sorting results
 
-The Findings page searches the current findings picture: the latest full scan with newer targeted
-rescans and bulletin matches overlaid. Its baseline scan label identifies the full scan; it does not
-mean partial results have been excluded. Explicit historical scan IDs remain available through the
+The Findings page searches the current findings picture, combining scan observations, targeted rescans,
+bulletin matches and independently assessed cluster-image scopes. An incomplete scan retains older
+unassessed observations with their original times; a missing result is not a pass. Its baseline label identifies
+the latest full run, not a claim of complete coverage. Explicit historical scan IDs remain available through the
 [findings API](API.md#findings-query-contract).
+
+Click anywhere on a finding row, or focus it and press Enter/Space, to open details. Buttons, links and
+review controls inside the row keep their own actions. A verified fix and a rescan needed after rollback
+are shown separately from the immutable original scanner result; see [change history](CHANGE_HISTORY.md).
 
 ## Quick views and search
 

@@ -61,7 +61,10 @@ def test_outbox_entries_carry_the_documented_fields(client, ctx):
     pend, synced = ob["pending"], ob["synced"]
     assert pend[0]["created_at"] == "2026-11-04T10:00:00+00:00" and pend[0]["synced_at"] is None
     assert len({e["id"] for e in pend}) == 2          # unique keys even for a re-queued report name
-    assert synced[0]["seconds"] == 1.5 and synced[0]["created_at"] == "2026-11-04T09:00:00+00:00"
+    assert synced[0]["created_at"] == "2026-11-04T09:00:00+00:00"
+    # Old transfer_seconds values were modeled timings, never measured delivery.
+    assert synced[0]["seconds"] is None
+    assert synced[0]["test_estimate_seconds"] == 1.5
 
 
 def test_verified_fix_closes_the_finding(client, approved):

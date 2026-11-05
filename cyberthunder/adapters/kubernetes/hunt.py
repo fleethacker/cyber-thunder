@@ -3,12 +3,12 @@
   k8s:hunt:host-escape          privileged pod with a sensitive hostPath (/, runtime socket), any namespace except
                                 known kube-system components                                                     T1611
   k8s:hunt:untrusted-registry   image from a registry not in target.options.allowed_registries                    T1525
-  k8s:hunt:cronjob-download     CronJob that downloads or opens a shell to the network                            T1053.007
+  k8s:hunt:cronjob-download     CronJob template with network-fetch or shell indicators                           T1053.007
   k8s:hunt:admin-to-default     cluster-admin bound to a default service account or to anonymous users            T1078.004
   k8s:hunt:unexpected-system-pod  kube-system pod that is not a known control-plane / add-on component            T1610
   k8s:hunt:masquerade           pod named like a system daemon in a user namespace                               T1036.005
-  k8s:hunt:dashboard-exposed    kubernetes-dashboard reachable through a NodePort / LoadBalancer service         T1133
-  k8s:hunt:host-listener        hostNetwork pod with listening ports outside kube-system                          T1571
+  k8s:hunt:dashboard-exposed    dashboard-like NodePort / LoadBalancer service declaration                       T1133
+  k8s:hunt:host-listener        hostNetwork pod with declared ports outside kube-system                          T1571
 """
 from __future__ import annotations
 
@@ -48,36 +48,39 @@ RE_NETWORK = re.compile(r"(https?://|\b\d{1,3}(?:\.\d{1,3}){3}\b|/dev/tcp/)")
 
 def _rule(base: str, title: str, severity: str, technique: str, why: str, extra: tuple[str, ...] = ()) -> Rule:
     return Rule(base=f"k8s:hunt:{base}", title=title, severity=severity, refs=[technique, *extra],
-                description=f"ATT&CK {technique}. {why}", benchmark="Cyber Thunder hunt")
+                description=f"ATT&CK {technique}. {why} Configuration indicator only; validate ownership and purpose. "
+                            "This does not establish malicious activity or authorize object deletion.",
+                benchmark="Cyber Thunder hunt")
 
 
 HUNT_RULES = {
     "escape": _rule("host-escape", "Privileged pod mounts the host filesystem", "high", "T1611",
                     "A privileged container with the node root or the container runtime socket mounted can take "
                     "over the node (escape to host)."),
-    "registry": _rule("untrusted-registry", "Image pulled from an unapproved registry", "high", "T1525",
+    "registry": _rule("untrusted-registry", "Image references an unapproved registry", "high", "T1525",
                       "Workloads should only run images from the enclave's approved registries; an outside image "
                       "may be implanted (implant internal image)."),
-    "cronjob": _rule("cronjob-download", "CronJob downloads and runs code from the network", "high", "T1053.007",
-                     "A scheduled job that fetches and pipes remote content into a shell is a classic container "
-                     "orchestration persistence mechanism (scheduled task/job: container orchestration job)."),
+    "cronjob": _rule("cronjob-download", "CronJob template contains network-fetch or shell indicators", "high", "T1053.007",
+                     "The configured command matches network tools or a shell/network pattern. This may be legitimate "
+                     "scheduled work; it does not prove that content was fetched or executed."),
     "admin_default": _rule("admin-to-default", "cluster-admin granted to a default service account or anonymous users",
                            "high", "T1078.004",
-                           "Any pod in that namespace (or any unauthenticated client) now holds full cluster control "
-                           "(valid accounts: cloud accounts).", ("CIS-K8s-5.1.1",)),
+                           "Review the referenced role, subject credentials and effective permissions. RoleBindings "
+                           "grant within their namespace; ClusterRoleBindings grant cluster-wide. This declaration "
+                           "does not prove every pod or unauthenticated client can use the grant.", ("CIS-K8s-5.1.1",)),
     "system_pod": _rule("unexpected-system-pod", "Unexpected pod in kube-system", "high", "T1610",
-                        "kube-system should only hold control-plane and add-on components; an unknown pod there is a "
-                        "deployed container hiding among system workloads (deploy container). Also STIG CNTR-K8-001360.",
+                        "The pod does not match the configured system-component heuristic. It may be a legitimate "
+                        "add-on; check deployment ownership and provenance. Also STIG CNTR-K8-001360.",
                         ("CNTR-K8-001360", "V-242417", "CCI-001082")),
     "masquerade": _rule("masquerade", "Pod named like a system daemon in a user namespace", "medium", "T1036.005",
-                        "System component names outside kube-system are used to blend in "
-                        "(masquerading: match legitimate name or location)."),
-    "dashboard": _rule("dashboard-exposed", "Kubernetes dashboard exposed outside the cluster", "high", "T1133",
-                       "A dashboard on a NodePort or LoadBalancer is an external remote service into the cluster.",
+                        "A system-like name outside kube-system can warrant review but does not establish intent."),
+    "dashboard": _rule("dashboard-exposed", "Dashboard-like Service declares external exposure", "high", "T1133",
+                       "The name or selector resembles a dashboard and the Service type is NodePort or LoadBalancer. "
+                       "Application identity, authentication and actual external reachability are not established.",
                        ("CNTR-K8-000420", "V-242395")),
-    "listener": _rule("host-listener", "Host-network pod listening on node ports", "medium", "T1571",
-                      "A pod on the host network that declares ports listens directly on the node, outside network "
-                      "policy (non-standard port)."),
+    "listener": _rule("host-listener", "Host-network pod declares container ports", "medium", "T1571",
+                      "Host networking and port declarations warrant access review. No socket listening or network "
+                      "reachability was tested."),
 }
 
 
@@ -144,7 +147,8 @@ def hunt_cronjobs(target, data: KubeData) -> list[Finding]:
             if RE_DOWNLOAD.search(cmd) or (RE_SHELL_C.search(cmd) and RE_NETWORK.search(cmd)):
                 out.append(finding(target, HUNT_RULES["cronjob"], ObjRef(md["namespace"], "cronjob", md["name"]),
                                    f"{md['namespace']}/cronjob/{md['name']} schedule '{cj['spec'].get('schedule')}' "
-                                   f"container {c.get('name')}: {cmd[:300]}",
+                                   f"suspend={cj['spec'].get('suspend', False)}; "
+                                   f"container {c.get('name')}: {cmd[:300]}; existing Job/Pod activity not assessed",
                                    source=SOURCE, tags=["attack:T1053.007"]))
                 break
     return out
@@ -212,7 +216,7 @@ def hunt_host_listeners(target, data: KubeData) -> list[Finding]:
         ports = [str(p.get("containerPort")) for c in containers_of(w.pod_spec) for p in c.get("ports", []) or []]
         if ports:
             out.append(finding(target, HUNT_RULES["listener"], w.ref,
-                               f"{w.ref.key()}: hostNetwork=true, listening on {', '.join(ports)}",
+                               f"{w.ref.key()}: hostNetwork=true, declared container ports {', '.join(ports)}",
                                source=SOURCE, tags=["attack:T1571"]))
     return out
 

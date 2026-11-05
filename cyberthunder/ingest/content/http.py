@@ -7,6 +7,7 @@ Nothing fetched is executed or imported: callers open zips with zipfile and pars
 from __future__ import annotations
 
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,6 +29,50 @@ class HostNotAllowed(ContentNetworkError):
     pass
 
 
+class ObservedResponse:
+    """Count response-body bytes actually read, including failed/resumed requests."""
+
+    def __init__(self, response, observer, guard, facts, start):
+        self.response, self.observer, self.guard = response, observer, guard
+        self.facts, self.start = facts, start
+        self.bytes = 0
+        self.complete = facts['method'] == 'HEAD'
+        self.error = None
+        self.closed = False
+
+    def read(self, size=-1):
+        try:
+            if self.guard:
+                self.guard()
+            data = self.response.read(size)
+            self.bytes += len(data)
+            if not data or size < 0 or len(data) < size:
+                self.complete = True
+            if self.guard:
+                self.guard()
+            return data
+        except Exception as exc:
+            self.bytes += len(getattr(exc, 'partial', b''))
+            self.error = type(exc).__name__
+            raise
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            self.response.close()
+        finally:
+            status = self.facts['status']
+            success = self.complete and self.error is None and 200 <= status < 300
+            self.observer(**self.facts, application_bytes=self.bytes,
+                          elapsed_seconds=time.monotonic() - self.start, success=success,
+                          error=self.error or (None if success else 'incomplete_or_http_status'))
+
+    def __getattr__(self, name):
+        return getattr(self.response, name)
+
+
 def quote_url(url: str) -> str:
     """Percent-encode characters that cannot appear in a request line (DISA has a file name with a space)."""
     p = urllib.parse.urlsplit(url)
@@ -42,6 +87,8 @@ class _AllowListRedirects(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         self.client.check_url(urllib.parse.urljoin(req.full_url, newurl))
+        if self.client.before_request:
+            self.client.before_request()
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -59,6 +106,9 @@ class ContentClient:
         self.allow_http = allow_http
         self.timeout = timeout
         self.user_agent = user_agent
+        self.observer = None
+        self.before_request = None
+        self.test_mode = lambda: False
         self.proxies = proxies          # None: the environment's HTTPS_PROXY / NO_PROXY, as for any tool
         self.opener = opener if opener is not None else self.build_opener()
 
@@ -92,6 +142,27 @@ class ContentClient:
     # -- requests -------------------------------------------------------------------------------
     def open(self, method: str, url: str, *, headers: dict | None = None, data: bytes | None = None,
              timeout: float | None = None):
+        self.check_url(url)
+        if self.before_request:
+            self.before_request()
+        started = time.monotonic()
+        test_mode = self.test_mode()
+        try:
+            status, hdrs, response = self._open(method, url, headers=headers, data=data, timeout=timeout)
+        except Exception as exc:
+            if self.observer:
+                self.observer(endpoint=url, method=method, status=None, application_bytes=0,
+                              elapsed_seconds=time.monotonic() - started, success=False,
+                              error=type(exc).__name__, test_mode=test_mode)
+            raise
+        if self.observer:
+            response = ObservedResponse(response, self.observer, self.before_request,
+                {'endpoint': getattr(response, 'url', None) or url, 'method': method,
+                 'status': status, 'test_mode': test_mode}, started)
+        return status, hdrs, response
+
+    def _open(self, method: str, url: str, *, headers: dict | None = None, data: bytes | None = None,
+              timeout: float | None = None):
         """(status, headers with lower-case names, response). Non-2xx answers come back too, not raised."""
         self.check_url(url)
         h = {"User-Agent": self.user_agent}
@@ -132,6 +203,12 @@ class ContentClient:
                     raise ContentNetworkError(f"{urllib.parse.urlsplit(url).hostname}: {e}") from None
                 if len(body) > max_bytes:
                     raise ContentNetworkError(f"{url} answered more than {max_bytes} bytes")
+            if isinstance(resp, ObservedResponse):
+                resp.complete = True
+        except Exception as exc:
+            if isinstance(resp, ObservedResponse):
+                resp.error = type(exc).__name__
+            raise
         finally:
             try:
                 resp.close()

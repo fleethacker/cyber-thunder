@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Callable, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from cyberthunder.api.util import require_actor
 from cyberthunder.control.killswitch import KillSwitchEngaged
@@ -28,6 +28,20 @@ class ScopeIn(BaseModel):
 class ScopesIn(BaseModel):
     scopes: list[ScopeIn] = Field(default_factory=list)
     reason: str = ""
+    acknowledge_normalization: StrictBool = False
+
+
+class ScopeRangesIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    include: list[str] = Field(max_length=128)
+    exclude: list[str] = Field(default_factory=list, max_length=128)
+    allow_public: StrictBool = False
+    scanner_target: str | None = Field(default=None, max_length=64)
+    acknowledge_normalization: StrictBool = False
+
+
+class SaveScopeRangesIn(ScopeRangesIn):
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class SweepIn(BaseModel):
@@ -86,8 +100,30 @@ def overview(request: Request):
 def put_scopes(body: ScopesIn, request: Request, actor: str = Depends(require_actor)):
     actor = _human(actor)
     svc = _svc(request)
-    saved = _call(lambda: svc.set_scopes([s.model_dump() for s in body.scopes], actor, body.reason))
+    saved = _call(lambda: svc.set_scopes([s.model_dump() for s in body.scopes], actor, body.reason,
+                                       acknowledge_normalization=body.acknowledge_normalization))
     return {"scopes": [s.to_dict() for s in saved]}
+
+
+@router.post("/scopes/preview")
+def preview_scope_ranges(body: ScopeRangesIn):
+    from cyberthunder.discovery.ranges import preview_ranges
+    return _call(lambda: preview_ranges(**body.model_dump()))
+
+
+@router.put("/scopes/ranges")
+def save_scope_ranges(body: SaveScopeRangesIn, request: Request, actor: str = Depends(require_actor)):
+    from cyberthunder.discovery.ranges import preview_ranges
+    actor = _human(actor)
+    data = body.model_dump(exclude={"reason"})
+    preview = _call(lambda: preview_ranges(**data))
+    if not preview["can_save"]:
+        raise HTTPException(400, "; ".join(preview["blocking_reasons"]))
+    svc = _svc(request)
+    scopes = [{"cidr": cidr, "allow_public": body.allow_public, "scanner_target": body.scanner_target}
+              for cidr in preview["networks"]]
+    saved = _call(lambda: svc.set_scopes(scopes, actor, body.reason, range_input=data))
+    return {"scopes": [s.to_dict() for s in saved], "preview": preview}
 
 
 @router.post("/sweep", status_code=202)

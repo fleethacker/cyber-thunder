@@ -2,7 +2,7 @@
 
   delta.py     what changed between two STIG releases, and which rules need a rescan
   compress.py  shrink what crosses the link (lzma, zlib, or a site compressor via CT_COMPRESSOR)
-  link.py      emulated link state (kbps, latency, connected) and transfer-time estimates
+  link.py      observed endpoint state, offline override and explicit test estimates
   bulletin.py  IAVM / CVE bulletin parsing and matching against collected package inventories
   outbox.py    reports and results queued until the link comes back
   service.py   IngestService, the single entry point the CLI and API use
