@@ -5,6 +5,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api, errorText } from '../api/client';
 import type { AuditRecord, AuditVerify } from '../api/types';
 import { ErrorBox, HashText, JsonView, Loading, PageTitle } from '../components/common';
+import { AuditSubject } from '../components/AuditSubject';
 import { fmtTime } from '../lib/format';
 import { useAppState, useAuditListener } from '../state/AppState';
 
@@ -32,6 +33,7 @@ export default function Audit() {
   const [verifying, setVerifying] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [oldest, setOldest] = useState(0);
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
   const loadTail = async () => {
     setError(null);
@@ -61,14 +63,18 @@ export default function Audit() {
   }, [follow, buffer]);
 
   const loadOlder = async () => {
-    if (oldest <= 0) return;
+    if (oldest <= 0 || loadingOlder) return;
+    setLoadingOlder(true);
     const after = Math.max(0, oldest - WINDOW);
     try {
       const page = await api.audit({ after_seq: after, limit: oldest - after });
       setRecords((cur) => [...cur, ...page.records.slice().reverse()]);
       setOldest(after);
+      setError(null);
     } catch (e) {
       setError(errorText(e));
+    } finally {
+      setLoadingOlder(false);
     }
   };
 
@@ -136,6 +142,7 @@ export default function Audit() {
         <Switch label="Auto-follow" checked={follow} onChange={(e) => setFollow(e.currentTarget.checked)} mb={8} />
         {!follow && buffer.length > 0 && <Button size="xs" variant="light" onClick={() => setFollow(true)} mb={4}>{buffer.length} new</Button>}
       </Group>
+      <Text size="xs" c="dimmed">Filters search loaded records. Load older records to find earlier changes. Open a proposal link to review its current state and available actions.</Text>
       {error && <ErrorBox error={error} onRetry={() => void loadTail()} />}
       {!loaded ? (!error && <Loading what="Reading the audit chain" />) : shown.length === 0 ? (
         <Text c="dimmed">No audit records{records.length ? ' match these filters' : ' yet'}.</Text>
@@ -155,7 +162,7 @@ export default function Audit() {
                       <Table.Td><Text size="sm">{r.actor}</Text></Table.Td>
                       <Table.Td><Text size="sm" ff="monospace">{r.action}</Text></Table.Td>
                       <Table.Td><Badge color={outcomeColor(r.outcome)} variant="light">{r.outcome}</Badge></Table.Td>
-                      <Table.Td><Text size="sm" ff="monospace">{r.subject ?? '-'}</Text></Table.Td>
+                      <Table.Td><AuditSubject record={r} /></Table.Td>
                       <Table.Td><HashText value={r.hash} /></Table.Td>
                     </Table.Tr>
                     {expanded === r.seq && (
@@ -173,9 +180,9 @@ export default function Audit() {
               </Table.Tbody>
             </Table>
           </ScrollArea>
-          {oldest > 0 && <Group justify="center" p="sm"><Button variant="subtle" onClick={() => void loadOlder()}>Load older records</Button></Group>}
         </Paper>
       )}
+      {loaded && oldest > 0 && <Group justify="center" p="sm"><Button variant="subtle" loading={loadingOlder} onClick={() => void loadOlder()}>Load older records</Button></Group>}
     </Stack>
   );
 }
