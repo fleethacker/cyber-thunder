@@ -6,6 +6,7 @@ import Audit from './pages/Audit';
 import Commander from './pages/Commander';
 import Decisions from './pages/Decisions';
 import Findings from './pages/Findings';
+import Mission from './pages/Mission';
 import Reports from './pages/Reports';
 import Scans from './pages/Scans';
 import Settings from './pages/Settings';
@@ -15,6 +16,7 @@ export default function App() {
     <Shell>
       <Routes>
         <Route path="/" element={<Decisions />} />
+        <Route path="/mission" element={<Mission />} />
         <Route path="/findings" element={<Findings />} />
         <Route path="/assets" element={<Assets />} />
         <Route path="/scans" element={<Scans />} />

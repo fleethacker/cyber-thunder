@@ -70,3 +70,34 @@ class QueueBody(BaseModel):
 
 class DemoToggleBody(BaseModel):
     simulate_verify_fail_next: bool
+
+
+class DiscoverBody(BaseModel):
+    """A system already in the inventory. `target` is accepted as the same field."""
+    system: str | None = None
+    target: str | None = None
+
+
+class ScanTargetBody(BaseModel):
+    target: str | None = None
+    modules: list[str] | None = None
+
+
+class GenerateBody(BaseModel):
+    """Scan results, a `{scan_id, target, finding_ids}` object, or the body returned by POST /scan."""
+    results: dict | None = None
+
+
+class ApplyChecklistsBody(BaseModel):
+    targets: list[str] | None = None
+    checklists: list[str] | None = None
+
+
+class RollbackBody(BaseModel):
+    targets: list[str] | None = None
+    versions: list[str] | None = None
+    version: str | list[str] | None = None
+
+
+class TargetReportBody(BaseModel):
+    target: str | None = None
