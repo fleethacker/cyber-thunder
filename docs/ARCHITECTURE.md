@@ -49,7 +49,7 @@ stream the UI tails.
 | `cyberthunder/report/` | commander one-pager, POA&M CSV, CKLB write-back, path-to-fleet, friction log, answer-key score | built |
 | `cyberthunder/api/` | FastAPI app factory, `routes/<area>.py`, SSE audit stream, static UI | built |
 | `cyberthunder/ui/` | React + TypeScript + Mantine single-page app, built to `ui/dist` and served offline | built |
-| `cyberthunder/store.py` | on-disk state layout | built |
+| `cyberthunder/store.py`, `cyberthunder/state/` | state layout; documents behind a json-files or SQLite backend, files beside them ([STATE.md](STATE.md)) | built |
 | `cyberthunder/context.py` | `AppContext`: wires everything; CLI and API share it | built |
 | `cyberthunder/cli.py` | `cyberthunder <cmd>`; modules add commands via `register_cli(subparsers)` | built |
 | `range/` | local range: Rocky 9 VM notes, seed scripts, sample device configs/logs, `answer_key.json` | partial |
