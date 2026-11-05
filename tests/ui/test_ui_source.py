@@ -88,6 +88,7 @@ def test_client_calls_match_api_routes(state_dir, monkeypatch):
 def test_client_covers_the_discovery_workflow():
     client = _client_routes()
     for route in [("GET", "/discovery"), ("PUT", "/discovery/scopes"), ("POST", "/discovery/sweep"),
+                  ("POST", "/discovery/scopes/preview"), ("PUT", "/discovery/scopes/ranges"),
                   ("GET", "/discovery/runs/{}"), ("GET", "/discovery/assets"),
                   ("POST", "/discovery/assets/{}/accept"), ("POST", "/discovery/assets/{}/ignore"),
                   ("GET", "/discovery/findings")]:
@@ -100,9 +101,12 @@ def _tsx_text() -> str:
 
 def test_discovery_panel_is_wired_to_the_routes():
     panel = (SRC / "components" / "DiscoveryPanel.tsx").read_text(encoding="utf-8")
-    for call in ("api.sweep(", "api.putDiscoveryScopes(", "api.discoveredAssets(", "api.acceptAsset(",
+    for call in ("api.sweep(", "api.discoveredAssets(", "api.acceptAsset(",
                  "api.ignoreAsset(", "api.discoveryFindings(", "api.discoveryRun("):
         assert call in panel, call
+    assert "<ScopeEditor" in panel
+    editor = (SRC / "components" / "ScopeEditor.tsx").read_text(encoding="utf-8")
+    assert "api.previewScopeRanges(" in editor and "api.saveScopeRanges(" in editor
     assert "in_scope: scope === 'in'" in panel          # explicit decision, never a default
     assert "placeholder" not in panel.splitlines()[0].lower()
 

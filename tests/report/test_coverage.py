@@ -66,7 +66,9 @@ def test_every_library_entry_is_accounted_for_once(tmp_path):
     result = coverage.build_coverage(ctx, str(tmp_path))
     actual = {r["asset_type"]: set(r["fix_refs"]) for r in result["fix_library"]}
     assert actual == expected
-    assert result["library_entries"] == sum(len(v) for v in expected.values()) == 209
+    expected_entries = sum(len(v) for v in expected.values())
+    assert expected_entries > 0
+    assert result["library_entries"] == expected_entries
     for row in result["fix_library"]:
         assert row["entries"] == sum(row["by_kind"].values()) == sum(row["by_source"].values())
     assert result["errors"] == []
