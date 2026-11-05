@@ -118,7 +118,7 @@ def test_collect_facts(adapter, target, transport, tmp_path):
 
 
 # -- remediation ----------------------------------------------------------------------------------
-@pytest.mark.parametrize("item_id", ["M1", "I1", "M4", "I2"])
+@pytest.mark.parametrize("item_id", ["M1", "M4"])
 def test_apply_verify_rollback(adapter, target, transport, tmp_path, item_id):
     item = ITEMS[item_id]
     lib = FixLibrary(adapter.fixes())
@@ -162,7 +162,7 @@ def test_privileged_patch_rolls_pods(adapter, target, transport, tmp_path):
 
 
 def test_verify_fails_when_nothing_changed(adapter, target, transport, tmp_path):
-    item = ITEMS["I2"]
+    item = ITEMS["M1"]
     finding = find_item(detect(adapter, target, transport, tmp_path), item)
     fix = FixLibrary(adapter.fixes()).resolve(finding)
     v = adapter.verify(target, transport, fix, finding)

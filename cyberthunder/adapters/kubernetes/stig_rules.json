@@ -149,7 +149,7 @@
   "severity": "medium",
   "title": "Kubernetes dashboard must not be enabled",
   "check_summary": "Any pod labeled k8s-app=kubernetes-dashboard in any namespace is a finding.",
-  "fix_summary": "Delete the kubernetes-dashboard deployment in kube-system.",
+  "fix_summary": "Validate dashboard identity, ownership and access dependencies. Review private authenticated access; if dashboard absence is required, plan a separately approved retirement with replacement access and recovery, or document an exception. No blanket namespace or data deletion is authorized.",
   "object_evidence": "pod.metadata.labels[k8s-app]=kubernetes-dashboard",
   "cci": [
    "CCI-000213"

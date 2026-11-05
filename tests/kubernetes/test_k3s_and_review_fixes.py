@@ -177,4 +177,4 @@ def test_bare_pod_findings_resolve_to_runbooks(state_dir, tmp_path):
     dep = next(x for x in findings if x.rule_version == "k8s:cis:5.2.2" and "apps/deployment/web-frontend" in x.rule_id)
     assert lib.resolve(dep).fix_ref == "k8s:fix:deployment-drop-privileged"
     escape = next(x for x in findings if x.rule_version == "k8s:hunt:host-escape")
-    assert lib.resolve(escape).fix_ref == "k8s:fix:delete-pod"
+    assert lib.resolve(escape).fix_ref == "k8s:runbook:investigate-workload"

@@ -464,7 +464,7 @@ def bindings(data: KubeData) -> Iterator[tuple[ObjRef, dict]]:
 
 def check_rbac(target, data: KubeData) -> list[Finding]:
     """cluster-admin to a (non-default) service account, and anonymous subjects bound to anything but cluster-admin.
-    The cluster-admin-to-default / anonymous case is an intrusion indicator and is reported by the hunt module."""
+    The cluster-admin-to-default / anonymous case is an ownership/privilege review indicator in the hunt module."""
     out: list[Finding] = []
     for ref, b in bindings(data):
         role = (b.get("roleRef") or {}).get("name")

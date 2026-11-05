@@ -109,9 +109,17 @@ class KubernetesAdapter(Adapter):
             if not r.ok:
                 col.errors.append(f"{cmd}: exit {r.exit_code}: {(r.stderr or r.stdout).strip()[:200]}")
                 continue
-            if _json(r.stdout) is None:
+            document = _json(r.stdout)
+            if not isinstance(document, dict):
                 col.errors.append(f"{cmd}: output is not JSON")
                 continue
+            if name != "version":
+                if not isinstance(document.get("items"), list) or any(not isinstance(item, dict) for item in document["items"]):
+                    col.errors.append(f"{cmd}: output is not a Kubernetes object list")
+                    continue
+                metadata = document.get("metadata") or {}
+                if isinstance(metadata, dict) and metadata.get("continue"):
+                    col.errors.append(f"{cmd}: object list is incomplete (continuation token present)")
             p = workdir / f"{name}.json"
             p.write_text(r.stdout, encoding="utf-8")
             col.artifacts[name] = str(p)
@@ -205,6 +213,10 @@ class KubernetesAdapter(Adapter):
         return ref, restore
 
     def capture_before_state(self, target, transport, fix: FixEntry, finding: Finding, dest: Path) -> BeforeState:
+        # Reject before returning a snapshot: the engine must not attempt automatic rollback for a
+        # blocked historical payload that never ran. Guard the stable ref, not the mutable payload.
+        if reason := fixes.retired_reason(fix):
+            raise ValueError(reason)
         dest = Path(dest)
         dest.mkdir(parents=True, exist_ok=True)
         before = BeforeState(target_id=target.id, fix_ref=fix.fix_ref, dir=str(dest))
@@ -233,6 +245,8 @@ class KubernetesAdapter(Adapter):
         return before
 
     def apply(self, target, transport, fix: FixEntry, finding: Finding, before: BeforeState) -> ApplyResult:
+        if reason := fixes.retired_reason(fix):
+            return ApplyResult(ok=False, changed=False, output=reason)
         if fix.kind == "runbook":
             return ApplyResult(ok=False, changed=False,
                                output="Runbook fix: the tool does not change the cluster. The operator performs these "
@@ -258,25 +272,62 @@ class KubernetesAdapter(Adapter):
                                    details={"ran": ran, "exit_code": r.exit_code, "object": ref.to_str()})
         return ApplyResult(ok=True, changed=True, output="\n".join(outputs), details={"ran": ran, "object": ref.to_str()})
 
-    def _redetect(self, target, transport) -> tuple[list[Finding], list[str]]:
+    def _redetect(self, target, transport, expected_ref: ObjRef | None = None) -> tuple[list[Finding], list[str]]:
         with tempfile.TemporaryDirectory(prefix="ct-k8s-verify-") as tmp:
             col = self.collect(target, transport, Path(tmp))
+            if expected_ref is not None:
+                # The preliminary object GET and collection are separate reads. A disappearing object
+                # or container must not turn an unevaluated rule into a passing configuration check.
+                data = checks.KubeData(col)
+                present = any(item.get("metadata", {}).get("name") == expected_ref.name
+                              and item.get("metadata", {}).get("namespace") == expected_ref.namespace
+                              for item in data.items(expected_ref.plural))
+                if not present:
+                    col.errors.append(f"original object {expected_ref.key()} is absent from the verification collection")
+                elif expected_ref.container:
+                    containers = [c for workload in checks.workloads(data)
+                                  if workload.ref.key() == expected_ref.key()
+                                  for c in checks.containers_of(workload.pod_spec)]
+                    if not any(c.get("name") == expected_ref.container for c in containers):
+                        col.errors.append(f"original container {expected_ref.to_str()} is absent from the verification collection")
             found = self.run_detection(target, col)
             return found, list(col.errors)
 
     def verify(self, target, transport, fix: FixEntry, finding: Finding) -> VerifyResult:
+        if fixes.retired_reason(fix) or fix.fix_ref in fixes.REVIEW_FIXES:
+            return VerifyResult(ok=False, rule_passed=None, health=HealthResult(ok=False),
+                                evidence="Owner investigation and service validation required. Containment or object "
+                                         "absence does not prove remediation; application health was not assessed.",
+                                details={"manual_review": True, "application_health": "not assessed"})
         health = self.health_check(target, transport)
-        found, errors = self._redetect(target, transport)
+        try:
+            ref = ref_from_finding(finding)
+        except ValueError:
+            return VerifyResult(ok=False, rule_passed=None, health=health,
+                                evidence="Cannot identify the original object for verification.")
+        present = transport.run(ObjRef(ref.namespace, ref.kind, ref.name).get_command())
+        if not present.ok or not _json(present.stdout):
+            return VerifyResult(ok=False, rule_passed=None, health=health,
+                                evidence="Original object is absent or unreadable; disappearance does not prove "
+                                         "remediation or application health.",
+                                details={"application_health": "not assessed"})
+        found, errors = self._redetect(target, transport, ref)
         still = [f for f in found if f.rule_id == finding.rule_id and f.is_open]
-        if errors and not found:
+        unreviewed = [f for f in found if f.rule_id == finding.rule_id and not f.is_open]
+        if errors:
             rule_passed = None
             evidence = "could not re-collect: " + "; ".join(errors[:3])
+        elif unreviewed:
+            rule_passed = None
+            evidence = "The original rule was not evaluated as an open finding; review its current status manually."
         else:
             rule_passed = not still
             evidence = (f"{finding.rule_id} no longer detected" if rule_passed
                         else f"still detected: {still[0].evidence}")
         return VerifyResult(ok=bool(rule_passed) and health.ok, rule_passed=rule_passed, health=health,
-                            evidence=evidence, details={"rescan_findings": len(found), "errors": errors[:5]})
+                            evidence=evidence + "; configuration check only, application health not assessed",
+                            details={"rescan_findings": len(found), "errors": errors[:5],
+                                     "application_health": "not assessed"})
 
     def health_check(self, target, transport) -> HealthResult:
         res: list[HealthCheck] = []
@@ -301,6 +352,9 @@ class KubernetesAdapter(Adapter):
         if fix.kind == "runbook":
             return RollbackResult(ok=True, output="Runbook fix: nothing was changed by the tool. Manual rollback:\n"
                                   + fix.rollback_plan_text(), details={"runbook": True})
+        if fixes.retired_reason(fix) and not before.extra.get("existed"):
+            return RollbackResult(ok=False, output="Retired deletion fix has no previously existing object to restore; "
+                                  "rollback will not delete a current object.")
         restore_s = before.extra.get("restore_ref")
         if not restore_s:
             return RollbackResult(ok=False, output="before-state has no saved object reference; cannot roll back")
@@ -330,7 +384,8 @@ class KubernetesAdapter(Adapter):
             outputs.append(f"$ {rc}\n{r2.stdout}{r2.stderr}")
             if not r2.ok:
                 return RollbackResult(ok=False, output="\n".join(outputs), details={"object": restore.to_str()})
-        return RollbackResult(ok=True, output="\n".join(outputs), details={"object": restore.to_str()})
+        return RollbackResult(ok=True, output="\n".join(outputs) + "\n" + fixes.RECOVERY_LIMITS,
+                              details={"object": restore.to_str(), "application_health": "not assessed"})
 
 
 def _filter(findings: list[Finding], rule_filter: list[str] | None) -> list[Finding]:
