@@ -5,6 +5,7 @@ import asyncio
 import csv
 import io
 import json
+import os
 import threading
 from pathlib import Path
 from unittest.mock import Mock
@@ -30,6 +31,7 @@ URL = "/api/v1/ingest/scanner"
 
 @pytest.fixture
 def scanner_client(ctx, monkeypatch):
+    assert ctx.store.info()["backend"] == os.environ["CT_STATE_BACKEND"]
     ctx.ingest = IngestService(ctx)
     ctx.reports = ReportService(ctx)
     for tid, kind in (("workstation", "windows"), ("server", "linux"), ("other", "linux")):
@@ -64,6 +66,15 @@ def seed_full(ctx):
     ctx.store.save_scan_run(ScanRun(id="baseline", targets=["other"], status="done",
                                    started_at="2020-01-01T00:00:00+00:00").to_dict())
     return finding
+
+
+def state_snapshot(ctx):
+    """Observe documents through the selected store; database file layout is not application state."""
+    store = ctx.store
+    paths = set(store.list_json(store.root)) | set(store.list_json(store.root, "**/*.json"))
+    return {"documents": {str(p.relative_to(store.root)): store.read_json(p) for p in paths},
+            "audit": list(ctx.audit.records()), "targets": [t.to_dict() for t in ctx.inventory.all()],
+            "kill": ctx.killswitch.status()}
 
 
 @pytest.mark.parametrize("entry", ["api", "cli"])
@@ -251,20 +262,19 @@ def nested_upload(depth, *, kind="multipart/mixed"):
                                        (1200, "message/rfc822")])
 def test_nested_mime_is_refused_without_writes(scanner_client, ctx, depth, kind):
     seed_full(ctx)
-    before = {p.relative_to(ctx.store.root): p.read_bytes() for p in ctx.store.root.rglob("*") if p.is_file()}
+    before = state_snapshot(ctx)
     body = nested_upload(depth, kind=kind)
     assert len(body) < imports.MAX_UPLOAD_BYTES
     response = scanner_client.post(URL, headers={**ACTOR, "Content-Type": "multipart/form-data; boundary=outer"},
                                    content=body)
     assert response.status_code == 400 and "private-secret" not in response.text
-    assert {p.relative_to(ctx.store.root): p.read_bytes()
-            for p in ctx.store.root.rglob("*") if p.is_file()} == before
+    assert state_snapshot(ctx) == before
 
 
 @pytest.mark.parametrize("reverse", [False, True])
 def test_conflicting_compliance_upload_preserves_current_picture(scanner_client, ctx, reverse):
     prior = seed_full(ctx)
-    before = {p.relative_to(ctx.store.root): p.read_bytes() for p in ctx.store.root.rglob("*") if p.is_file()}
+    before = state_snapshot(ctx)
     results = ["PASSED", "FAILED"]
     if reverse:
         results.reverse()
@@ -279,8 +289,7 @@ def test_conflicting_compliance_upload_preserves_current_picture(scanner_client,
     response = upload(scanner_client, data, {"one": "workstation"}, include_info="true")
     assert response.status_code == 400 and "conflicting compliance" in response.json()["detail"]
     assert scanner_client.get("/api/v1/findings").json()["findings"][0]["id"] == prior.id
-    assert {p.relative_to(ctx.store.root): p.read_bytes()
-            for p in ctx.store.root.rglob("*") if p.is_file()} == before
+    assert state_snapshot(ctx) == before
 
 
 def flat_upload(data, extra_headers=b""):
@@ -307,12 +316,11 @@ def test_malformed_flat_form_is_bounded_and_does_not_write(scanner_client, ctx, 
         body = b"private-secret\r\n" + body
     elif case == "epilogue":
         body += b"private-secret"
-    before = {p.relative_to(ctx.store.root): p.read_bytes() for p in ctx.store.root.rglob("*") if p.is_file()}
+    before = state_snapshot(ctx)
     response = scanner_client.post(URL, headers={**ACTOR, "Content-Type": "multipart/form-data; boundary=flat"},
                                    content=body)
     assert response.status_code == 400 and "private-secret" not in response.text
-    assert {p.relative_to(ctx.store.root): p.read_bytes()
-            for p in ctx.store.root.rglob("*") if p.is_file()} == before
+    assert state_snapshot(ctx) == before
 
 
 def test_flat_form_preserves_boundary_prefix_in_xml():

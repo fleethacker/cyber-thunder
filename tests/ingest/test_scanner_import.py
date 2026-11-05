@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock
@@ -23,6 +24,7 @@ ACTOR = "IT2 Rivera"
 
 @pytest.fixture
 def passive(ctx, monkeypatch):
+    assert ctx.store.info()["backend"] == os.environ["CT_STATE_BACKEND"]
     for tid, kind in (("workstation", "windows"), ("server", "linux"), ("other", "linux")):
         ctx.inventory.add(Target(tid, tid, kind, transport="fixture", in_scope=False))
     ctx.inventory.save()
@@ -52,6 +54,15 @@ def seed(ctx, *, partial=False, host="other", rule="unrelated", run_id="baseline
 def run_import(ctx, data=None, mapping=None, **kwargs):
     return ctx.ingest.import_scanner(SAMPLE.read_bytes() if data is None else data,
                                      MAPPING if mapping is None else mapping, actor=ACTOR, **kwargs)
+
+
+def state_snapshot(ctx):
+    """Compare logical state, not a backend's database pages, journals or checkpoint files."""
+    store = ctx.store
+    paths = set(store.list_json(store.root)) | set(store.list_json(store.root, "**/*.json"))
+    return {"documents": {str(p.relative_to(store.root)): store.read_json(p) for p in paths},
+            "audit": list(ctx.audit.records()), "targets": [t.to_dict() for t in ctx.inventory.all()],
+            "kill": ctx.killswitch.status()}
 
 
 def test_fixture_maps_hosts_cves_ports_and_provenance(passive):
@@ -97,6 +108,7 @@ def test_repeat_is_idempotent_across_contexts_and_mapping_order(passive):
     first = run_import(passive)
     stored = [f.to_dict() for f in passive.store.load_findings()]
     again = AppContext(Settings(state_dir=passive.store.root, llm_backend="template"))
+    assert again.store.info()["backend"] == passive.store.info()["backend"]
     second = run_import(again, mapping=dict(reversed(list(MAPPING.items()))))
     assert second == dict(first, repeated=True)
     assert len(again.store.list_scan_runs()) == 1
@@ -224,9 +236,11 @@ def test_failure_before_publication_preserves_current_results(passive, monkeypat
 def test_kill_engaged_after_findings_write_prevents_publication_and_retry_recovers(passive, monkeypatch):
     original = seed(passive)
     save = passive.store.save_findings
+    written_ids = []
 
     def stop_after_findings(*args, **kwargs):
         save(*args, **kwargs)
+        written_ids.append(args[0])
         passive.killswitch.engage(ACTOR, "stop before publication")
 
     monkeypatch.setattr(passive.store, "save_findings", stop_after_findings)
@@ -234,10 +248,15 @@ def test_kill_engaged_after_findings_write_prevents_publication_and_retry_recove
         run_import(passive)
     assert len(passive.store.list_scan_runs()) == 1
     assert [f.id for f in passive.store.current_findings()] == [original.id]
+    (unpublished_id,) = written_ids
+    assert passive.store.load_scan_run(unpublished_id) is None
+    assert len(passive.store.load_findings(unpublished_id)) == 5
+    unpublished = passive.store.read_json(passive.store.scans_dir / unpublished_id / "findings.json")
+    assert unpublished["meta"]["imported_count"] == 5
     monkeypatch.setattr(passive.store, "save_findings", save)
     passive.killswitch.release(ACTOR)
     result = run_import(passive)
-    assert not result["repeated"]
+    assert result["scan_id"] == unpublished_id and not result["repeated"]
     assert len(passive.store.current_findings()) == 6
 
 
@@ -282,8 +301,7 @@ def compliance_duplicates(results, *, stig=True):
 def test_conflicting_compliance_results_are_rejected_before_merge_or_writes(passive, monkeypatch, reverse, stig,
                                                                            outcomes):
     seed(passive)
-    before = {p.relative_to(passive.store.root): p.read_bytes()
-              for p in passive.store.root.rglob("*") if p.is_file()}
+    before = state_snapshot(passive)
     parser = Mock(side_effect=AssertionError("conflicts must be rejected before the merge parser"))
     monkeypatch.setattr(imports, "parse_nessus", parser)
     results = [(0, outcomes[0], outcomes[1]), (445, outcomes[2], outcomes[3])]
@@ -293,8 +311,7 @@ def test_conflicting_compliance_results_are_rejected_before_merge_or_writes(pass
         run_import(passive, compliance_duplicates(results, stig=stig), {"audit-host": "workstation"},
                    include_info=True)
     parser.assert_not_called()
-    assert {p.relative_to(passive.store.root): p.read_bytes()
-            for p in passive.store.root.rglob("*") if p.is_file()} == before
+    assert state_snapshot(passive) == before
 
 
 def test_filtering_info_does_not_hide_a_compliance_conflict(passive):
@@ -341,35 +358,24 @@ def test_audit_contains_digests_and_counts_not_source_secrets(passive):
     assert res["source_sha256"] in audit
 
 
-def test_public_store_methods_work_with_instance_document_backend(passive):
-    class DocumentStore(StateStore):
-        def __init__(self, root):
-            self.docs, self.saved = {}, {}
-            super().__init__(root)
-
-        def read_json(self, path, default=None):
-            return self.docs.get(str(path), default)
-
-        def write_json(self, path, data):
-            self.docs[str(path)] = data
-
-        def save_scan_run(self, run):
-            self.write_json(self.scans_dir / run["id"] / "run.json", run)
-
-        def save_findings(self, scan_id, findings, meta=None):
-            self.saved[scan_id] = [Finding.from_dict(f.to_dict()) for f in findings]
-
-        def load_findings(self, scan_id=None):
-            return self.saved.get(scan_id, [])
-
-        def list_scan_runs(self):
-            return sorted(self.docs.values(), key=lambda r: r["started_at"], reverse=True)
-
-    passive.store = DocumentStore(passive.store.root)
+def test_public_store_documents_persist_on_selected_backend(passive):
     first = run_import(passive)
+    path = passive.store.scans_dir / first["scan_id"] / "findings.json"
+    doc = passive.store.read_json(path)
+    assert doc["meta"]["host_map"] == MAPPING
+    assert doc["meta"]["sha256"] == first["source_sha256"]
+    assert doc["meta"]["imported_count"] == len(doc["findings"]) == 5
+    reopened = StateStore(passive.store.root)
+    try:
+        assert reopened.info()["backend"] == os.environ["CT_STATE_BACKEND"]
+        assert reopened.read_json(path) == doc
+        assert path in reopened.list_json(reopened.scans_dir, "*/findings.json")
+        assert reopened.load_scan_run(first["scan_id"])["findings_count"] == 5
+        assert {f.id for f in reopened.load_findings()} == {f["id"] for f in doc["findings"]}
+    finally:
+        reopened.close()
     assert run_import(passive)["repeated"]
-    assert len(passive.store.load_findings(first["scan_id"])) == 5
-    assert not list(passive.store.scans_dir.glob("*/findings.json"))
+    assert passive.store.read_json(path) == doc
 
 
 def test_cli_fixture_import_repeat_and_existing_parse_behavior(passive, tmp_path, capsys, monkeypatch):
