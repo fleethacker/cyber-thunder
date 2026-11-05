@@ -16,7 +16,7 @@ metadata:
   name: cyberthunder-survey
 rules:
   - apiGroups: [""]
-    resources: [namespaces, pods]
+    resources: [namespaces, nodes, pods]
     verbs: [get, list]
   - apiGroups: [apps]
     resources: [deployments, statefulsets, daemonsets]
@@ -24,6 +24,8 @@ rules:
   - apiGroups: [batch]
     resources: [cronjobs, jobs]
     verbs: [get, list]
+  - nonResourceURLs: [/version]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -102,7 +104,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cyberthunder
-          image: cyberthunder:0.2.3
+          image: cyberthunder:0.2.4
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -112,6 +114,12 @@ spec:
               value: /var/lib/cyberthunder
             - name: CT_LLM_BACKEND
               value: template
+            - name: CT_BOOTSTRAP_CLUSTER_TARGET
+              value: "true"
+            - name: CT_BOOTSTRAP_CLUSTER_TARGET_ID
+              value: local-cluster
+            - name: CT_BOOTSTRAP_CLUSTER_NAME
+              value: Local Kubernetes cluster
             - name: CT_BOOTSTRAP_CLUSTER_KUBECONFIG
               value: /etc/cyberthunder/kubeconfig
           securityContext:
