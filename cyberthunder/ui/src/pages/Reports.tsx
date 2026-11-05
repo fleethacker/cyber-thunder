@@ -111,7 +111,14 @@ function OutboxCard() {
   );
 }
 
+type Doc = 'commander' | 'fleet' | 'friction' | 'coverage';
+const DOC_PATH: Record<Doc, string> = { commander: '/reports/commander', fleet: '/reports/fleet', friction: '/reports/friction', coverage: '/reports/coverage' };
+const DOC_LABEL: Record<Doc, string> = {
+  commander: 'Commander one-pager', fleet: 'Path to fleet', friction: 'Friction log', coverage: 'Check & fix coverage',
+};
+
 export default function Reports() {
+  const [doc, setDoc] = useState<Doc>('commander');
   const [host, setHost] = useState<string | null>(null);
   const [queueing, setQueueing] = useState<string | null>(null);
   const targets = useAsync(async () => (await api.targets()).targets, []);
@@ -120,11 +127,11 @@ export default function Reports() {
   useEffect(() => {
     let alive = true;
     setHtml('');
-    request<string>('GET', '/reports/commander', { query: { format: 'html' } })
+    request<string>('GET', DOC_PATH[doc], { query: { format: 'html' } })
       .then((h) => { if (alive) setHtml(h); })
       .catch((e) => { if (alive) setHtml(`<p style="font-family:sans-serif;color:#b00020;padding:16px">${errorText(e)}</p>`); });
     return () => { alive = false; };
-  }, [frameKey]);
+  }, [doc, frameKey]);
 
   const queue = async (kind: 'commander' | 'poam' | 'checklist') => {
     setQueueing(kind);
@@ -145,17 +152,20 @@ export default function Reports() {
       <Paper withBorder radius="md" p="md">
         <Stack gap="sm">
           <Group justify="space-between" wrap="wrap">
-            <Text fw={700}>Commander one-pager</Text>
+            <Select label="Current report" value={doc} onChange={(value) => { if (value) setDoc(value as Doc); }}
+              data={Object.entries(DOC_LABEL).map(([value, label]) => ({ value, label }))} allowDeselect={false} w={250} />
             <Group gap="xs">
-              <Download href={url('/reports/commander', { format: 'html' })} label="HTML" file="commander.html" />
-              <Download href={url('/reports/commander', { format: 'md' })} label="Markdown" file="commander.md" />
-              <Button size="sm" variant="subtle" onClick={() => setFrameKey((k) => k + 1)}>Generate report</Button>
+              <Download href={url(DOC_PATH[doc], { format: 'html' })} label="HTML" file={`${doc}.html`} />
+              <Download href={url(DOC_PATH[doc], { format: 'md' })} label="Markdown" file={`${doc}.md`} />
+              <Button size="sm" variant="subtle" onClick={() => setFrameKey((k) => k + 1)}>{doc === 'commander' ? 'Generate report' : 'Refresh report'}</Button>
+              {doc === 'commander' && (
                 <Button size="sm" leftSection={<IconSend size={14} />} loading={queueing === 'commander'} onClick={() => void queue('commander')}>Queue for sync</Button>
+              )}
             </Group>
           </Group>
           <iframe
-            key={frameKey}
-            title="Commander one-pager"
+            key={`${doc}-${frameKey}`}
+            title={DOC_LABEL[doc]}
             srcDoc={html}
             sandbox=""
             style={{ width: '100%', height: 640, border: '1px solid var(--mantine-color-default-border)', borderRadius: 8, background: 'white' }}

@@ -20,6 +20,8 @@ break, and how to undo it. The kill switch and the audit-chain badge are on ever
 ![Decision queue](docs/images/decisions.jpg)
 
 Discovery proposes what it found on the enclave; a named person accepts a device into scope, with a reason, or ignores it.
+The application currently records a typed, self-asserted approver name. UDS gateway SSO does not yet bind that
+name to a verified application principal or per-user target credential; see [identity work](docs/BACKLOG.md#1-identity-credentials-and-zero-trust).
 
 ![Assets and discovery](docs/images/assets-discovery.jpg)
 
@@ -33,11 +35,17 @@ Reports keep searchable history of commander one-pagers, POA&Ms, checklists and 
 
 ## Status
 
-Every module below is built and merged; the rehearsal in [DEMO](docs/DEMO.md) runs the pipeline end to end on
-the simulated range. Live transports have now met real targets: the Rocky 9 range host over SSH (28 of 28 seeded
-items found, one fix applied and rolled back; [range/README.md](range/README.md)) and the team's UDS Core demo
-cluster over kubectl (127 findings, no adapter errors after one fix; [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
-WinRM against a real Windows host is next.
+The rehearsal in [DEMO](docs/DEMO.md) runs the pipeline end to end on the simulated range.
+
+<!-- validation-status:start -->
+Rocky 9 over SSH: 12/12 Linux seeds detected; one fix applied, verified and rolled back.
+
+The same range run detected 6/6 Podman seeds and 10/10 k3s seeds (28/28 across all three targets).
+
+The WSL2 UDS demo cluster was scanned over kubectl: 127 findings and no adapter errors.
+
+These are recorded real-target results, not full benchmark coverage. Windows/WinRM, Cisco device changes and other platform versions still need real testing. See the [validation matrix](docs/VALIDATION.md) for evidence and missing run metadata, and [coverage](docs/COVERAGE.md) for check/fix counts.
+<!-- validation-status:end -->
 
 | Module | Path | Status |
 |---|---|---|
@@ -168,12 +176,15 @@ POA&M, checklist), `demo reset|run`, `state info|migrate` (where the documents l
 | Document | What it is |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | pipeline, contracts, guardrails, how to add an adapter |
+| [docs/VALIDATION.md](docs/VALIDATION.md) | real-platform evidence, untested versions and missing run metadata |
+| [docs/COVERAGE.md](docs/COVERAGE.md) | implemented checks, benchmark denominators, executable fixes and runbooks |
 | [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |
 | [docs/CONTENT.md](docs/CONTENT.md) | how STIGs and SCAP benchmarks reach the node: pull when connected, manifest and removable media when not |
 | [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |
 | [docs/API.md](docs/API.md) | HTTP API v1 |
 | [docs/STATE.md](docs/STATE.md) | the state directory: documents (json files or SQLite) and files, `state migrate` and `state info`, WAL on a local volume only, backups |
 | [docs/UI.md](docs/UI.md) | screens and behaviour |
+| [docs/FINDINGS.md](docs/FINDINGS.md) | finding categories, filters, search, sorting and saved views |
 | [docs/DEMO.md](docs/DEMO.md) | 10-minute demo runbook |
 | [docs/SUBMISSION.md](docs/SUBMISSION.md) | portal submission draft |
 | [docs/BACKLOG.md](docs/BACKLOG.md) | what should be done and is not: identity and zero trust first, then what stands between the prototype and a limited deployment, then every other known gap |
@@ -194,6 +205,12 @@ POA&M, checklist), `demo reset|run`, `state info|migrate` (where the documents l
 | Can it be undone | Every library fix declares a rollback; before-state is captured first; failed verify rolls back automatically | `FixEntry.rollback_kind`, `BeforeState` |
 
 ## Cluster deployment
+
+Cyber Thunder can run natively with the Python CLI/web server above, or as the same
+application in a container. Both deployment paths retain approval, audit and rollback;
+both still require the identity and credential work in the backlog before fielding.
+See the [application container guide](deploy/kubernetes/README.md) and
+[Zarf package](packages/cyberthunder/README.md) for the merged container and UDS SSO configuration.
 
 Deploy UDS Core and Podinfo with `./deploy.sh`. See
 [UDS cluster deployment](docs/DEPLOYMENT.md) for macOS Podman, Linux,

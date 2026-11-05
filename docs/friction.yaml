@@ -49,3 +49,21 @@ entries:
     impact: Lost time to failed commits and corrupted index files.
     workaround: Moved the working repository out of the synced folder and keep only a copy there.
     ask: A standard issue development folder that is excluded from sync.
+  - id: F9
+    area: authority
+    what: Development Keycloak SSO is packaged, but the intended enclave identity provider, CA and credential issuer are not confirmed.
+    impact: Gateway sign-in alone does not establish the application's approver identity or per-user access to remote systems.
+    workaround: State the self-asserted identity limitation explicitly and track verified principals and credential resolution in BACKLOG section 1.
+    ask: The range identity owner, a test realm or domain, and the authority that issues scan and apply credentials.
+  - id: F10
+    area: policy
+    what: The offline identity lifetime, maximum certificate-revocation-list age and break-glass authority remain undecided.
+    impact: A disconnected authentication policy cannot be treated as approved for an enclave.
+    workaround: Document proposed expiry and failure behavior as design work, not a fielded control.
+    ask: The authorizing official's decision on cached identity, revocation freshness and emergency access.
+  - id: F11
+    area: range
+    what: CAC middleware and end-to-end per-user remoting have not been exercised against a real range domain.
+    impact: Unit tests do not prove CAC login, constrained delegation, JEA or target-side attribution works in the intended environment.
+    workaround: Keep those capabilities unvalidated in the platform matrix and identity backlog.
+    ask: A range domain and CAC-enabled workstation with a named administrator for the experiment.

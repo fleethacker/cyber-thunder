@@ -87,6 +87,16 @@
 <p>{{ r.link }}</p>
 {% endif %}
 
+<h2>Check and fix coverage</h2>
+<p><b>Coverage:</b> finding every seeded item does not mean a whole benchmark is covered.
+Available content mappings below describe capabilities, not checks completed in this scan.</p>
+{% if r.coverage.benchmarks %}
+<table><tr><th>Available benchmark</th><th>Rules</th><th>Native</th><th>SCAP eligible</th><th>Executable fix</th><th>Runbook only</th><th>Unmapped</th></tr>
+{% for row in r.coverage.benchmarks %}
+<tr><td>{{ row.benchmark }} ({{ row.release }})</td><td>{{ row.published_rules }}</td><td>{{ row.native_checks }}</td><td>{{ row.scap_eligible }}</td><td>{{ row.executable_fixes }}</td><td>{{ row.runbook_only }}</td><td>{{ row.not_covered }}</td></tr>
+{% endfor %}</table>
+{% else %}<p>Full benchmark totals are unknown; no local benchmark document is available.</p>{% endif %}
+<p class="meta">Native and SCAP counts overlap. Linux SCAP needs external OpenSCAP and host applicability checks. Matching rule IDs across releases needs content review. See Reports / Check &amp; fix coverage for sources, datastreams and limitations.{% if r.coverage.errors %} Coverage inventory is incomplete; see that report's errors.{% endif %}</p>
 <h2>Next actions</h2>
 <ul>
 {% for a in r.next_actions %}

@@ -43,8 +43,11 @@ discover a system, scan one target, explain and propose from those results, appl
 roll a version back, and read or write the per-target report. Each step shows the API detail on failure.
 
 ### Findings (`/findings`)
-Table (virtualized if > 200 rows): CAT, status, host, asset type, source, rule id/STIG id, title, fix available?,
-explanation ready? Filters and search. Click → **drawer**: description, check text, evidence, fix text, citations
+Table paginated in groups of 200: severity, scanner result, machine/type, category/source, rule/title,
+benchmark/release, observation time and fix/explanation/proposal availability. Searchable multi-select filters,
+quick views and explicit ascending/descending sorts run before pagination; preferences survive refresh.
+See [FINDINGS](FINDINGS.md) for category definitions and missing metadata behavior.
+Click → **drawer**: description, check text, evidence, fix text, citations
 with links (public.cyber.mil search for STIG ids, nvd.nist.gov for CVEs, attack.mitre.org for techniques — links
 are plain anchors; offline they simply do not resolve), explanation panel (with Regenerate), fix entry panel,
 "Propose fix" button, proposal history.
@@ -71,8 +74,12 @@ asset name/ID, scan ID and operator. Filters narrow by report type and inclusive
 are newest first with pagination. Open a saved report to preview its original contents or download the
 original HTML, Markdown, CSV, CKLB or JSON. Historical previews do not regenerate from live findings.
 
-Current reports include the commander one-pager with HTML/Markdown downloads, POA&M CSV and an updated
-checklist (CKLB) per host. Each render saves a snapshot; Mission's per-target reports retain every revision.
+The **Current report** selector opens the commander one-pager, Check & fix coverage, Path to fleet or
+Friction log, with HTML/Markdown downloads. Coverage distinguishes native checks, benchmark totals,
+structural SCAP eligibility, executable fixes, runbooks and unmapped rules; it is not a compliance score.
+POA&M CSV and an updated checklist (CKLB) per host are available below. Commander, POA&M and checklist
+renders save snapshots; Mission's per-target reports retain every revision. Coverage, fleet and friction
+exports are not included in report history.
 Existing target reports and report exports still in the pending/synced outbox are imported once.
 Report history lives in `<state>/reports/history/` as portable files for both state backends. Earlier
 reports that were never retained cannot be recovered from the audit log alone.

@@ -2,11 +2,13 @@
 
 What should be done and is not. Every entry here is known work, so nobody mistakes a demo shortcut for a design decision. An item leaves this file in the same pull request that ships it; if it is dropped instead, say why in that PR. Line references were checked against the tree on 4 Nov 2026 and will drift; search for the named function if a line has moved.
 
-**Identity today, in one line:** the approver is a typed name, machine names are refused, and nothing about a person is verified.
+**Identity today, in one line:** the application approver is still a typed name; the merged UDS package adds gateway SSO, but the application does not yet bind approvals to that verified user or a per-user target credential.
 
 **What stops this being fielded, in short:** section 2; identity is one of five blockers, not the only one.
 
 Identity items carry the transition-plan step from [SUBMISSION](SUBMISSION.md) (30, 60, 90 or 180 days). Other items carry one of: **now** (before the event ends), **before range** (before the training-range experiment), **before fleet** (before a limited deployment), **later**.
+
+Completed documentation/reporting work: COV-01 now ships as `report coverage`, the Reports view and commander-report counts ([COVERAGE](COVERAGE.md)). DOC-01, DOC-02, DOC-03, DOC-04 and DOC-06 are corrected; unmeasured submission results and the unconfirmed mission owner are explicit. VAL-01 has a generated matrix and README status, while real-platform validation remains open.
 
 ## 1. Identity, credentials and zero trust
 
@@ -18,7 +20,7 @@ Identity items carry the transition-plan step from [SUBMISSION](SUBMISSION.md) (
 | What is checked about the name? | Not empty, no control characters, at most 128 characters, not `agent`/`llm`/`system`-style, not `policy:` | `cyberthunder/control/identity.py:35-48` |
 | Where does the UI get the name? | A free-text box kept in browser `localStorage` | `cyberthunder/ui/src/pages/Settings.tsx:25`, `cyberthunder/ui/src/api/client.ts:16,24` |
 | CLI identity | `--actor`, defaulting to `CT_ACTOR`, then the OS user name | `cyberthunder/cli.py:113,131` |
-| Login, session, token, certificate | None | `cyberthunder/api/` |
+| Login, session, token, certificate | No application principal/session validation; the UDS gateway has Keycloak SSO configuration | `cyberthunder/api/`, `packages/cyberthunder/uds.yaml` |
 | Transport to the UI and API | Plain HTTP, bound to `127.0.0.1:8000` by default | `cyberthunder/api/app.py:50-53`, `cyberthunder/config.py:58-59` |
 | Roles, approver roster, two-person rule | None; any accepted name may do anything | `ActorDep` at `cyberthunder/api/util.py:52` |
 | Kill switch engage | Allowed with no name ("unidentified operator (address)") | `cyberthunder/api/routes/kill.py:22-25` |
@@ -32,8 +34,8 @@ What is real: machine identities can never take a human edge, and every action i
 ### 1.1 People into the app
 
 **ZT-01 Package Cyber Thunder as a UDS package behind Keycloak SSO.** Pillars: User, Application, Network. Step: 60 days. Effort: 1-2 weeks. Depends: UDS Core cluster ([DEPLOYMENT](DEPLOYMENT.md)), `packages/identity-bootstrap`.
-- Today: `packages/` holds only `identity-bootstrap`, `nginx-bad` and `podinfo`; the app is a bare uvicorn process.
-- Target: `packages/cyber-thunder` (Zarf package plus UDS Package CR, modeled on `packages/podinfo`) with sidecar injection, tenant-gateway expose, an SSO client, authservice selector, egress limited to inventory CIDRs and the in-namespace model server, state on a PVC. Laptop mode stays, labeled as unverified identity. Also produce an SBOM and pin image digests (`docs/fleet.yaml:16` names Iron Bank onboarding).
+- Today: PRs #18 and #19 added the application image, PVC, Zarf package (`packages/cyberthunder`, 0.2.2) and UDS ingress/Keycloak SSO restricted to `/UDS Core/Admin`. Native Python operation remains available. App-level principal validation, per-user permissions and target credentials remain open; packaging alone does not close this item.
+- Target: `packages/cyber-thunder` (Zarf package plus UDS Package CR, modeled on `packages/podinfo`) with sidecar injection, tenant-gateway expose, an SSO client, authservice selector, egress limited to inventory CIDRs and the in-namespace model server, state on a PVC. Native deployment remains supported with standalone OIDC (ZT-03/04); the optional development identity mode stays explicitly unverified. Also produce an SBOM and pin image digests (`docs/fleet.yaml:16` names Iron Bank onboarding).
 - Done when: a request without a session is redirected to Keycloak; a pod outside the mesh cannot reach the app; `uds zarf dev lint packages/cyber-thunder` passes; the UI loads after login as an identity-bootstrap test user.
 
 **ZT-02 Replace the typed X-Actor name with a verified principal.** Pillars: User, Application. Step: 30 days. Effort: 4-6 days. Depends: none for the seam.
@@ -213,32 +215,38 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 | Identity and credentials | Today an approval proves only that someone typed a name, and one shared account per target does every scan and every change | ZT-01 to ZT-31 (section 1) |
 | Proof across real platforms | Only Linux over SSH and a k3s/k3d cluster have met real systems; Windows, Cisco and Active Directory have not, so no detection or fix claim for them is evidence yet | VAL-01 to VAL-03, with RNG-01, SCAN-03, REM-02 |
 | Coverage and fix safety | A few dozen natively checked rules per benchmark against hundreds published, and nothing stops an approved sshd or firewall change from cutting off the node that must roll it back | COV-01 to COV-04, with REM-01, SCAN-02 |
-| Plumbing for scale | State is JSON files on one node and scans walk targets one at a time, which holds for a range of ten hosts and not for an enclave of hundreds | SCL-01 to SCL-05, with ZT-25 |
-| Accreditation path | No authorizing official can sign for software with no SBOM, no control mapping, no hardening guide and no named maintainer | ATO-01 to ATO-04, with ZT-01, ZT-27, ZT-31, DEP-04 |
+| Plumbing for scale | Documents can use JSON files or SQLite on one node; proposals, policy and inventory remain locked files, and scans still walk targets one at a time. Multi-node storage and measured enclave-scale performance remain open | SCL-01 to SCL-05, with ZT-25 |
+| Accreditation path | The package includes an image SBOM, but full release evidence, control mapping, node hardening and a confirmed maintaining organization remain open | ATO-01 to ATO-04, with ZT-01, ZT-27, ZT-31, DEP-04 |
 
 ### 2.1 Proof across real platforms
 
-**VAL-01 Validation matrix per platform and version.** Step: now (the matrix), before fleet (every row filled). Effort: hours for the file, then days per platform. Depends: RNG-01, SCAN-03, REM-02, ZT-12 for the domain row.
-- Today: the first real-host run scanned a Rocky 9 VM over SSH, plus podman and k3s on it, and scored 28 of 28 seeded items with one fix applied, verified and rolled back (`range/README.md:126-203`); the UDS demo cluster (k3d) was scanned from Windows over kubectl (`docs/DEPLOYMENT.md:226-245`). Windows over WinRM, Cisco over SSH and an Active Directory domain have never been run against a real system: WinRM and SSH are exercised through recordings and simulated hosts (`README.md:36-38`), Kerberos and CredSSP only against a fake session (ZT-12), Cisco push only through recordings (REM-02).
+**VAL-01 Validation matrix per platform and version.** Step: before fleet (remaining real runs and missing metadata). Effort: days per platform; matrix/generator shipped. Depends: RNG-01, SCAN-03, REM-02, ZT-12 for the domain row.
+- Today: `docs/VALIDATION.md` and the README status are generated from `docs/validation.json` by `scripts/validation_status.py`; `--check` detects drift. Recorded runs still lack the exact tested application commit and some component versions. The first real-host run scanned a Rocky 9 VM over SSH, plus podman and k3s on it, and scored 28 of 28 seeded items with one fix applied, verified and rolled back (`range/README.md:126-203`); the UDS demo cluster (k3d) was scanned from Windows over kubectl (`docs/DEPLOYMENT.md:226-245`). Windows over WinRM, Cisco over SSH and an Active Directory domain have never been run against a real system: WinRM and SSH are exercised through recordings and simulated hosts (`README.md:36-38`), Kerberos and CredSSP only against a fake session (ZT-12), Cisco push only through recordings (REM-02).
 - Target: `docs/VALIDATION.md` with one row per platform and version: Windows Server 2019, 2022, 2025 and Windows 11; RHEL 8 and 9 with Rocky and Alma; Ubuntu 22.04 and 24.04; Cisco IOS and IOS-XE switch and router; k3s and one conformant distribution; an Active Directory domain. Columns: scanned on a real host (yes/no, date, commit), seeded items found of seeded, false positives reviewed (VAL-02), fixes exercised (apply, verify, rollback), evidence path.
 - Done when: the file exists with every row; no row says yes without a dated evidence path under `range/` or `docs/`; the README status line is generated from it, so the two cannot disagree.
 
-**VAL-02 False-positive triage on each real platform.** Step: before fleet. Effort: days per platform. Depends: VAL-01.
+**VAL-02 False-positive validation on each real platform.** Step: before fleet. Effort: days per platform. Depends: VAL-01; use VAL-05 for recorded reviews when available.
 - Today: no finding class has a recorded disposition. The stock `system:public-info-viewer` binding to `system:unauthenticated` exists on every real cluster and is carried in a test (`tests/kubernetes/test_rbac_names.py:33`), with no recorded decision on whether reporting it is right; on k3s the API-server flag rules report that nothing was collected without a `node_target` (`docs/DEPLOYMENT.md:243-245`, SCAN-01), which a reviewer cannot tell from a pass.
 - Target: for each real platform, every finding class reviewed once with a disposition of true, benchmark-not-applicable or check wrong, recorded beside VAL-01. Check wrong means the adapter is fixed with a regression test; not applicable means the rule is marked so for that platform, with the reason, in the adapter's rule data.
 - Done when: every class seen on a real host has a disposition; each "check wrong" has a test that fails on the old adapter; a rescan of the same host shows no undispositioned class.
+- Measurement: use a labeled set containing both known failures and known clean systems, with reviewer, evaluation unit and rule/content versions recorded. Report true positives, false positives, true negatives and false negatives, precision/recall and false-positive rate where their denominators exist, and the number and share still unreviewed. Unreviewed or unavailable results are not evidence of accuracy; seed detection scores alone do not measure the false-positive rate.
 
 **VAL-03 Benchmark version drift.** Step: before fleet. Effort: 1 week. Depends: DOC-05 (content-store path into the adapters), CON-01.
 - Today: each adapter carries its own extract: Linux `RHEL 9 V2R9` (`adapters/linux/rules.py:16`) while `STIG/` holds RHEL 9 V2R10 and RHEL 8 V2R9; Kubernetes says V2R4 (`adapters/kubernetes/checks.py:60`) with V2R6 withdrawals noted in its `stig_rules.json`; Cisco NDM V3R6, L2S V3R1, RTR V3R3 (`adapters/cisco/rules.py:29-31`); Windows 11 Release 11 in `adapters/windows/w11_catalog.json`. A host on any other release is checked against the bundled text and ids. The content pull already keeps one catalog copy per benchmark (`docs/ADAPTING.md:87`), but no adapter reads rule text from it; the nearest open item is DOC-05.
 - Target: the catalog copy for the target's benchmark and release drives rule ids, titles, severities and CCIs; the bundled extract is the fallback and is labeled so on the finding; a target may pin a release; a rule the adapter checks that the catalog release dropped is reported as withdrawn, not passed.
 - Done when: importing RHEL 9 V2R10 changes the titles and ids on the next scan with no code change; a finding records the benchmark release it was checked against; a test with a renamed rule id shows the catalog id.
 
-### 2.2 Coverage and fix safety
+**VAL-04 Evidence-based confidence for individual findings.** Step: before range. Effort: days. Depends: VAL-03 for content drift; VAL-02 for measured calibration.
+- Today: `findings/schema.py:Finding` records severity, scanner status, source, observation time and evidence, but no detection-confidence assessment. The percentage in `ui/src/components/DiscoveryPanel.tsx` describes an asset-type guess, not the probability that a vulnerability finding is correct. `ui/src/pages/Findings.tsx` does not display finding confidence.
+- Target: display High, Medium, Low or Unknown beside severity, with a plain-language reason and the evidence used. Record collection method and authentication/privilege sufficiency, scanner and benchmark/profile versions, package or image identity, observation time and freshness, applicability and corroboration/conflicts when available. Use versioned deterministic grading rules; missing privileges, stale content, version-only matches or contradictory results must remain visible. Unknown/unsupported/collection-error results never become a pass. Explain that grades are evidence-strength categories, not calibrated probabilities; do not show percentages until VAL-02 supplies a measured calibration. The explanation model cannot invent or upgrade a grade.
+- Done when: fixtures for direct checks, incomplete collection, stale data, ambiguous matches and conflicting scanners produce documented grades/reasons consistently; API, Findings, detail view and reports expose the same evidence/provenance. A high-severity finding can have low confidence. Detection confidence remains distinct from fix safety/readiness (COV-02 to COV-04), and no confidence grade bypasses approval or authorizes target changes.
 
-**COV-01 Published coverage report per adapter.** Step: before range. Effort: days. Depends: VAL-03 for the benchmark side.
-- Today: no report. Counted on 5 Nov: native rule entries in `adapters/*/stig_rules.json` are Linux 29, Cisco 30 (three benchmarks), Kubernetes 20, and the Windows catalog carries 19 rules; the RHEL 9 V2R10 manual benchmark in `STIG/` has 445 rules (393 in the SCAP datastream), RHEL 8 V2R9 has 371. The fix library loads 209 entries (STIG, hunt and patch): Linux 30 scripts and 38 runbooks, Windows 24 PowerShell and 1 runbook, Cisco 34 config snippets and 33 runbooks, Kubernetes 9 manifests and 27 runbooks, containers 1 script and 12 runbooks, plus ComplianceAsCode fixes built at scan time for real Linux targets (`remediation/engine.py:115`). Fixes are `FixEntry` records in each adapter's `fixes.py` (Cisco in `adapters/cisco/adapter.py`).
-- Target: `report coverage` per adapter and benchmark release: rules in the benchmark, rules checked natively, rules the SCAP path evaluates, rules with a vetted executable fix, rules with a runbook only, rules not covered. Rendered on the Reports page and in the one-pager so nobody reads "28 of 28" as "the benchmark is covered".
-- Done when: the command prints the six counts for every adapter; a test fails if a new library entry is not counted; the counts above are reproduced by it.
+**VAL-05 Audited finding review and scoped false-positive decisions.** Step: before range. Effort: days. Depends: VAL-04, ZT-08 for authorized reviewers and ZT-23 for verified identity evidence.
+- Today: scanner statuses include `open`, `not_a_finding` (a scanner pass), `not_applicable`, `not_reviewed` and `error`. The Kubernetes known-good API (`api/routes/cluster.py`, `adapters/kubernetes/known_good.py`) now records reasoned, optionally expiring exceptions and applies them to later scans by changing matching open results to `not_applicable`, tagging their evidence and excluding them from new proposals. This is a narrow exception facility, not separate immutable observations and review dispositions; `api/routes/findings.py` and `ui/src/components/FindingDrawer.tsx` still provide no general review workflow. A scanner pass is not a human false-positive decision. VAL-02 covers validating detector classes, not reviewing a specific observation on an asset.
+- Target: add Unreviewed, Confirmed, False positive, Not applicable and Needs investigation as review dispositions separate from immutable scanner observations. Every change records reviewer identity/attribution, reason, supporting evidence, time and history; risk acceptance is a separate authorized, time-limited decision, not a false positive. Scope a decision to the asset, rule/detector and benchmark/version plus evidence fingerprint; require review/expiry dates where suppression is allowed. New or changed relevant evidence, detector/content changes or expiry reopen review instead of silently carrying a dismissal forward. Explain when identity is only self-asserted until the ZT work lands.
+- Done when: UI/API can record, inspect and reverse a review with a complete audit trail; JSON and SQLite preserve it across restart/rescan, concurrent review cannot silently lose a decision, and historical scanner output is unchanged. Reports show raw, confirmed, unreviewed and suppressed counts with reasons/expiry; filters never conceal those totals. False-positive/not-applicable/risk-accepted records cannot trigger unattended remediation. Uncertain or conflicting observations require investigation before an automatic policy can act; confirming a finding still does not approve its fix. Tests cover unauthorized review, changed evidence, expiry, revocation and rescan reopening.
+
+### 2.2 Coverage and fix safety
 
 **COV-02 Fix safety for lockout-prone changes.** Pillars: Automation, Network. Step: before fleet. Effort: 1-2 weeks. Depends: VAL-01, REM-02.
 - Today: `RemediationEngine.execute` (`remediation/engine.py:362-453`) opens one transport, captures before-state, applies and verifies over that same connection; verify includes a health result, and a failure or exception rolls back over the same transport. There is no pre-flight reachability check, no second session, no revert if the control connection itself drops, and no canary option: an approved sshd, firewall, WinRM or management-interface change that cuts the session leaves the rollback with no way in.
@@ -263,7 +271,7 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 - Done when: the concurrency test passes with proposals and inventory in the database; a node under UDS runs two API replicas against one PostgreSQL with the test green; migrating the range state directory keeps every proposal and `audit verify` passes.
 
 **SCL-02 Scheduling and queued jobs.** Step: before fleet. Effort: 1 week. Depends: SCL-01, ZT-17.
-- Today: a scan starts when someone asks, from the CLI or `start_scan` (`api/routes/scans.py:14-31`), on a daemon thread (`scan.py:102`); content pulls and the reconnect check run on daemon threads (`ingest/content/service.py:273,552`); verify runs inside `execute`. A restart loses whatever was running.
+- Today: manual scans, content pulls and reconnect checks use daemon threads; PR #20 adds opt-in periodic scans/content checks in `cyberthunder/runtime.py`. There is still no durable job queue or restart recovery. Verify runs inside `execute`.
 - Target: a persistent job queue for recurring scans, content checks on reconnect and verify-after-apply, with retries and backoff, the kill switch pausing the queue, and a Jobs view showing queued, running, failed and done.
 - Done when: a node restarted mid-scan resumes the job; a scheduled scan runs under the workload identity; engaging the kill switch holds queued jobs and the view says so.
 
@@ -290,7 +298,7 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 - Done when: a checklist for the node itself, dated and attached to the release, shows no open CAT I and every open CAT II on a POA&M.
 
 **ATO-02 SBOM and approved images.** Pillars: Application. Step: before fleet. Effort: days, plus Iron Bank lead time. Depends: ZT-01 (packaging, SBOM, digests), DEP-03, DEP-04.
-- Today: ZT-01 covers the SBOM and digest pinning; Iron Bank onboarding is named in `docs/fleet.yaml:16,30`; no SBOM is produced.
+- Today: the Zarf application package includes an image SBOM; full Python/UI/model-runtime coverage, release dependency scans and approved-image provenance still need verification. ZT-01 and DEP-03 track digest pinning; Iron Bank onboarding is named in `docs/fleet.yaml`.
 - Target: beyond ZT-01 (app SBOM, digests) and DEP-03 (podinfo digest): the SBOM also covers the UI bundle and the model runtime, is produced by the release build, base images come from Iron Bank, and the SBOM gets a dependency scan at each release with findings tracked.
 - Done when: every release has an SBOM listing the Python package, UI bundle and every image; the dependency scan result is in the release notes; an image not from Iron Bank is listed with its exception.
 
@@ -315,6 +323,7 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 | SCAN-03 | Windows collection only run against the simulated host; WinRM exercised through recordings only (`README.md:36-38`) | Run the collector elevated on a real Windows 11 VM over WinRM and diff with the simulator | A recorded real-host collection replays with the same results | days | before range |
 | SCAN-04 | DISA RHEL benchmark is `notapplicable` on Rocky (`docs/SCAP.md:155-156`) | Optional per-target CPE alias, audited as an override | A Rocky 9 scan evaluates the DISA RHEL 9 rules and records the override | days | before range |
 | SCAN-05 | Larger offline model path (about 24 GB of memory) is an unbuilt stretch; the laptop has 4 GB of VRAM (friction F6, `docs/PLAN.md` section 10) | Only with hardware: a backend behind `explain()` | The setting selects it and the citation validator still gates output | days | later |
+| SCAN-06 | Implemented in PR #28: audited Nessus results import through the CLI and API, with explicit host-to-inventory mapping, source provenance and deterministic duplicate handling ([SCANNER_IMPORT](SCANNER_IMPORT.md)); imported findings appear in the current view and reports | Preserve parser limits, duplicate handling and historical/current view semantics | JSON and SQLite regressions cover CVE findings, reports, duplicate imports, invalid mappings and refusal to authorize target changes | complete | 2026-11-05 |
 
 ### Remediation
 
@@ -356,6 +365,7 @@ Packaging the app itself is ZT-01.
 | ID | Gap and today | Target | Done when | Effort | Step |
 |---|---|---|---|---|---|
 | UI-01 | The chip shows "Acting as IT1 Smith" (`docs/UI.md:22`) and every viewer sees Approve/Deny; no provenance on a card | Show verified identity and role, disable what the user cannot do with the reason, show who approved with which credential | A viewer sees Approve disabled with a reason; provenance appears on proposal detail | days | before range |
+| UI-02 | Implemented: finding filters for category, machine, asset type, severity, scanner result, source and benchmark/release; identifier search, sorting, full-view counts and saved preferences ([FINDINGS](FINDINGS.md)) | Preserve filtering and sorting before pagination on both backends; indexed queries at enclave scale remain in SCL-03 | API regressions and a browser check cover combined filters, current/historical views, stable sorts, missing metadata and reset/persistence | complete | 2026-11-05 |
 
 The rest of the identity UI is in ZT-04 and ZT-08.
 
@@ -375,12 +385,7 @@ Identity negative tests are part of ZT-02, ZT-03 and ZT-08.
 
 | ID | Gap and today | Target | Done when | Effort | Step |
 |---|---|---|---|---|---|
-| DOC-01 | `docs/SUBMISSION.md:35,108`, `docs/fleet.yaml:42` and `README.md:22` say "named person" or "named human" without saying the name is self-asserted; SUBMISSION now carries one line under its transition plan | Add the same plain limitations line to the fleet file and the README, pointing at section 1 of this file | `docs/fleet.yaml` and README carry the line | hours | now |
-| DOC-02 | Refused actor: `docs/API.md:9` says 400, `docs/DISCOVERY.md:132` says 403; the code raises 400 (`api/util.py:39-47`, `api/routes/discovery.py:56-61`) | Fix DISCOVERY.md | Both say 400 | hours | now |
-| DOC-03 | `docs/friction.yaml` ends at F8 with nothing on identity | Add entries: no known enclave IdP or CA, who issues service credentials, CAC middleware on the range, maximum CRL age, ask for a test IdP | `report friction` renders them | hours | now |
-| DOC-04 | SUBMISSION still has `[ ]` placeholders for mission owner and every measured result | Fill from the rehearsal, audit log and detection score; say "not measured" where true | No `[ ]` remains | hours | now |
-| DOC-05 | `docs/CONTENT.md:107` says benchmark options are "being added on a separate branch"; both adapters already use them | Remove the sentence; add an end-to-end test for the content-store path | CONTENT.md matches the code | hours | now |
-| DOC-06 | `docs/DEPLOYMENT.md:26` "Untested" predates the WSL2 run | Update with DEP-01 | Status line matches the evidence | hours | now |
+| DOC-05 | CONTENT.md now describes the shipped benchmark options and distinguishes node-side Windows content from target-side Linux paths | Add an end-to-end content-store-to-adapter test | Imported content is used by each adapter in a regression test | hours | before range |
 
 ### Cluster MVP path (team plan of 5 Nov)
 
@@ -388,20 +393,21 @@ The team's MVP plan (Cyber Thunder running inside the UDS cluster, fixing `nginx
 
 | ID | Gap and today | Target | Done when | Effort | Step |
 |---|---|---|---|---|---|
-| MVP-01 | Cyber Thunder is not a package in `packages/` (team plan item 1): it runs as a Python process on the operator node; `packages/example` is the template to copy | Covered by ZT-01; start from `packages/example`, state on a PVC, the model server as an in-namespace service | `uds zarf dev lint` passes and the UI loads inside the cluster behind the tenant gateway | 1-2 weeks | before range |
+| MVP-01 | Application packaging and UDS gateway SSO shipped in PRs #18/#19 (`packages/cyberthunder`); end-to-end validation of the intended cluster scan/fix flow remains open | Validate the existing package and PVC with the intended model service and target access; verified application principals remain in ZT-02/03 | `uds zarf dev lint` passes and the UI loads inside the cluster behind the tenant gateway | 1-2 weeks | before range |
 | MVP-02 | Keycloak sign-in (item 1.3) | Covered by ZT-01 to ZT-03 | see those items | - | 30-60 days |
-| MVP-03 | Image vulnerability scanning for cluster workloads (item 2.1): the container adapter runs Trivy only where it is installed on the host (`cyberthunder/adapters/containers/adapter.py:187-194`); the Kubernetes adapter has no image CVE path | Trivy on the node or as an in-cluster job over the images pods reference, results through the existing Trivy parser | nginx-bad's stale UBI image yields CVE findings with ids and the image reference | days | before range |
-| MVP-04 | STIG checks inside container images (item 2.2): OpenSCAP runs on hosts over SSH, never on an image filesystem | `oscap-podman` or an image-filesystem evaluation with the RHEL 9 datastream for UBI-based images | the RHEL 9 profile evaluates against the nginx-bad image and the results land as findings | days | before fleet |
+| MVP-03 | PR #20 adds cluster image enumeration and Trivy baseline scans through `cyberthunder/cluster/service.py`; results are namespace profiles and baseline JSON, separate from normalized findings. The Containerfile installs Trivy but does not preload its database; skipping database updates alone does not establish disconnected operation | Connect image CVEs to the existing findings/approval/report flow and validate nginx-bad; package and version the required databases/images, expose stale or missing data, and apply MVP-11 guardrails | Image CVEs have identifiers and image references in the normal findings queue, backed by a recorded cluster run with egress blocked; missing database/image content is reported as unavailable, never a clean scan | days | before range |
+| MVP-04 | PR #20 adds `scripts/scan-container-os.sh` for mounted root filesystems and oscap-podman targets, plus an XCCDF converter; application integration and the nginx-bad result are not established here | Integrate the script output as normalized findings and validate UBI/RHEL profile applicability | A recorded nginx-bad image evaluation lands in the findings workflow with unsupported/not-applicable outcomes preserved | days | before fleet |
 | MVP-05 | Implemented: optional `CT_LLM_API_KEY` authentication is read for each compatible-backend request, including probes and format fallback; credentialed redirects are refused and diagnostics omit secrets ([MODEL_AUTH](MODEL_AUTH.md)). A separate agent harness remains a team decision | Keep regression coverage for authenticated and unauthenticated local endpoints | Mocked tests cover rotation, auth failure, redirect refusal and decoded secret reflection; no live endpoint was required | complete | 2026-11-05 |
 | MVP-06 | CVE remediation by newer image (items 4.1 and 6.2): nothing pulls container images or bumps image tags; the resumable, allow-listed downloader exists for STIG content only (`cyberthunder/ingest/content/fetch.py`) | a newer-image check against the pinned tag or digest; a durable registry pull over the slow link reusing the downloader's resume and caps (Zarf air-gap packages as the carrier in UDS); a fix entry that bumps the deployment image with before-state and rollback | nginx-bad's image is updated through approve, apply, verify and rollback, with the pull surviving a dropped link | 1 week | before range |
 | MVP-07 | GitOps-style Kubernetes remediation (item 4.2.1): fixes patch live objects with before-state (`cyberthunder/adapters/kubernetes/fixes.py`), so a chart or ArgoCD sync would undo them | emit the fix as a chart or manifest change to the package repository when a GitOps controller owns the workload, with the live patch as the immediate action | a fix survives an ArgoCD sync | 1 week | before fleet |
 | MVP-08 | STIG-hardened RHEL 9 image pipeline (item 4.2.2): nothing rebuilds a hardened container image pinned by the chart or Zarf package | a build that applies the RHEL 9 STIG content to the UBI base, scans it, and pins the result by digest in the package | the rebuilt nginx-bad image scans clean and the package pins its digest | 1-2 weeks | later |
 | MVP-09 | Velero as cluster-wide rollback (item 7): every fix restores its own before-state; there is no cluster-level snapshot | an optional Velero backup before a batch apply and a restore path in the engine for cluster targets | a batch of Kubernetes fixes is reverted by a Velero restore recorded in the audit log | days | later |
 | MVP-10 | Linux VM STIG changes from inside the cluster (parallel item 2): done from the operator node (`range/README.md`); from a pod it needs MVP-01, egress to the host and credentials (ZT-12, ZT-13, ZT-19) | depends on MVP-01 | the Rocky range run repeats from a pod | - | after MVP-01 |
+| MVP-11 | Implemented: active cluster survey and baseline scans require a named actor and an explicitly scoped inventory target; kill, scope and pinned configuration are rechecked around external calls and publication. Opt-in bootstrap registers new targets out of scope and preserves operator edits ([CLUSTER_GUARDRAILS](CLUSTER_GUARDRAILS.md)) | Preserve these guards on new cluster entry points; verified identity remains in ZT-02/03 | Regressions cover killed, missing, revoked or changed target configuration, interrupted baselines and bootstrap preservation; a running subprocess stops at its next boundary or timeout | complete | 2026-11-05 |
 
 ## 4. Already enforced today (for contrast)
 
-From [ARCHITECTURE](ARCHITECTURE.md) section 4:
+From [ARCHITECTURE](ARCHITECTURE.md) section 4. Cluster survey, baseline and bootstrap guards are also implemented as described in [CLUSTER_GUARDRAILS](CLUSTER_GUARDRAILS.md); typed actor names remain unverified identity:
 
 - No change without approval: the engine refuses `execute` unless the proposal is `APPROVED`, and machine identities can never take a human edge (`ApprovalGate.HUMAN_ONLY`).
 - Only vetted fixes run: `RemediationEngine.execute` runs `FixEntry.payload` only; no code path passes model output to a transport.
@@ -451,7 +457,6 @@ Section 2 items by step:
 
 | Step | Items |
 |---|---|
-| now | VAL-01 (the matrix file) |
-| before range | COV-01 coverage report, COV-03 dry run and windows |
+| before range | VAL-04 finding confidence, VAL-05 audited finding review, COV-03 dry run and windows |
 | before fleet | VAL-01 (every row), VAL-02 triage, VAL-03 version drift, COV-02 lockout safety, COV-04 fix library growth, SCL-01 state store, SCL-02 job queue, SCL-03 500 hosts, SCL-04 retention, ATO-01 node hardening, ATO-02 SBOM, ATO-03 control mapping (90 days), ATO-04 maintainer and releases (180 days) |
 | later | SCL-05 multi-enclave sync |

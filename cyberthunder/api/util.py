@@ -2,6 +2,7 @@
 background work, optional services, and the multipart reader used by ingest uploads."""
 from __future__ import annotations
 
+import csv
 import importlib
 import json
 import logging
@@ -16,7 +17,9 @@ from fastapi import Depends, Header, HTTPException
 
 from cyberthunder.api.deps import get_actor, get_ctx
 from cyberthunder.control.approvals import AGENT_ACTORS, Proposal
-from cyberthunder.findings.schema import Finding, Severity, Status, summarize
+from cyberthunder.findings.schema import (
+    RE_CVE, RE_GROUP_ID, RE_STIG_ID, RE_STIG_RULE, Finding, Severity, Status, summarize,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -220,6 +223,7 @@ def current_proposals(ctx: "AppContext") -> dict[str, Proposal]:
 
 def finding_plus(ctx: "AppContext", finding: Finding, with_proposal: bool = True) -> dict:
     d = finding.to_dict()
+    d["categories"] = finding_categories(finding)
     d["cat"] = finding.severity.cat
     d["explanation"] = _explanation(ctx, finding.id)
     fix = _fix_for(ctx, finding)
@@ -286,41 +290,135 @@ def _split(v: str | None) -> set[str]:
     return {x.strip().lower() for x in (v or "").split(",") if x.strip()}
 
 
+MISSING = "__missing__"
+CATEGORIES = ("stig", "cve", "hunt", "other")
+SORT_FIELDS = {"default", "severity", "host", "asset_type", "category", "title", "rule_id", "rule_version", "source",
+               "collected_at", "benchmark", "benchmark_release"}
+
+
+def finding_categories(f: Finding) -> list[str]:
+    """Classify identifiers and scanner provenance, never title keywords or severity."""
+    systems = {r.system.strip().lower() for r in f.references if r.id.strip()}
+    source = f.source.strip().lower()
+    identifiers = " ".join(f.citations)
+    stig = bool(systems & {"stig_rule", "stig_id"}) or any(
+        re.search(pattern.pattern, identifiers, re.I) for pattern in (RE_STIG_RULE, RE_STIG_ID, RE_GROUP_ID)
+    ) or source in {
+        "evaluate-stig", "powerstig", "windows-stig", "ckl", "cklb",
+    }
+    # OpenSCAP and SCC also run non-STIG content. Require a STIG identifier or benchmark there.
+    stig = stig or bool(re.search(r"(?:^|[^a-z])stig(?:$|[^a-z])", (f.benchmark or "").lower()))
+    cve = "cve" in systems or bool(RE_CVE.search(identifiers.upper())) or source in {"cve", "nvd", "iavm"}
+    hunt = source == "hunt" or bool(systems & {"attack", "mitre_attack"}) or bool(
+        re.search(r"(?:^|[:/_-])hunt(?:$|[:/_-])", f.rule_id.lower()))
+    categories = [name for name, match in (("stig", stig), ("cve", cve), ("hunt", hunt)) if match]
+    return categories or ["other"]
+
+
+def _facet_value(value: str | None) -> str:
+    return (value or "").strip().casefold() or MISSING
+
+
+def _filter_values(value: str | None) -> set[str]:
+    """CSV quoting allows benchmark names and releases containing commas."""
+    if not value or not value.strip():
+        return set()
+    try:
+        rows = list(csv.reader([value], skipinitialspace=True, strict=True))
+    except csv.Error as exc:
+        raise ValueError(f"invalid filter list: {exc}") from None
+    if len(rows) != 1 or any(not item.strip() for item in rows[0]):
+        raise ValueError("filter lists must contain non-empty values")
+    return {_facet_value(item) for item in rows[0]}
+
+
+def finding_facets(findings: list[Finding]) -> dict:
+    """Options and counts from the complete view, independent of filters and pagination."""
+    facets: dict[str, dict[str, dict]] = {name: {} for name in (
+        "host", "asset_type", "source", "status", "severity", "category", "benchmark", "benchmark_release")}
+    for f in findings:
+        for name, options in facets.items():
+            values = finding_categories(f) if name == "category" else [getattr(f, name)]
+            for value in values:
+                if isinstance(value, (Status, Severity)):
+                    value = value.value
+                key = _facet_value(value)
+                label = (value or "").strip() or "Not recorded"
+                entry = options.setdefault(key, {"value": key, "label": label, "count": 0})
+                entry["label"] = min(entry["label"], label)  # stable even if input order changes
+                entry["count"] += 1
+    return {name: sorted(options.values(), key=lambda o: (o["value"] == MISSING, o["value"]))
+            for name, options in facets.items()}
+
+
 def filter_findings(findings: list[Finding], *, host: str | None = None, status: str | None = None,
                     severity: str | None = None, source: str | None = None, asset_type: str | None = None,
+                    category: str | None = None, benchmark: str | None = None, benchmark_release: str | None = None,
                     q: str | None = None) -> list[Finding]:
     """Each filter takes one value or a comma-separated list. Severity accepts high|medium|low or 'CAT I'."""
-    hosts, sources, types = _split(host), _split(source), _split(asset_type)
-    statuses = _split(status)
+    axes = {name: _filter_values(value) for name, value in (
+        ("host", host), ("source", source), ("asset_type", asset_type),
+        ("benchmark", benchmark), ("benchmark_release", benchmark_release))}
+    statuses = _filter_values(status)
     for s in statuses:
         if s not in {x.value for x in Status}:
             raise ValueError(f"unknown status {s!r}")
     sevs = set()
-    for s in _split(severity):
+    for s in _filter_values(severity):
         parsed = Severity.parse(s)
         if parsed == Severity.UNKNOWN and s != "unknown":
             raise ValueError(f"unknown severity {s!r}")
         sevs.add(parsed.value)
-    needle = (q or "").strip().lower()
+    categories = _filter_values(category)
+    if categories - set(CATEGORIES):
+        raise ValueError(f"unknown category {sorted(categories - set(CATEGORIES))[0]!r}")
+    needle = (q or "").strip().casefold()
     out = []
     for f in findings:
-        if hosts and f.host.lower() not in hosts:
+        if any(values and _facet_value(getattr(f, name)) not in values for name, values in axes.items()):
             continue
         if statuses and f.status.value not in statuses:
             continue
         if sevs and f.severity.value not in sevs:
             continue
-        if sources and f.source.lower() not in sources:
+        if categories and not categories.intersection(finding_categories(f)):
             continue
-        if types and (f.asset_type or "").lower() not in types:
-            continue
-        if needle and not any(needle in (v or "").lower() for v in (f.title, f.rule_id, f.rule_version)):
+        if needle and not any(needle in (v or "").casefold() for v in (
+                f.title, f.host, f.source, f.benchmark, f.benchmark_release, *f.citations)):
             continue
         out.append(f)
     return out
 
 
-def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset: int, **filters) -> dict:
+def sort_findings(findings: list[Finding], sort_by: str, sort_dir: str) -> list[Finding]:
+    if sort_by not in SORT_FIELDS:
+        raise ValueError(f"unknown sort field {sort_by!r}")
+    if sort_dir not in {"asc", "desc"}:
+        raise ValueError(f"unknown sort direction {sort_dir!r}; use asc or desc")
+    if sort_by == "default":
+        if sort_dir != "asc":
+            raise ValueError("choose an explicit sort field before changing direction")
+        return sorted(findings, key=lambda f: (-f.severity.rank, f.status != Status.OPEN, f.host,
+                                               f.rule_version or f.rule_id, f.id))
+
+    def key(f: Finding):
+        if sort_by == "severity":
+            return None if f.severity == Severity.UNKNOWN else f.severity.rank
+        if sort_by == "category":
+            return tuple(sorted(finding_categories(f)))
+        if sort_by == "collected_at":
+            return _parse_ts(f.collected_at)
+        return (getattr(f, sort_by) or "").strip().casefold() or None
+
+    # Missing/invalid values remain last in both directions; ties always use ascending finding id.
+    ordered = sorted(findings, key=lambda f: f.id)
+    present = [f for f in ordered if key(f) is not None]
+    missing = [f for f in ordered if key(f) is None]
+    return sorted(present, key=key, reverse=sort_dir == "desc") + missing
+
+
+def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset: int,
+                  sort_by: str = "default", sort_dir: str = "asc", **filters) -> dict:
     if scan_id and ctx.store.load_scan_run(scan_id) is None:
         raise KeyError(f"unknown scan {scan_id!r}")
     sid = scan_id or ctx.store.latest_scan_id()
@@ -331,10 +429,11 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
     scanned = {f.id: f for f in all_f}
     now = [effective(f, props.get(f.id)) for f in all_f]
     sel = filter_findings(now, **filters)
-    sel.sort(key=lambda f: (-f.severity.rank, f.status != Status.OPEN, f.host, f.rule_version or f.rule_id))
+    sel = sort_findings(sel, sort_by, sort_dir)
     page = sel[offset: offset + limit]
     return {"findings": [finding_plus(ctx, scanned.get(f.id, f)) for f in page], "total": len(sel), "scan_id": sid,
-            "view": "scan" if scan_id else "current", "summary": summarize(now), "limit": limit, "offset": offset}
+            "view": "scan" if scan_id else "current", "summary": summarize(now), "limit": limit, "offset": offset,
+            "unfiltered_total": len(now), "facets": finding_facets(now), "sort_by": sort_by, "sort_dir": sort_dir}
 
 
 # -- link / outbox fallbacks ----------------------------------------------------------------------

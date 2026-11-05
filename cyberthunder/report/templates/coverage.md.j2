@@ -1,0 +1,59 @@
+# Cyber Thunder - Check and fix coverage
+
+Generated {{ r.generated_at }}{% if r.audit_head %} | Audit head `{{ r.audit_head }}`{% endif %}
+
+{{ r.limitations[0] }}
+
+{% if r.errors %}
+## Incomplete inventory
+
+{% for error in r.errors %}
+- {{ error }}
+{% endfor %}
+{% endif %}
+
+## Installed native checks
+
+Bundled subsets, not complete benchmarks. Published totals are unknown until supplied.
+
+| Adapter / reference | Release | Catalog entries | Native checks | Executable fixes (rules) | Runbook only (rules) |
+|---|---|---:|---:|---:|---:|
+{% for row in r.native_catalogs %}
+| {{ row.asset_type }} / {{ row.benchmark }} | {{ row.release }} | {{ row.catalog_entries }} | {{ row.native_checks }} | {{ row.executable_fixes }} | {{ row.runbook_only }} |
+{% endfor %}
+
+## Supplied benchmark coverage
+
+All rules before profile selection. Native and SCAP counts can overlap. No mapped check means neither a native identifier match nor an eligible SCAP mapping. These are not pass/fail results.
+
+{% if r.benchmarks %}
+| Adapter / benchmark | Release | Published rules | Native ID matches | SCAP eligible | Executable fixes (rules) | Runbook only (rules) | No mapped check |
+|---|---|---:|---:|---:|---:|---:|---:|
+{% for row in r.benchmarks %}
+| {{ row.asset_type }} / {{ row.benchmark }} | {{ row.release }} | {{ row.published_rules }} | {{ row.native_checks }} | {{ row.scap_eligible }} | {{ row.executable_fixes }} | {{ row.runbook_only }} | {{ row.not_covered }} |
+{% endfor %}
+
+{% for row in r.benchmarks %}
+- Source: `{{ row.source }}`, SHA-256 `{{ row.sha256 }}`; SCAP: {{ row.scap_engine }}.
+{% endfor %}
+{% else %}
+Published rule totals, SCAP coverage and unmapped totals are **unknown**. Import a benchmark through Content updates or provide `--benchmark-dir` to `report coverage`.
+{% endif %}
+
+## Fix library inventory
+
+{{ r.library_entries }} entries across STIG, hunt and patch sources. Entries are not unique benchmark rules.
+
+| Adapter | Entries | By kind | By source |
+|---|---:|---|---|
+{% for row in r.fix_library %}
+| {{ row.asset_type }} | {{ row.entries }} | {% for key, count in row.by_kind.items() %}{{ key }}: {{ count }}; {% endfor %} | {% for key, count in row.by_source.items() %}{{ key }}: {{ count }}; {% endfor %} |
+{% endfor %}
+
+## How to interpret this report
+
+{% for note in r.limitations[1:] %}
+- {{ note }}
+{% endfor %}
+
+Reproduce: `python -m cyberthunder report coverage --format json` (includes rule identifiers and unmapped rules).

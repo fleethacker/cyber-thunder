@@ -129,7 +129,7 @@ tcp/4444 listener; `range/answer_key/discovery.json` lists them with the rule_id
 | GET | `/applicable` | `?benchmark=` or `?title=` or `?product=` | `[{target, name, asset_type, rule, basis, reason}]` |
 
 The actor is the `X-Actor` header. Mutating routes refuse empty and machine actors with 400. Errors:
-kill switch 423, bad input 400, unknown id 404, refused actor 403.
+kill switch 423, bad input 400, unknown id 404, refused actor 400.
 
 ## CLI
 

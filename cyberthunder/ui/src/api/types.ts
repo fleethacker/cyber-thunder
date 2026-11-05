@@ -80,6 +80,7 @@ export interface Finding {
 }
 
 export interface FindingPlus extends Finding {
+  categories: FindingCategory[];
   cat: string;
   explanation: Explanation | null;
   fix: FixEntry | null;
@@ -100,7 +101,23 @@ export interface FindingsPage {
   total: number;
   scan_id: string | null;
   summary: FindingsSummary | null;
+  view: 'current' | 'scan';
+  unfiltered_total: number;
+  facets: Record<FindingFacet, FindingFacetOption[]>;
+  limit: number;
+  offset: number;
+  sort_by: FindingSort;
+  sort_dir: SortDirection;
 }
+
+export type FindingCategory = 'stig' | 'cve' | 'hunt' | 'other';
+export type FindingFacet = 'host' | 'asset_type' | 'source' | 'status' | 'severity' | 'category' | 'benchmark' | 'benchmark_release';
+export interface FindingFacetOption { value: string; label: string; count: number }
+export type FindingSort = 'default' | 'severity' | 'host' | 'asset_type' | 'category' | 'title' | 'rule_id' | 'rule_version' | 'source' | 'collected_at' | 'benchmark' | 'benchmark_release';
+export type SortDirection = 'asc' | 'desc';
+export type FindingsQuery = Partial<Record<FindingFacet | 'scan_id' | 'q', string>> & {
+  sort_by?: FindingSort; sort_dir?: SortDirection; limit?: number; offset?: number;
+};
 
 export interface PolicyDecision { auto_eligible: boolean; rule: string | null; reasons: string[] }
 

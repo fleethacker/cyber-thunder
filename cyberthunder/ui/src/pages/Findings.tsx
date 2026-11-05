@@ -1,57 +1,112 @@
-// Findings: filterable table of the current findings view; click a row for the detail drawer.
-// Pages of 200 rows (server-side limit/offset) keep the DOM small instead of virtualizing.
-import { Badge, Button, Group, MultiSelect, Pagination, Paper, ScrollArea, Stack, Table, Text, TextInput, Tooltip } from '@mantine/core';
+// Filtering, facets and ordering are computed by the API before pagination.
+import { ActionIcon, Badge, Button, Group, MultiSelect, Pagination, Paper, ScrollArea, Select, SimpleGrid, Stack, Table, Text, TextInput, Tooltip } from '@mantine/core';
 import { useDebouncedValue } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
-import { IconCheck, IconMinus, IconSearch, IconSparkles } from '@tabler/icons-react';
-import { useState } from 'react';
+import { IconCheck, IconMinus, IconSearch, IconSparkles, IconX } from '@tabler/icons-react';
+import { useEffect, useState } from 'react';
 import { api, errorText } from '../api/client';
-import { ASSET_TYPES } from '../api/types';
-import { AssetIcon, AsyncView, Empty, Mono, PageTitle, SeverityBadge, StateBadge, StatusBadge } from '../components/common';
+import type { FindingFacet, FindingsPage, FindingsQuery, FindingSort, SortDirection } from '../api/types';
+import { AssetIcon, AsyncView, Empty, Mono, PageTitle, SeverityBadge, StateBadge } from '../components/common';
 import { FindingDrawer } from '../components/FindingDrawer';
-import { useAsync, useLocalPref } from '../lib/hooks';
+import { fmtTime, statusColor } from '../lib/format';
+import { useLocalPref } from '../lib/hooks';
 
 const PAGE = 200;
-const STATUSES = ['open', 'not_a_finding', 'not_applicable', 'not_reviewed', 'error'];
+const LABELS: Record<string, string> = {
+  stig: 'STIG', cve: 'CVE', hunt: 'Hunt', other: 'Other',
+  high: 'CAT I · High', medium: 'CAT II · Medium', low: 'CAT III · Low', info: 'Info', unknown: 'Unknown',
+  open: 'Failed / open', not_a_finding: 'Passed', not_applicable: 'Not applicable',
+  not_reviewed: 'Not assessed', error: 'Collection error', __missing__: 'Not recorded',
+};
+const SORTS: { value: FindingSort; label: string }[] = [
+  { value: 'default', label: 'Default priority' }, { value: 'severity', label: 'Severity' },
+  { value: 'host', label: 'Machine' }, { value: 'asset_type', label: 'Asset type' },
+  { value: 'category', label: 'Category' }, { value: 'title', label: 'Title' },
+  { value: 'rule_id', label: 'Rule ID' }, { value: 'rule_version', label: 'STIG ID / rule version' }, { value: 'source', label: 'Source' },
+  { value: 'collected_at', label: 'Observation time' }, { value: 'benchmark', label: 'Benchmark' },
+  { value: 'benchmark_release', label: 'Release' },
+];
+
+// Quote CSV values so names such as "Release 1, January" remain a single selection.
+const csv = (values: string[]) => values.map((v) => `"${v.replace(/"/g, '""')}"`).join(',');
 
 function Yes({ v, tip }: { v: boolean; tip: string }) {
-  return (
-    <Tooltip label={tip}>
-      {v ? <IconCheck size={16} color="var(--mantine-color-green-6)" /> : <IconMinus size={16} opacity={0.4} />}
-    </Tooltip>
-  );
+  return <Tooltip label={tip}>{v ? <IconCheck size={16} color="var(--mantine-color-green-6)" /> : <IconMinus size={16} opacity={0.4} />}</Tooltip>;
 }
 
 export default function Findings() {
-  const [q, setQ] = useState('');
+  const [q, setQ] = useLocalPref('ct.f.q', '');
   const [dq] = useDebouncedValue(q, 300);
   const [status, setStatus] = useLocalPref<string[]>('ct.f.status', ['open']);
   const [severity, setSeverity] = useLocalPref<string[]>('ct.f.sev', []);
   const [source, setSource] = useLocalPref<string[]>('ct.f.src', []);
   const [assetType, setAssetType] = useLocalPref<string[]>('ct.f.type', []);
   const [host, setHost] = useLocalPref<string[]>('ct.f.host', []);
+  const [category, setCategory] = useLocalPref<string[]>('ct.f.category', []);
+  const [benchmark, setBenchmark] = useLocalPref<string[]>('ct.f.benchmark', []);
+  const [release, setRelease] = useLocalPref<string[]>('ct.f.release', []);
+  const [sortBy, setSortBy] = useLocalPref<FindingSort>('ct.f.sort', 'default');
+  const [sortDir, setSortDir] = useLocalPref<SortDirection>('ct.f.direction', 'asc');
   const [page, setPage] = useState(1);
   const [drawer, setDrawer] = useState<string | null>(null);
   const [explaining, setExplaining] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const [data, setData] = useState<FindingsPage>();
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const query: FindingsQuery = {
+    q: dq, status: csv(status), severity: csv(severity), source: csv(source), asset_type: csv(assetType),
+    host: csv(host), category: csv(category), benchmark: csv(benchmark), benchmark_release: csv(release),
+    sort_by: sortBy, sort_dir: sortDir, limit: PAGE, offset: (page - 1) * PAGE,
+  };
+  const queryKey = JSON.stringify(query);
+  useEffect(() => {
+    // A slower previous search must never replace the user's latest selection.
+    let active = true;
+    setLoading(true);
+    setError(null);
+    void api.findings(JSON.parse(queryKey) as FindingsQuery).then((result) => {
+      if (!active) return;
+      setData(result);
+      setPage((p) => Math.min(p, Math.max(1, Math.ceil(result.total / PAGE))));
+    }).catch((e: unknown) => { if (active) setError(errorText(e)); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [queryKey, refresh]);
+  const reload = async () => { setRefresh((r) => r + 1); };
+  const st = { data, error, loading, reload, setData };
 
-  const key = [dq, status.join(), severity.join(), source.join(), assetType.join(), host.join(), page];
-  const st = useAsync(() => api.findings({
-    q: dq, status: status.join(','), severity: severity.join(','), source: source.join(','),
-    asset_type: assetType.join(','), host: host.join(','), limit: PAGE, offset: (page - 1) * PAGE,
-  }), key);
-  const hosts = st.data?.summary?.hosts ?? [];
-  // Source options are the sources present in this scan, never a fixed list: the adapters name their own
-  // (native, windows-stig, cisco_ios, kubernetes, containers, hunt, discovery ...). Use the summary's list
-  // when the server sends one; otherwise read every finding of the scan once and collect them.
-  const scanId = st.data?.scan_id ?? null;
-  const summarySources = st.data?.summary?.sources;
-  const allSources = useAsync<string[]>(async () => {
-    if (summarySources || !scanId) return summarySources ?? [];
-    const all = await api.findings({ scan_id: scanId, limit: 5000 });
-    return Array.from(new Set(all.findings.map((f) => f.source).filter(Boolean))).sort();
-  }, [scanId, summarySources ? summarySources.join() : null]);
-  const sources = Array.from(new Set([...(summarySources ?? allSources.data ?? []), ...source])).sort();
-
+  const axes: { key: FindingFacet; label: string; value: string[]; set: (v: string[]) => void }[] = [
+    { key: 'category', label: 'Category', value: category, set: setCategory },
+    { key: 'status', label: 'Scanner result', value: status, set: setStatus },
+    { key: 'severity', label: 'Severity', value: severity, set: setSeverity },
+    { key: 'host', label: 'Machine', value: host, set: setHost },
+    { key: 'asset_type', label: 'Asset type', value: assetType, set: setAssetType },
+    { key: 'source', label: 'Source', value: source, set: setSource },
+    { key: 'benchmark', label: 'Benchmark', value: benchmark, set: setBenchmark },
+    { key: 'benchmark_release', label: 'Release', value: release, set: setRelease },
+  ];
+  const options = (key: FindingFacet, selected: string[]) => {
+    const result = (data?.facets[key] ?? []).map((o) => ({
+      value: selected.find((s) => s.trim().toLowerCase() === o.value) ?? o.value,
+      label: `${['category', 'severity', 'status'].includes(key) || o.value === '__missing__' ? LABELS[o.value] ?? o.label : o.label} (${o.count})`,
+    }));
+    for (const value of selected) {
+      if (!result.some((o) => o.value === value)) result.push({ value, label: `${['category', 'severity', 'status'].includes(key) || value === '__missing__' ? LABELS[value] ?? value : value} (0)` });
+    }
+    return result;
+  };
+  const quickView = (view: 'stig' | 'cve' | 'open' | 'all') => {
+    axes.forEach((a) => a.set([]));
+    setQ('');
+    setStatus(view === 'all' ? [] : ['open']);
+    setCategory(view === 'stig' || view === 'cve' ? [view] : []);
+    setPage(1);
+  };
+  const reset = () => { quickView('open'); setSortBy('default'); setSortDir('asc'); };
+  const activeQuickView = !q && !severity.length && !source.length && !assetType.length && !host.length && !benchmark.length && !release.length
+    ? (!status.length && !category.length ? 'all' : status.length === 1 && status[0] === 'open'
+      ? (!category.length ? 'open' : category.length === 1 ? category[0] : '') : '') : '';
   const explainAll = async () => {
     setExplaining(true);
     try {
@@ -59,79 +114,80 @@ export default function Findings() {
       notifications.show({ message: `${r.queued} explanations queued on the local model` });
     } catch (e) {
       notifications.show({ color: 'red', title: 'Refused', message: errorText(e) });
-    } finally {
-      setExplaining(false);
-    }
+    } finally { setExplaining(false); }
   };
-
-  const reset = (fn: (v: string[]) => void) => (v: string[]) => { setPage(1); fn(v); };
 
   return (
     <Stack gap="md">
-      <PageTitle
-        title="Findings"
-        subtitle={st.data ? `${st.data.total} matching · scan ${st.data.scan_id ?? '-'}` : undefined}
+      <PageTitle title="Findings" subtitle="Filter STIG checks, vulnerabilities and hunt results across the current findings view."
         right={<>
-          <Button variant="light" leftSection={<IconSparkles size={16} />} loading={explaining} onClick={() => void explainAll()}>Precompute explanations</Button>
-          <Button variant="light" onClick={() => void st.reload()} loading={st.loading}>Refresh</Button>
-        </>}
-      />
-      {st.data?.summary && (
-        <Group gap="xs">
-          {(['high', 'medium', 'low'] as const).map((s) => (
-            <Group gap={4} key={s}><SeverityBadge severity={s} /><Text fw={700}>{st.data?.summary?.open_by_severity[s] ?? 0}</Text><Text size="sm" c="dimmed">open</Text></Group>
-          ))}
-        </Group>
-      )}
-      <Group gap="sm" align="flex-end" wrap="wrap">
-        <TextInput label="Search" placeholder="title, rule id, STIG id" leftSection={<IconSearch size={16} />} value={q} onChange={(e) => { setPage(1); setQ(e.currentTarget.value); }} w={260} />
-        <MultiSelect label="Status" data={STATUSES} value={status} onChange={reset(setStatus)} clearable w={200} placeholder="All" />
-        <MultiSelect label="Severity" data={[{ value: 'high', label: 'CAT I' }, { value: 'medium', label: 'CAT II' }, { value: 'low', label: 'CAT III' }, { value: 'info', label: 'Info' }]} value={severity} onChange={reset(setSeverity)} clearable w={180} placeholder="All" />
-        <MultiSelect label="Host" data={hosts} value={host} onChange={reset(setHost)} clearable searchable w={200} placeholder="All" />
-        <MultiSelect label="Asset type" data={ASSET_TYPES} value={assetType} onChange={reset(setAssetType)} clearable w={180} placeholder="All" />
-        <MultiSelect label="Source" data={sources} value={source} onChange={reset(setSource)} clearable w={180} placeholder="All" />
+          <Tooltip label="Queues explanations for all open findings, regardless of these filters">
+            <Button variant="light" leftSection={<IconSparkles size={16} />} loading={explaining} onClick={() => void explainAll()}>Explain all open</Button>
+          </Tooltip>
+          <Button variant="light" onClick={() => void reload()} loading={loading}>Refresh</Button>
+        </>} />
+      <Paper withBorder radius="md" p="md">
+        <Stack gap="md">
+          <Group justify="space-between">
+            <Group gap="xs" aria-label="Quick views">
+              {([{ value: 'stig', label: 'Open STIGs' }, { value: 'cve', label: 'Open CVEs' }, { value: 'open', label: 'All open' }, { value: 'all', label: 'All results' }] as const).map((v) => (
+                <Button key={v.value} size="xs" variant={activeQuickView === v.value ? 'filled' : 'light'} aria-pressed={activeQuickView === v.value} onClick={() => quickView(v.value)}>{v.label}</Button>
+              ))}
+            </Group>
+            <Group gap="xs">
+              <Button size="xs" variant="subtle" onClick={() => quickView('all')}>Clear filters</Button>
+              <Button size="xs" variant="subtle" onClick={reset}>Reset defaults</Button>
+            </Group>
+          </Group>
+          <TextInput label="Search findings" placeholder="CVE or STIG identifier, rule, title, machine…" leftSection={<IconSearch size={16} />} value={q}
+            onChange={(e) => { setPage(1); setQ(e.currentTarget.value); }}
+            rightSection={q ? <ActionIcon variant="subtle" aria-label="Clear search" onClick={() => { setQ(''); setPage(1); }}><IconX size={16} /></ActionIcon> : undefined} />
+          <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="sm">
+            {axes.map((a) => <MultiSelect key={a.key} label={a.label} data={options(a.key, a.value)} value={a.value}
+              onChange={(value) => { setPage(1); a.set(value); }} searchable clearable placeholder={a.value.length ? undefined : 'All'} nothingFoundMessage="No matching options" />)}
+          </SimpleGrid>
+          <Group justify="space-between" align="flex-end">
+            <Text size="xs" c="dimmed" maw={620}>Option counts cover the full view. Categories can overlap. Scanner results are not human triage decisions; verified fixes appear passed.</Text>
+            <Group gap="sm">
+              <Select label="Sort by" data={SORTS} value={sortBy} allowDeselect={false} w={190}
+                onChange={(v) => { setSortBy((v ?? 'default') as FindingSort); if (v === 'default') setSortDir('asc'); setPage(1); }} />
+              <Select label="Direction" data={[{ value: 'asc', label: 'Ascending' }, { value: 'desc', label: 'Descending' }]} value={sortDir}
+                disabled={sortBy === 'default'} allowDeselect={false} w={150} onChange={(v) => { setSortDir((v ?? 'asc') as SortDirection); setPage(1); }} />
+            </Group>
+          </Group>
+        </Stack>
+      </Paper>
+      <Group justify="space-between" aria-live="polite">
+        <Text size="sm" fw={600}>{loading ? 'Updating results…' : data ? `${data.total.toLocaleString()} matching / ${data.unfiltered_total.toLocaleString()} total results` : 'Results unavailable'}</Text>
+        {data && <Text size="xs" c="dimmed">Current view · baseline {data.scan_id ?? 'none'}</Text>}
       </Group>
-
-      <AsyncView
-        state={st}
-        what="Loading findings"
-        isEmpty={(d) => d.findings.length === 0}
-        empty={<Empty title="No findings match">Run a scan, or clear the filters.</Empty>}
-      >
-        {(d) => (
-          <Paper withBorder radius="md">
-            <ScrollArea>
-              <Table striped highlightOnHover verticalSpacing="xs" miw={1000}>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>CAT</Table.Th><Table.Th>Status</Table.Th><Table.Th>Host</Table.Th><Table.Th>Source</Table.Th>
-                    <Table.Th>Rule / STIG ID</Table.Th><Table.Th>Title</Table.Th><Table.Th>Fix</Table.Th><Table.Th>Explained</Table.Th><Table.Th>Proposal</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {d.findings.map((f) => (
-                    <Table.Tr key={f.id} onClick={() => setDrawer(f.id)} style={{ cursor: 'pointer' }}>
-                      <Table.Td><SeverityBadge severity={f.severity} size="sm" /></Table.Td>
-                      <Table.Td><StatusBadge status={f.status} /></Table.Td>
-                      <Table.Td><Group gap={4} wrap="nowrap"><AssetIcon type={f.asset_type} size={14} /><Text size="sm">{f.host}</Text></Group></Table.Td>
-                      <Table.Td><Badge variant="outline" color="gray" size="sm">{f.source}</Badge></Table.Td>
-                      <Table.Td><Mono>{f.rule_version ?? f.rule_id}</Mono></Table.Td>
-                      <Table.Td><Text size="sm" lineClamp={2}>{f.title}</Text></Table.Td>
-                      <Table.Td><Yes v={!!f.fix} tip={f.fix ? f.fix.fix_ref : 'no library fix'} /></Table.Td>
-                      <Table.Td><Yes v={!!f.explanation} tip={f.explanation ? 'explanation ready' : 'not yet explained'} /></Table.Td>
-                      <Table.Td>{f.proposal ? <StateBadge state={f.proposal.state} /> : <Text size="sm" c="dimmed">-</Text>}</Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </ScrollArea>
-            {d.total > PAGE && (
-              <Group justify="center" p="sm"><Pagination total={Math.ceil(d.total / PAGE)} value={page} onChange={setPage} /></Group>
-            )}
-          </Paper>
-        )}
+      <AsyncView state={st} what="Loading findings" isEmpty={(d) => d.findings.length === 0}
+        empty={<Empty title="No findings match"><Stack align="center" gap="xs"><Text size="sm">Choose another quick view, clear filters, or run a scan.</Text><Button variant="light" onClick={() => quickView('all')}>Show all results</Button></Stack></Empty>}>
+        {(d) => <Paper withBorder radius="md">
+          <ScrollArea>
+            <Table striped highlightOnHover verticalSpacing="sm" miw={1250}>
+              <Table.Thead><Table.Tr>
+                <Table.Th>Severity</Table.Th><Table.Th>Scanner result</Table.Th><Table.Th>Machine / type</Table.Th><Table.Th>Category / source</Table.Th>
+                <Table.Th>Rule / title</Table.Th><Table.Th>Benchmark / release</Table.Th><Table.Th>Observed</Table.Th><Table.Th>Fix / explanation / proposal</Table.Th>
+              </Table.Tr></Table.Thead>
+              <Table.Tbody>{d.findings.map((f) => <Table.Tr key={f.id}>
+                <Table.Td><SeverityBadge severity={f.severity} size="sm" /></Table.Td>
+                <Table.Td><Badge color={statusColor(f.status)} variant="light" radius="sm">{LABELS[f.status]}</Badge></Table.Td>
+                <Table.Td><Group gap={4} wrap="nowrap"><AssetIcon type={f.asset_type} size={14} /><Text size="sm">{f.host || 'Not recorded'}</Text></Group><Text size="xs" c="dimmed">{f.asset_type || 'Not recorded'}</Text></Table.Td>
+                <Table.Td><Group gap={4}>{f.categories.map((c) => <Badge key={c} size="xs" variant="light" color={c === 'stig' ? 'blue' : c === 'cve' ? 'orange' : 'gray'}>{LABELS[c]}</Badge>)}</Group><Text size="xs" c="dimmed" mt={4}>{f.source || 'Not recorded'}</Text></Table.Td>
+                <Table.Td miw={280} maw={420}><Button variant="subtle" size="compact-xs" onClick={() => setDrawer(f.id)} aria-label={`Open finding ${f.rule_version || f.rule_id}`}><Mono>{f.rule_version || f.rule_id}</Mono></Button><Text size="sm" lineClamp={2} mt={4}>{f.title}</Text>
+                  <Text size="xs" c="dimmed" lineClamp={2}>{Array.from(new Set([f.group_id, ...f.references.filter((r) => r.system === 'cve').map((r) => r.id)])).filter(Boolean).join(' · ')}</Text></Table.Td>
+                <Table.Td maw={240}><Text size="xs" lineClamp={2}>{f.benchmark || 'Not recorded'}</Text><Text size="xs" c="dimmed">{f.benchmark_release || 'Not recorded'}</Text></Table.Td>
+                <Table.Td><Text size="xs">{f.collected_at && !Number.isNaN(Date.parse(f.collected_at)) ? fmtTime(f.collected_at) : 'Not recorded'}</Text></Table.Td>
+                <Table.Td><Group gap="sm"><Yes v={!!f.fix} tip={f.fix?.fix_ref ?? 'No library fix'} /><Yes v={!!f.explanation} tip={f.explanation ? 'Explanation ready' : 'Not yet explained'} />{f.proposal ? <StateBadge state={f.proposal.state} /> : <Text size="xs" c="dimmed">No proposal</Text>}</Group></Table.Td>
+              </Table.Tr>)}</Table.Tbody>
+            </Table>
+          </ScrollArea>
+          <Group justify="space-between" p="sm"><Text size="xs" c="dimmed">Showing {d.offset + 1}–{d.offset + d.findings.length} of {d.total.toLocaleString()} matching results</Text>
+            {d.total > PAGE && <Pagination total={Math.ceil(d.total / PAGE)} value={page} onChange={setPage} />}</Group>
+        </Paper>}
       </AsyncView>
-      <FindingDrawer findingId={drawer} onClose={() => setDrawer(null)} onProposed={() => void st.reload()} />
+      <FindingDrawer findingId={drawer} onClose={() => setDrawer(null)} onProposed={() => void reload()} />
     </Stack>
   );
 }
