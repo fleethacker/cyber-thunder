@@ -5,7 +5,7 @@ in the container). Two kinds of thing live there, and the difference decides whe
 
 **Documents** are JSON the application reads and writes only through `StateStore` (`cyberthunder/store.py`):
 scan runs and findings, explanations, the link state, the presenter's demo switch, STIG delta and bulletin
-records, discovery scopes, assets and sweep runs, Kubernetes known-good exceptions, the content index, update
+records, discovery scopes, assets and sweep runs, finding review history (`finding_reviews/`), Kubernetes known-good exceptions, the content index, update
 check, cached catalog, library preferences (`content/preferences.json`), sync timestamps (`content/sync.json`),
 source and pull jobs. Preferences include product/type subscriptions, reconnect behavior, revision and actor;
 sync records distinguish live-check attempts/success, downloads and local imports. A

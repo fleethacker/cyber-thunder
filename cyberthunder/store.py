@@ -176,7 +176,8 @@ class StateStore:
         return d
 
     def save_scan_run(self, run: dict) -> None:
-        self.write_json(self.scan_dir(run["id"]) / "run.json", run)
+        from cyberthunder.findings.review import save_observation_document
+        save_observation_document(self, run["id"], run, kind="run")
 
     def load_scan_run(self, scan_id: str) -> dict | None:
         return self.read_json(self.scans_dir / scan_id / "run.json")
@@ -196,7 +197,8 @@ class StateStore:
         return runs[0]["id"] if runs else None
 
     def save_findings(self, scan_id: str, findings: Iterable[Finding], meta: dict | None = None) -> None:
-        self.write_json(self.scan_dir(scan_id) / "findings.json", findings_doc(findings, meta=meta))
+        from cyberthunder.findings.review import save_observation_document
+        save_observation_document(self, scan_id, findings_doc(findings, meta=meta), kind="findings")
 
     def _run_findings(self, scan_id: str) -> list[Finding]:
         doc = self.read_json(self.scans_dir / scan_id / "findings.json")

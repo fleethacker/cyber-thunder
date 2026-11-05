@@ -1,0 +1,37 @@
+<h2>Finding confidence and review</h2>
+<p>Assessed at {{ r.assurance.assessed_at }}. Human review is separate from scanner status and change approval.
+Reviewer identity: <b>{{ r.assurance.identity_label }}</b>. Suppression is not remediation.</p>
+<table>
+<tr><th>Raw scanner open</th><th>Confirmed</th><th>Unreviewed</th><th>Suppressed</th><th>Needs investigation</th></tr>
+<tr><td>{{ r.assurance.counts.raw_open }}</td><td>{{ r.assurance.counts.confirmed }}</td><td>{{ r.assurance.counts.unreviewed }}</td><td>{{ r.assurance.counts.suppressed }}</td><td>{{ r.assurance.counts.needs_investigation }}</td></tr>
+</table>
+<p class="meta">Review counts above are subsets of raw-open observations, including discovery. Verified fixes do not rewrite these raw counts.
+Scanner pass: {{ r.assurance.counts.scanner_pass }}; scanner not applicable: {{ r.assurance.counts.scanner_not_applicable }};
+scanner not reviewed: {{ r.assurance.counts.scanner_not_reviewed }}; scanner errors: {{ r.assurance.counts.scanner_error }}.
+Unchecked results and errors are not passes. An unreviewed scanner pass is not a human decision.</p>
+<h2>Finding evidence and review</h2>
+<p class="meta">All selected scanner observations and current discovery items are retained below, including suppressed findings.
+Historical observations use only reviews matching their evidence fingerprint, evaluated at report generation time.</p>
+{% for f in r.assurance.findings %}
+{% set review = f.review %}
+{% set event = review.current or {} %}
+<div class="finding-evidence">
+<p><b>{{ f.host }}: {{ f.title }}</b> ({{ f.severity }}) | Finding <code>{{ f.id }}</code> | Source: {{ f.source }} | Rule: {{ f.rule_id }}</p>
+<p>Original scanner status: <b>{{ f.status }}</b>. {% if review.suppressed %}<b>SUPPRESSED BY REVIEW - NOT REMEDIATED.</b>{% endif %}</p>
+<p>Confidence: <b>{{ f.confidence.grade }}</b> - {{ f.confidence.reason }}</p>
+<p>Review disposition: <b>{{ review.disposition }}</b>; active: {{ "yes" if review.active else "no" }};
+suppressed: {{ "yes" if review.suppressed else "no" }}; reviewer identity: {{ f.identity_label }}.</p>
+{% if event %}
+<p>Last review disposition: {{ event.disposition }}; reviewer: {{ event.reviewed_by }}; reviewed at: {{ event.reviewed_at }};
+expiry: {{ event.expires_at or "none" }}. Reason: {{ event.reason }}</p>
+<p>Supporting evidence: {{ event.supporting_evidence or "none supplied" }}</p>
+{% else %}
+<p>Reviewer: none; reason: no matching review; expiry: none.</p>
+{% endif %}
+{% if review.reopened_reason %}<p><b>Review reopened:</b> {{ review.reopened_reason }}</p>{% endif %}
+<p>Scanner evidence: {{ f.evidence or "not supplied" }}</p>
+<p class="meta">Citations: {{ f.citations | join(", ") }}. Evidence fingerprint: <code>{{ review.evidence_fingerprint }}</code>.</p>
+</div>
+{% else %}
+<p>No scanner observations available.</p>
+{% endfor %}

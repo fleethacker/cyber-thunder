@@ -53,6 +53,7 @@ from cyberthunder.control.approvals import TRANSITIONS, IllegalTransition, Propo
 from cyberthunder.control.identity import require_human
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.findings.schema import Finding
+from cyberthunder.findings.lifecycle import ReviewConflict
 from cyberthunder.inventory.targets import ScopeViolation
 from cyberthunder.remediation import snapshot
 from cyberthunder.remediation.library import FixEntry
@@ -74,6 +75,14 @@ _RECORD_LOCK = threading.Lock()
 
 class EngineError(RuntimeError):
     pass
+
+
+class ReviewSuppressed(EngineError):
+    """An active review excludes this observation from remediation."""
+
+
+class PolicyEvidenceBlocked(EngineError):
+    """Standing approval no longer suffices for the current evidence or review."""
 
 
 def _env_flag(name: str) -> bool:
@@ -227,7 +236,31 @@ class RemediationEngine:
                 f"the cited requirement ({cite}); the proposed library fix needs human approval before it runs.")
 
     # -- proposals ---------------------------------------------------------------------
+    def _review_suppressed(self, finding: Finding, actor: str, action: str) -> bool:
+        from cyberthunder.findings.review import ReviewService
+        current = self.ctx.store.get_finding(finding.id) or finding
+        review = ReviewService(self.ctx).summary(current)
+        if not review["suppressed"]:
+            return False
+        self.ctx.audit.append("finding.review_blocked", actor,
+                              {"action": action, "finding_id": finding.id,
+                               "disposition": review["disposition"], "revision": review["revision"]},
+                              subject=finding.id, outcome="blocked")
+        return True
+
+    def _guard_policy_evidence(self, proposal: Proposal, finding: Finding, actor: str) -> None:
+        if not (proposal.decided_by or "").startswith("policy:"):
+            return
+        current = self.ctx.store.get_finding(finding.id) or finding
+        reason = policy_mod.assurance_block_reason(self.ctx, current)
+        if reason:
+            self.ctx.audit.append("policy.apply_blocked", actor, {"reason": reason, "finding_id": finding.id},
+                                  subject=proposal.id, outcome="blocked")
+            raise PolicyEvidenceBlocked(reason + "; cancel this proposal and request individual approval")
+
     def propose(self, finding: Finding, *, actor: str = "agent", fix: FixEntry | None = None) -> Proposal | None:
+        if self._review_suppressed(finding, actor, "propose"):
+            return None
         existing = self.proposal_for_finding(finding.id)
         if existing is not None and existing.state.value not in TERMINAL:
             return existing
@@ -297,7 +330,7 @@ class RemediationEngine:
                                   {"reason": "fix or target not found", "fix_ref": p.fix_ref, "host": p.host},
                                   subject=p.id, outcome="blocked")
             return
-        decision = policy_mod.evaluate(pol, fix, finding, target)
+        decision = policy_mod.evaluate_for_context(self.ctx, fix, finding, target)
         if not decision.auto_eligible:
             self.ctx.audit.append("policy.evaluate", "agent", {"decision": decision.to_dict(), "fix_ref": p.fix_ref},
                                   subject=p.id, outcome="declined")
@@ -369,6 +402,9 @@ class RemediationEngine:
         finding = self._finding(p.finding_id)
         if finding is None:
             raise EngineError(f"finding {p.finding_id} not found in any scan")
+        if self._review_suppressed(finding, actor, "apply"):
+            raise ReviewSuppressed("The current finding has an active review suppression; reopen its review before applying")
+        self._guard_policy_evidence(p, finding, actor)
         fix = self._fix_for(p, finding)
         adapter = self._adapter(target)
         snap = self.ctx.store.snapshot_dir(p.id)
@@ -386,11 +422,16 @@ class RemediationEngine:
             copied = self._copy_files(transport, snap, list(before.files), after=False)
             self._audit_step(p, "before_state", {"fix_ref": fix.fix_ref, "files": before.files[:50],
                                                  "copied": len(copied), "dir": str(snap)})
-            if fix.kind == "runbook":
-                return self._issue_runbook(p, target, fix)
-            self.ctx.killswitch.guard(f"remediation.apply:{p.id}", actor)
-            step = "apply"
-            ar = adapter.apply(target, transport, fix, finding, before)
+            from cyberthunder.findings.review import ReviewService
+            with ReviewService(self.ctx).remediation_guard(finding):
+                if self._review_suppressed(finding, actor, "apply"):
+                    raise ReviewSuppressed("A review suppressed the finding before apply; no fix was executed")
+                self._guard_policy_evidence(p, finding, actor)
+                if fix.kind == "runbook":
+                    return self._issue_runbook(p, target, fix)
+                self.ctx.killswitch.guard(f"remediation.apply:{p.id}", actor)
+                step = "apply"
+                ar = adapter.apply(target, transport, fix, finding, before)
             snapshot.save_result(snap, "apply", ar)
             if not ar.ok:
                 gate.failed(p.id, "agent", note=f"apply failed: {_short(ar.output)}")
@@ -425,6 +466,11 @@ class RemediationEngine:
                                             f"{_short(vr.evidence, 200)}")
             self._auto_rollback(p, target, adapter, transport, fix, before, why)
             return gate.get(p.id)
+        except (ReviewSuppressed, PolicyEvidenceBlocked, ReviewConflict):
+            # Before-state capture is read-only. Do not run a rollback when apply never ran.
+            if gate.get(p.id).state is ProposalState.APPLYING:
+                gate.failed(p.id, actor, note="stopped before apply by finding evidence or review")
+            raise
         except KillSwitchEngaged as e:
             # the guard has already audited the block; stop here and do not touch the host again
             if gate.get(p.id).state in (ProposalState.APPLYING, ProposalState.APPLIED):

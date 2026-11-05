@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING
 
 from cyberthunder.control.approvals import Proposal, ProposalState
 from cyberthunder.findings.schema import Finding, Status, utcnow
-from cyberthunder.report.onepager import latest_proposals, resolve_scan, state_time
+from cyberthunder.report.closure import state_time, verified_closure
+from cyberthunder.report.onepager import latest_proposals, resolve_scan
 from cyberthunder.report.render import ReportError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -37,14 +38,16 @@ def _cklb_severity(f: Finding) -> str:
 
 
 def _status_for(f: Finding, p: Proposal | None) -> tuple[str, str]:
-    """(cklb status, comment). A verified change closes the rule even if the scan predates the fix."""
-    if f.is_open and p and p.state == ProposalState.VERIFIED:
+    """(cklb status, comment). Only a dated verification covering the observation closes it."""
+    if verified_closure(f, p):
         when = state_time(p, ProposalState.VERIFIED) or "unknown time"
         return "not_a_finding", f"Fixed by approved change {p.id} ({p.fix_ref}), approved by {p.decided_by}, verified {when}."
     status = CKLB_STATUS[f.status]
     note = ""
     if f.is_open and p:
         note = f"Fix {p.fix_ref} is {p.state.value} (proposal {p.id})."
+        if p.state == ProposalState.VERIFIED:
+            note += " Prior verification does not establish closure of this observation; reassess and verify."
     elif f.is_open and f.fix_ref:
         note = f"Library fix {f.fix_ref} available; not yet proposed."
     return status, note

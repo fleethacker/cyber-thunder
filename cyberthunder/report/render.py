@@ -1,6 +1,7 @@
 """Shared Jinja2 environment for every report template (inline CSS only, no external assets)."""
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
@@ -14,11 +15,21 @@ class ReportError(RuntimeError):
 
 
 def _env() -> Environment:
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
         autoescape=lambda name: bool(name) and name.endswith(".html.j2"),
         trim_blocks=True, lstrip_blocks=True, keep_trailing_newline=True,
     )
+    env.filters["md_cell"] = _md_cell
+    return env
+
+
+def _md_cell(value) -> str:
+    """Keep scanner evidence and reviewer text literal inside Markdown reports."""
+    text = html.escape(str(value), quote=False)
+    for char in ("\\", "`", "*", "[", "]", "|"):
+        text = text.replace(char, "\\" + char)
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
 
 
 def render(name: str, fmt: str, **data) -> str:

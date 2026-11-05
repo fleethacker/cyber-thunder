@@ -15,7 +15,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 # Identifier patterns shared by every parser (DISA / ComplianceAsCode / NVD conventions).
 RE_STIG_RULE = re.compile(r"\bSV-\d+r\d+_rule\b")
@@ -128,6 +128,7 @@ class Finding:
     asset_type: str | None = None    # linux | windows | cisco_ios | kubernetes | containers
     fix_ref: str | None = None       # resolved remediation-library entry, set by the engine
     scan_id: str | None = None       # scan run that produced this finding
+    collection_provenance: dict[str, Any] | None = None  # optional collector facts; see docs/CONFIDENCE.md
 
     def __post_init__(self) -> None:
         if not isinstance(self.severity, Severity):

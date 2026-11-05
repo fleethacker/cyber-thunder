@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 API_PREFIX = "/api/v1"
 # Fixed list: a new feature area adds a module here and nowhere else.
 ROUTE_MODULES = ("status", "targets", "scans", "findings", "proposals", "audit", "kill", "policy", "cluster",
-                 "ingest", "reports", "demo", "discovery", "workflow")
+                 "ingest", "reports", "demo", "discovery", "workflow", "finding_reviews")
 
 
 def create_app(ctx: AppContext | None = None) -> FastAPI:

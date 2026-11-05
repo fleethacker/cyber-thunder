@@ -15,11 +15,13 @@ router = APIRouter(tags=["findings"], route_class=MappedRoute)
 def list_findings(ctx=CtxDep, scan_id: str | None = None, host: str | None = None, status: str | None = None,
                   severity: str | None = None, source: str | None = None, asset_type: str | None = None,
                   category: str | None = None, benchmark: str | None = None, benchmark_release: str | None = None,
+                  confidence: str | None = None, review: str | None = None,
                   sort_by: str = "default", sort_dir: str = "asc",
                   q: str | None = None, limit: int = Query(200, ge=1, le=5000), offset: int = Query(0, ge=0)) -> dict:
     return util.list_findings(ctx, scan_id=scan_id, limit=limit, offset=offset, host=host, status=status,
                               severity=severity, source=source, asset_type=asset_type, q=q, category=category,
                               benchmark=benchmark, benchmark_release=benchmark_release,
+                              confidence=confidence, review=review,
                               sort_by=sort_by, sort_dir=sort_dir)
 
 
@@ -44,6 +46,9 @@ def get_finding(finding_id: str, ctx=CtxDep, scan_id: str | None = None) -> dict
 @router.post("/findings/{finding_id}/propose")
 def propose(finding_id: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
     finding = util.get_finding(ctx, finding_id)
+    from cyberthunder.findings.review import ReviewService
+    if ReviewService(ctx).summary(finding)["suppressed"]:
+        raise HTTPException(409, "This observation has an active review suppression; reopen its review before proposing a fix")
     fix = ctx.library.resolve(finding)
     if fix is None:
         raise KeyError(f"no library fix for finding {finding_id} ({finding.rule_version or finding.rule_id})")

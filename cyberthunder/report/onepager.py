@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 from cyberthunder.control.approvals import Proposal, ProposalState
 from cyberthunder.findings.schema import RE_ATTACK, Finding, Severity
+from cyberthunder.report.assurance import build_assurance
+from cyberthunder.report.closure import state_time, verified_closure
 from cyberthunder.report.render import ReportError, render
 from cyberthunder.report.coverage import build_coverage
 
@@ -54,13 +56,6 @@ def latest_proposals(ctx: "AppContext") -> dict[str, Proposal]:
     for p in sorted(ctx.gate.list(), key=lambda p: p.created_at):
         out[p.finding_id] = p
     return out
-
-
-def state_time(p: Proposal, state: ProposalState) -> str | None:
-    for h in reversed(p.history):
-        if h.get("state") == state.value:
-            return h.get("ts")
-    return None
 
 
 def _cat_label(sev: Severity) -> str:
@@ -145,14 +140,18 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     sid, run, findings = resolve_scan(ctx, scan_id)
     v = ctx.audit.verify()
     latest = latest_proposals(ctx)
-    # a finding whose fix is verified is closed, as the POA&M and the checklist written from this state say
-    closed = [f for f in findings
-              if f.is_open and f.id in latest and latest[f.id].state == ProposalState.VERIFIED]
+    disc = discovery_open(ctx)
+    finding_ids = {f.id for f in findings}
+    assurance = build_assurance(ctx, [*findings, *(f for f in disc if f.id not in finding_ids)])
+    assured = {row["id"]: row for row in assurance["findings"]}
+    suppressed_ids = {row["id"] for row in assurance["findings"] if row["review"]["suppressed"]}
+    # A subsequent open observation wins over an older verified fix.
+    closed = [f for f in findings if verified_closure(f, latest.get(f.id))]
     closed_ids = {f.id for f in closed}
-    open_f = [f for f in findings if f.is_open and f.id not in closed_ids]
+    open_f = [f for f in findings if f.is_open and f.id not in closed_ids and f.id not in suppressed_ids]
     hunt = [f for f in open_f if is_hunt(f)]
     props = ctx.gate.list()
-    disc = discovery_open(ctx)
+    active_disc = [f for f in disc if f.id not in suppressed_ids]
 
     # open findings by host and CAT
     hosts: dict[str, dict] = {}
@@ -183,9 +182,10 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
         ex = ctx.store.load_explanation(f.id) or {}
         top.append({"cat": _cat_label(f.severity), "host": f.host, "title": f.title,
                     "risk": (ex.get("risk") or "").strip(),
-                    "citations": _ordered_citations(f, ex.get("citations"))})
+                    "citations": _ordered_citations(f, ex.get("citations")),
+                    "assurance": assured[f.id]})
 
-    # BLUF: three sentences computed from the data
+    # BLUF: operational counts and raw observations remain separate.
     scanned = len({f.host for f in findings}) or len(run.get("targets", []))
     s1 = (f"{len(open_f)} open finding(s) on {scanned} host(s): {cat_totals['high']} CAT I, "
           f"{cat_totals['medium']} CAT II, {cat_totals['low']} CAT III"
@@ -195,16 +195,23 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
         s2 = (f"{len(hunt)} intrusion indicator(s) on {', '.join(sorted({f.host for f in hunt}))}"
               f"{' (ATT&CK ' + ', '.join(tech) + ')' if tech else ''} need immediate review.")
     else:
-        s2 = "No intrusion indicators were found by the hunt checks."
+        s2 = "No unsuppressed open intrusion indicators in the available observations; this is not proof of absence."
     chain = "intact" if v.ok else "BROKEN"
     s3 = (f"{counts['verified']} change(s) verified, {counts['proposed']} awaiting approval, "
           f"{counts['rolled_back']} rolled back, {counts['failed']} failed; "
           f"audit chain {chain} over {v.count} records.")
     bluf = [s1, s2]
-    unknown = sorted({f.host.removeprefix("discovered:") for f in disc if f.rule_id == "discovery:unknown_asset"})
+    unknown = sorted({f.host.removeprefix("discovered:") for f in active_disc if f.rule_id == "discovery:unknown_asset"})
     if disc:
         bluf.append(f"Discovery found {len(disc)} open item(s) on the enclave"
                     f"{', including unknown device(s) ' + ', '.join(unknown) if unknown else ''}.")
+    ac = assurance["counts"]
+    bluf.append(f"Raw scanner open: {ac['raw_open']}; confirmed: {ac['confirmed']}; "
+                f"unreviewed: {ac['unreviewed']}; suppressed: {ac['suppressed']}; "
+                f"needs investigation: {ac['needs_investigation']}. "
+                "Review counts are subsets of raw open, including discovery; suppression is not remediation.")
+    bluf.append(f"Scanner not reviewed: {ac['scanner_not_reviewed']}; errors: {ac['scanner_error']}. "
+                "Neither counts as a pass.")
     bluf.append(s3)
 
     nxt = []
@@ -238,6 +245,7 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
         "hunt": [{"host": f.host, "title": f.title, "attack": attack_ids(f)}
                  for f in sorted(hunt, key=lambda f: (f.host, f.title))],
         "decisions": counts, "verified": verified, "reverted": reverted, "top": top,
+        "assurance": assurance,
         "discovery": [{"host": f.host.removeprefix("discovered:"), "title": f.title, "severity": f.severity.value,
                        "check": f.rule_id} for f in sorted(disc, key=lambda f: (-f.severity.rank, f.host, f.rule_id))],
         "link": _link_line(ctx), "next_actions": nxt, "command": cmd,

@@ -11,6 +11,50 @@ export type ProposalState =
 
 export interface Reference { system: string; id: string }
 
+export type ConfidenceGrade = 'high' | 'medium' | 'low' | 'unknown';
+export interface FindingConfidence {
+  grade: ConfidenceGrade;
+  reason: string;
+  reasons: string[];
+  version: string;
+  assessed_at: string;
+  observed_at: string | null;
+  evidence: Record<string, unknown>;
+}
+export type ReviewDisposition = 'unreviewed' | 'confirmed' | 'false_positive' | 'not_applicable' | 'needs_investigation';
+export interface FindingReviewEvent {
+  id: string;
+  disposition: ReviewDisposition;
+  reason: string;
+  supporting_evidence: string;
+  expires_at: string | null;
+  reviewed_at: string;
+  reviewed_by: string;
+  identity_verified: false;
+  scope: Record<string, unknown>;
+  evidence_fingerprint: string;
+}
+export interface FindingReview {
+  disposition: ReviewDisposition;
+  active: boolean;
+  suppressed: boolean;
+  revision: number;
+  evidence_fingerprint: string;
+  current: FindingReviewEvent | null;
+  history_count: number;
+  reopened_reason: string | null;
+  identity_verified: false;
+}
+export interface FindingReviewHistory extends FindingReview { history: FindingReviewEvent[] }
+export interface FindingReviewInput {
+  disposition: ReviewDisposition;
+  reason: string;
+  supporting_evidence: string;
+  expires_at: string | null;
+  expected_revision: number;
+  evidence_fingerprint: string;
+}
+
 export interface Explanation {
   finding_id: string;
   risk: string;
@@ -80,6 +124,10 @@ export interface Finding {
 }
 
 export interface FindingPlus extends Finding {
+  scanner_status?: FindingStatus;
+  confidence?: FindingConfidence | null;
+  review?: FindingReview | null;
+  remediated?: { proposal_id: string; verified_at: string; scan_status: FindingStatus } | null;
   categories: FindingCategory[];
   cat: string;
   explanation: Explanation | null;
@@ -103,7 +151,7 @@ export interface FindingsPage {
   summary: FindingsSummary | null;
   view: 'current' | 'scan';
   unfiltered_total: number;
-  facets: Record<FindingFacet, FindingFacetOption[]>;
+  facets: Partial<Record<FindingFacet, FindingFacetOption[]>>;
   limit: number;
   offset: number;
   sort_by: FindingSort;
@@ -111,9 +159,9 @@ export interface FindingsPage {
 }
 
 export type FindingCategory = 'stig' | 'cve' | 'hunt' | 'other';
-export type FindingFacet = 'host' | 'asset_type' | 'source' | 'status' | 'severity' | 'category' | 'benchmark' | 'benchmark_release';
+export type FindingFacet = 'host' | 'asset_type' | 'source' | 'status' | 'severity' | 'category' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review';
 export interface FindingFacetOption { value: string; label: string; count: number }
-export type FindingSort = 'default' | 'severity' | 'host' | 'asset_type' | 'category' | 'title' | 'rule_id' | 'rule_version' | 'source' | 'collected_at' | 'benchmark' | 'benchmark_release';
+export type FindingSort = 'default' | 'severity' | 'host' | 'asset_type' | 'category' | 'title' | 'rule_id' | 'rule_version' | 'source' | 'collected_at' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review';
 export type SortDirection = 'asc' | 'desc';
 export type FindingsQuery = Partial<Record<FindingFacet | 'scan_id' | 'q', string>> & {
   sort_by?: FindingSort; sort_dir?: SortDirection; limit?: number; offset?: number;

@@ -15,7 +15,10 @@ proposal or stale preference revision · `403` scope violation or machine actor 
 
 **Shapes.** `Finding` = `Finding.to_dict()`. `Finding+` adds `cat` ("CAT I"), `explanation` (Explanation or null),
 `fix` (FixEntry.to_dict() or null), `proposal` ({id, state} or null), and `categories` (overlapping
-`stig`, `cve`, `hunt`, or fallback `other`). `Proposal+` = `Proposal.to_dict()` plus
+`stig`, `cve`, `hunt`, or fallback `other`), `scanner_status` (original stored result), `confidence`
+(grade, reasons, rules version, timestamps and provenance) and `review` (disposition, revision,
+fingerprint, current event, active/suppressed and reopening reason). See [CONFIDENCE](CONFIDENCE.md)
+and [FINDING_REVIEW](FINDING_REVIEW.md). `Proposal+` = `Proposal.to_dict()` plus
 `fix`, `finding` (Finding+ without nested proposal), `policy` (PolicyDecision or null), `severity`, `cat`,
 `target` ({id, name, asset_type, simulated}). `Target` = `Target.to_dict()`. `ScanRun` = `ScanRun.to_dict()`
 plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` = `Explanation.to_dict()`.
@@ -40,10 +43,12 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/scans/{id}` | → ScanRun |
 
 ## Findings
-| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&category&benchmark&benchmark_release&q&sort_by&sort_dir&limit=200&offset=0` → `{findings: [Finding+], total, unfiltered_total, scan_id, view, summary, facets, sort_by, sort_dir, limit, offset}`. Filters and sorting run before pagination; see query contract below |
+| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&category&benchmark&benchmark_release&confidence&review&q&sort_by&sort_dir&limit=200&offset=0` → `{findings: [Finding+], total, unfiltered_total, scan_id, view, summary, facets, sort_by, sort_dir, limit, offset}`. Filters and sorting run before pagination; see query contract below |
 |---|---|---|
 | GET | `/findings/{id}` | → Finding+ |
-| POST | `/findings/{id}/propose` | → Proposal+ (`409` if a live proposal already exists, `404` if no library fix) |
+| GET | `/findings/{id}/review` | `?scan_id` optional historical view → summary and ordered review history |
+| PUT | `/findings/{id}/review` | `{disposition, reason, supporting_evidence?, expires_at?, expected_revision, evidence_fingerprint}` → summary and history. Current findings only; stale revision/evidence returns `409`, historical writes `400` |
+| POST | `/findings/{id}/propose` | → Proposal+ (`409` if a live proposal or active review suppression exists, `404` if no library fix) |
 | POST | `/findings/{id}/explain` | `{force?: bool}` → Explanation (synchronous; may take up to `CT_LLM_TIMEOUT`) |
 | POST | `/findings/explain` | `{ids?: [..]}` → `{queued: n}`; background precompute, default = all open findings of the latest scan |
 
@@ -53,7 +58,7 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
   `scan_id` in the response remains the baseline metadata anchor; `view` is `current`.
   Explicit `scan_id` selects only that run and returns `view: "scan"`; unknown IDs return `404`.
   Existing verified-remediation status decoration is retained for both views.
-- `host`, `asset_type`, `source`, `status`, `severity`, `category`, `benchmark`, and `benchmark_release`
+- `host`, `asset_type`, `source`, `status`, `severity`, `category`, `benchmark`, `benchmark_release`, `confidence` and `review`
   accept comma-separated values (OR within an axis, AND across axes). Matching ignores case and outer
   whitespace. CSV-quote values containing commas or quotes; for example `benchmark_release="Release 1, November"`.
   Omit a filter or send an empty string to select all values. `__missing__` selects absent/blank text fields.
@@ -66,15 +71,19 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
   `category` accepts `stig`, `cve`, `hunt`, `other`; categories can overlap. Classification uses normalized
   references, rule identifiers, scanner provenance and STIG benchmark names, not title keywords.
   See [FINDINGS.md](FINDINGS.md) for classification details.
+- `confidence` accepts `high`, `medium`, `low`, `unknown`; `review` accepts `unreviewed`, `confirmed`,
+  `false_positive`, `not_applicable`, `needs_investigation`. The review facet is independent of scanner status.
 - `q` is a case-insensitive substring of title, machine/host ID, rule ID, rule version, group ID,
   reference identifiers (including CVEs and STIGs), source, benchmark, or release.
 - `sort_by` accepts `default`, `severity`, `host`, `asset_type`, `category`, `title`, `rule_id`,
-  `rule_version`, `source`, `collected_at`, `benchmark`, `benchmark_release`.
+  `rule_version`, `source`, `collected_at`, `benchmark`, `benchmark_release`, `confidence`, `review`.
   `sort_dir` is `asc` (default) or `desc`. The omitted/default sort preserves severity descending,
   open first, host, then rule version or rule ID; it accepts only `asc` as its direction token.
   Explicit sorts use case-insensitive text, numeric severity, UTC-normalized observation time,
   or the alphabetically sorted tuple of category names. Ties use finding ID ascending in either
   direction. Missing/invalid values, including unknown severity, come last for explicit sorts.
+  Confidence orders Low/Medium/High with Unknown last in either direction; review orders Unreviewed,
+  Needs investigation, Confirmed, False positive, Not applicable.
 - `total` remains the filtered count. `unfiltered_total`, `summary`, and `facets` describe the complete
   selected view before filters or pagination. `facets` has one key per filter axis, each containing
   `{value, label, count}` entries. Values are normalized filter tokens, labels retain source spelling,
