@@ -38,8 +38,10 @@ DOCUMENT_FILES = frozenset({
     "cluster/known_good.json",
     "content/index.json", "content/last_check.json", "content/source.json", "content/catalog.json",
     "content/preferences.json", "content/sync.json",
+    "vulnerabilities/state.json", "vulnerabilities/settings.json",
 })
-DOCUMENT_AREAS = ("explanations/", "finding_reviews/", "change_assessments/", "ingest/deltas/", "ingest/bulletins/", "discovery/", "content/jobs/")
+DOCUMENT_AREAS = ("explanations/", "finding_reviews/", "change_assessments/", "ingest/deltas/", "ingest/bulletins/", "discovery/", "content/jobs/",
+                  "vulnerabilities/jobs/")
 SCAN_DOCUMENTS = frozenset({"run.json", "findings.json"})
 
 

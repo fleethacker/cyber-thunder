@@ -7,21 +7,28 @@ deterministic profile is always returned and stored even when the API key, netwo
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
+import os
 import subprocess
 import time
 import urllib.error
 import urllib.request
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator
 
 from cyberthunder.control.identity import normalize_actor, require_human
 from cyberthunder.control.killswitch import KillSwitchEngaged
-from cyberthunder.findings.schema import utcnow
+from cyberthunder.cluster.findings import (
+    database_provenance, is_stale, mark_missing_sections, normalize_findings, parse_report,
+)
+from cyberthunder.findings.schema import Finding, summarize, utcnow
 from cyberthunder.inventory.targets import Inventory, ScopeViolation, Target
+from cyberthunder.scan import ScanRun, TargetScanResult
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -48,6 +55,7 @@ class WorkloadRef:
     images: list[str] = field(default_factory=list)
     replicas: int | None = None
     labels: dict[str, str] = field(default_factory=dict)
+    uid: str | None = None
 
     def key(self) -> str:
         return f"{self.namespace}/{self.kind}/{self.name}"
@@ -61,7 +69,8 @@ def _safe_name(text: str) -> str:
 
 
 def _containers_from_pod_spec(spec: dict) -> list[dict]:
-    return list(spec.get("initContainers") or []) + list(spec.get("containers") or [])
+    return (list(spec.get("initContainers") or []) + list(spec.get("containers") or [])
+            + list(spec.get("ephemeralContainers") or []))
 
 
 def _pod_spec(obj: dict, kind: str) -> dict:
@@ -186,6 +195,7 @@ class ClusterBaselineService:
     @contextmanager
     def _operation(self, action: str, actor: str, target_id: str | None) -> Iterator[tuple[_ClusterBinding, dict]]:
         details = {"run_id": self.ctx.store.new_id("cluster-"), "source": "inventory",
+                   "started_at": datetime.now(timezone.utc).isoformat(),
                    "target_id": target_id if target_id is not None else self.ctx.settings.bootstrap_cluster_target_id}
         started = False
         try:
@@ -218,7 +228,10 @@ class ClusterBaselineService:
             self._guard(binding, actor)
         if p.returncode != 0:
             raise RuntimeError((p.stderr or p.stdout or "kubectl failed").strip()[:500])
-        return json.loads(p.stdout or "{}")
+        doc = json.loads(p.stdout or "{}")
+        if not isinstance(doc, dict) or not isinstance(doc.get("items"), list):
+            raise RuntimeError("kubectl supplied no valid resource list")
+        return doc
 
     def survey(self, *, actor: str, target_id: str | None = None) -> dict:
         with self._operation("cluster.survey", actor, target_id) as (binding, details):
@@ -248,12 +261,27 @@ class ClusterBaselineService:
                 errors.append(f"{resource}: {e}")
                 continue
             for item in doc.get("items") or []:
+                if (not isinstance(item, dict) or not isinstance(item.get("metadata"), dict)
+                        or not all(isinstance(item["metadata"].get(key), str) and item["metadata"][key]
+                                   for key in ("namespace", "name"))):
+                    errors.append(f"{resource}: workload identity is missing or malformed")
+                    continue
                 md = item.get("metadata") or {}
                 spec = _pod_spec(item, kind)
+                if (not isinstance(spec, dict) or not isinstance(spec.get("containers"), list)
+                        or not spec["containers"]):
+                    errors.append(f"{resource}: workload container inventory is unavailable")
+                    continue
+                containers = _containers_from_pod_spec(spec)
+                if any(not isinstance(c, dict) or not isinstance(c.get("image"), str) or not c["image"]
+                       for c in containers):
+                    errors.append(f"{resource}: workload image identity is missing or malformed")
+                    continue
                 images = sorted({c.get("image") for c in _containers_from_pod_spec(spec) if c.get("image")})
                 workloads.append(WorkloadRef(namespace=md.get("namespace") or "default", kind=kind,
                                              name=md.get("name") or "unknown", images=images,
-                                             replicas=_replicas(item, kind), labels=md.get("labels") or {}))
+                                             replicas=_replicas(item, kind), labels=md.get("labels") or {},
+                                             uid=md.get("uid")))
         namespaces.sort(key=lambda n: n["name"] or "")
         workloads.sort(key=lambda w: (w.namespace, w.kind, w.name))
         self._guard(binding, actor)
@@ -262,9 +290,46 @@ class ClusterBaselineService:
 
     def scan(self, *, actor: str, target_id: str | None = None, use_openai: bool = False) -> dict:
         with self._operation("cluster.baseline", actor, target_id) as (binding, details):
-            return self._baseline(binding, details, describe=use_openai)
+            try:
+                return self._baseline(binding, details, describe=use_openai)
+            except (ScopeViolation, KillSwitchEngaged):
+                raise
+            except Exception as exc:
+                # Keep the previous baseline API behavior for fatal collection failures, while
+                # making failure visible in the persistent findings view. Never overwrite a run
+                # already published if a later file write or optional presentation step failed.
+                if self.ctx.store.load_scan_run(details["run_id"]) is None:
+                    self._guard(binding, details["requested_by"])
+                    error = f"Cluster vulnerability assessment failed ({type(exc).__name__})"
+                    findings, _ = normalize_findings(binding.target_id, {"errors": [error]}, {}, None,
+                                                     details["run_id"], target_binding=asdict(binding))
+                    findings = [f for f in findings if f.rule_id.startswith("cluster-survey:")]
+                    self.ctx.store.save_findings(details["run_id"], findings)
+                    self._guard(binding, details["requested_by"])
+                    self.ctx.store.save_scan_run(self._scan_run(binding, details, findings, status="error",
+                                                               errors=[error], assessed=[], database={}))
+                raise
 
     def _baseline(self, binding: _ClusterBinding, details: dict, *, describe: bool) -> dict:
+        with ExitStack() as stack:
+            self._guard(binding, details["requested_by"])
+            snapshot, snapshot_error = None, None
+            try:
+                snapshot = stack.enter_context(self.ctx.vulnerabilities.scan_context())
+                if (not isinstance(snapshot, dict) or not snapshot.get("cache_dir")
+                        or not snapshot.get("generation") or snapshot.get("state") not in {"ready", "stale"}):
+                    raise ValueError("invalid managed vulnerability snapshot")
+            except (ScopeViolation, KillSwitchEngaged):
+                raise
+            except Exception as exc:  # noqa: BLE001 - missing/invalid managed data is never a clean scan
+                snapshot = None
+                snapshot_error = f"Managed vulnerability database unavailable ({type(exc).__name__})"
+            self._guard(binding, details["requested_by"])
+            return self._baseline_snapshot(binding, details, describe=describe, snapshot=snapshot,
+                                           snapshot_error=snapshot_error)
+
+    def _baseline_snapshot(self, binding: _ClusterBinding, details: dict, *, describe: bool,
+                           snapshot: dict | None, snapshot_error: str | None) -> dict:
         actor = details["requested_by"]
         survey = self._survey(binding, actor)
         images = sorted({img for w in survey["workloads"] for img in w.get("images", [])})
@@ -274,14 +339,26 @@ class ClusterBaselineService:
         run_dir.mkdir(parents=True, exist_ok=True)
         image_reports: dict[str, dict] = {}
         errors: list[str] = list(survey.get("errors") or [])
+        if snapshot_error:
+            errors.append(snapshot_error)
+        if snapshot and is_stale(snapshot):
+            errors.append("Managed vulnerability database is stale; negative results cannot clear prior findings")
         for image in images:
-            report, err = self._scan_image(image, run_dir, binding, actor)
+            report, err = (self._scan_image(image, run_dir, binding, actor, snapshot=snapshot)
+                           if snapshot else (None, snapshot_error or "Managed vulnerability database unavailable"))
             if err:
                 errors.append(f"{image}: {err}")
-            image_reports[image] = report or {"image": image, "vulnerabilities": [], "error": err}
+            image_reports[image] = report or {"image": image, "vulnerabilities": [], "error": err,
+                                             "complete": False, "failed": True}
+            if snapshot and is_stale(snapshot):
+                image_reports[image]["complete"] = False
+        errors.extend(mark_missing_sections(self.ctx.store.current_findings(), binding.target_id, survey,
+                                             image_reports, asdict(binding)))
         profiles = self._profiles(survey, image_reports)
         if describe:
             for profile in profiles:
+                if profile.get("assessment_status") != "complete":
+                    continue
                 self._guard(binding, actor)
                 try:
                     generated, err = self._openai_description(profile)
@@ -293,7 +370,16 @@ class ClusterBaselineService:
                 elif err:
                     profile.setdefault("notes", []).append(f"OpenAI summary unavailable: {err}")
         doc = {"id": run_id, "generated_at": utcnow(), "survey": survey, "images": image_reports,
-               "namespaces": profiles, "errors": errors, "requested_by": actor, "target": asdict(binding)}
+               "namespaces": profiles, "errors": errors, "requested_by": actor, "target": asdict(binding),
+               "status": "partial" if errors else "done", "database": database_provenance(snapshot)}
+        findings, assessed = normalize_findings(binding.target_id, survey, image_reports, snapshot, run_id,
+                                                target_binding=asdict(binding))
+        run = self._scan_run(binding, details, findings, status=doc["status"], errors=errors,
+                             assessed=assessed, database=doc["database"])
+        self._guard(binding, actor)
+        self.ctx.store.save_findings(run_id, findings, meta={"trigger": run["trigger"], "database": doc["database"]})
+        self._guard(binding, actor)
+        self.ctx.store.save_scan_run(run)
         self._guard(binding, actor)
         self.ctx.store.write_json(run_dir / "baseline.json", doc)
         self._guard(binding, actor)
@@ -301,37 +387,65 @@ class ClusterBaselineService:
         details.update(namespaces=len(profiles), images=len(images), errors=len(errors))
         return doc
 
+    @staticmethod
+    def _scan_run(binding: _ClusterBinding, details: dict, findings: list[Finding], *, status: str,
+                  errors: list[str], assessed: list[str], database: dict) -> dict:
+        finished = utcnow()
+        summary = summarize(findings)
+        summary["cluster_vulnerabilities"] = {"assessed_scopes": assessed, "database": database,
+                                              "errors": errors}
+        result = TargetScanResult(target_id=binding.target_id, status="error" if errors else "done",
+                                  started_at=details["started_at"], finished_at=finished, findings=len(findings),
+                                  open=sum(f.is_open for f in findings), errors=errors)
+        return ScanRun(id=details["run_id"], targets=[binding.target_id], modules=["cve"],
+                       trigger="cluster_vulnerabilities", requested_by=details["requested_by"], status=status,
+                       started_at=details["started_at"], finished_at=finished, results={binding.target_id: result},
+                       findings_count=len(findings), summary=summary, error="; ".join(errors) or None).to_dict()
+
     def latest(self) -> dict | None:
         return self.ctx.store.read_json(self.root / "latest.json")
 
     def _scan_image(self, image: str, run_dir: Path, binding: _ClusterBinding,
-                    actor: str) -> tuple[dict | None, str | None]:
-        args = [self.ctx.settings.trivy_binary, "image", "--quiet", "--format", "json"]
-        if self.ctx.settings.trivy_skip_db_update:
-            args.append("--skip-db-update")
-        args.append(image)
+                    actor: str, *, snapshot: dict) -> tuple[dict | None, str | None]:
+        # CLI flags take precedence, and inherited configuration/filters must not silently narrow
+        # coverage or enable database updates. Keep ordinary registry/proxy credentials available.
+        config_path, ignore_path = run_dir / "trivy-config.yaml", run_dir / "trivy-ignore"
+        config_path.write_text("{}\n", encoding="utf-8")
+        ignore_path.write_text("", encoding="utf-8")
+        args = [self.ctx.settings.trivy_binary, "image", "--quiet", "--format", "json",
+                "--config", str(config_path), "--ignorefile", str(ignore_path),
+                "--cache-dir", str(snapshot["cache_dir"]), "--cache-backend", "memory",
+                "--scanners", "vuln", "--skip-db-update",
+                "--skip-java-db-update", "--offline-scan", "--skip-version-check", "--", image]
+        env = {key: value for key, value in os.environ.items() if not key.upper().startswith("TRIVY_")}
         t0 = time.monotonic()
         self._guard(binding, actor)
         try:
             try:
                 p = subprocess.run(args, capture_output=True, text=True, timeout=self.ctx.settings.trivy_timeout_s,
-                                   encoding="utf-8", errors="replace")
+                                   encoding="utf-8", errors="replace", env=env)
             finally:
                 self._guard(binding, actor)
+        except (ScopeViolation, KillSwitchEngaged):
+            raise
         except FileNotFoundError:
             return None, f"{self.ctx.settings.trivy_binary} not found"
         except subprocess.TimeoutExpired:
             return None, f"timeout after {self.ctx.settings.trivy_timeout_s}s"
-        raw_path = run_dir / f"trivy_{_safe_name(image)}.json"
-        raw_path.write_text(p.stdout if p.stdout.strip() else json.dumps({"Results": []}), encoding="utf-8")
+        except OSError as exc:
+            return None, f"Trivy could not execute ({type(exc).__name__})"
+        raw_path = run_dir / f"trivy_{_safe_name(image)}_{hashlib.sha256(image.encode()).hexdigest()[:12]}.json"
+        raw_path.write_text(p.stdout or "", encoding="utf-8")
         if p.returncode != 0:
-            return None, (p.stderr or p.stdout or "trivy failed").strip()[:500]
+            return None, f"Trivy failed (exit {p.returncode}); image access or vulnerability coverage is unavailable"
         try:
             report = json.loads(p.stdout or "{}")
         except json.JSONDecodeError as e:
-            return None, f"trivy output was not JSON: {e}"
+            return None, f"Trivy output was not JSON (line {e.lineno}, column {e.colno})"
+        parsed = parse_report(report)
+        error = "; ".join(parsed.pop("errors")) or None
         return {"image": image, "seconds": round(time.monotonic() - t0, 3), "raw": str(raw_path),
-                "vulnerabilities": _image_vulns(report)}, None
+                **parsed, "complete": not error, "error": error}, error
 
     def _profiles(self, survey: dict, image_reports: dict[str, dict]) -> list[dict]:
         workloads_by_ns: dict[str, list[dict]] = defaultdict(list)
@@ -359,8 +473,14 @@ class ClusterBaselineService:
                 if vuln.get("cvss") is not None:
                     max_cvss = max(max_cvss, float(vuln["cvss"]))
             workload_count = len(workloads_by_ns.get(ns, []))
+            namespace_images = {img for w in workloads_by_ns.get(ns, []) for img in w.get("images", [])}
+            incomplete_images = sorted(img for img in namespace_images
+                                       if image_reports.get(img, {}).get("complete") is not True)
+            incomplete = bool(incomplete_images or survey.get("errors"))
             risk_score = self._risk_score(vulns, workload_count)
             rating = self._rating(risk_score, counts, max_cvss)
+            if incomplete and not vulns:
+                rating = "unknown"
             top = sorted(vulns, key=lambda v: (SEVERITY_WEIGHT.get(v["severity"], 0), v.get("cvss") or 0),
                          reverse=True)[:10]
             profile = {"namespace": ns, "risk_rating": rating, "risk_score": round(risk_score, 1),
@@ -370,7 +490,13 @@ class ClusterBaselineService:
                        "top_vulnerabilities": top, "description": self._template_description(ns, rating, counts,
                                                                                               max_cvss, fixable,
                                                                                               workload_count),
-                       "description_source": "template", "notes": []}
+                       "description_source": "template", "notes": [],
+                       "assessment_status": "not_reviewed" if incomplete else "complete",
+                       "incomplete_images": incomplete_images}
+            if incomplete:
+                note = "Image vulnerability assessment is incomplete; missing evidence is not a clean result."
+                profile["notes"].append(note)
+                profile["description"] = note + (" " + profile["description"] if vulns else "")
             profiles.append(profile)
         return profiles
 

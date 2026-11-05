@@ -4,7 +4,7 @@ import { ActionIcon, AppShell, Burger, Group, NavLink, ScrollArea, Stack, Text, 
 import { useDisclosure } from '@mantine/hooks';
 import {
   IconBolt, IconChecklist, IconFileReport, IconHistory, IconListDetails, IconMoon, IconRadar, IconRoute, IconServer2, IconSettings,
-  IconStar, IconSun, IconBooks,
+  IconStar, IconSun, IconBooks, IconDatabase,
 } from '@tabler/icons-react';
 import type { ReactNode } from 'react';
 import { NavLink as RouterNavLink, useLocation } from 'react-router-dom';
@@ -21,6 +21,7 @@ const NAV = [
   { to: '/assets', label: 'Assets', icon: IconServer2 },
   { to: '/scans', label: 'Scans', icon: IconRadar },
   { to: '/content', label: 'STIG Library', icon: IconBooks },
+  { to: '/vulnerabilities', label: 'Vulnerability Data', icon: IconDatabase },
   { to: '/audit', label: 'Audit', icon: IconHistory },
   { to: '/reports', label: 'Reports', icon: IconFileReport },
   { to: '/settings', label: 'Settings', icon: IconSettings },

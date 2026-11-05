@@ -1,6 +1,7 @@
 """Runtime settings. Everything comes from environment variables prefixed CT_ or from CLI flags.
 
-No cloud endpoints. The only network the runtime talks to is the enclave (targets) and the local model.
+Model endpoints and connected content updates are explicit configuration; ordinary
+offline scans use locally provisioned content and scoped enclave targets.
 """
 from __future__ import annotations
 
@@ -56,6 +57,12 @@ class Settings:
     trivy_binary: str = field(default_factory=lambda: _env("CT_TRIVY_BINARY", "trivy"))
     trivy_skip_db_update: bool = field(default_factory=lambda: _env_bool("CT_TRIVY_SKIP_DB_UPDATE", True))
     trivy_timeout_s: int = field(default_factory=lambda: _env_num("CT_TRIVY_TIMEOUT", 300, int))
+    vulnerability_max_bundle_bytes: int = field(default_factory=lambda: _env_num("CT_VULN_MAX_BUNDLE_BYTES", 4 * 1024 * 1024 * 1024, int))
+    vulnerability_max_unpacked_bytes: int = field(default_factory=lambda: _env_num("CT_VULN_MAX_UNPACKED_BYTES", 8 * 1024 * 1024 * 1024, int))
+    vulnerability_max_staging_bytes: int = field(default_factory=lambda: _env_num("CT_VULN_MAX_STAGING_BYTES", 12 * 1024 * 1024 * 1024, int))
+    vulnerability_update_timeout_s: int = field(default_factory=lambda: _env_num("CT_VULN_UPDATE_TIMEOUT", 1800, int))
+    vulnerability_db_max_age_hours: int = field(default_factory=lambda: _env_num("CT_VULN_DB_MAX_AGE_HOURS", 72, int))
+    vulnerability_poll_s: int = field(default_factory=lambda: _env_num("CT_VULN_POLL_SECONDS", 60, int))
     openai_api_key: str | None = field(default_factory=lambda: _env("CT_OPENAI_API_KEY") or _env("OPENAI_API_KEY"))
     openai_model: str = field(default_factory=lambda: _env("CT_OPENAI_MODEL", "gpt-4o-mini"))
     openai_timeout_s: int = field(default_factory=lambda: _env_num("CT_OPENAI_TIMEOUT", 60, int))

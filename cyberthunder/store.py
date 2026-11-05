@@ -41,7 +41,7 @@ from cyberthunder.state.json_files import JsonFilesBackend, read_json_file, writ
 log = logging.getLogger(__name__)
 
 # Runs that re-evaluate only part of the picture; they overlay the latest full scan instead of replacing it.
-PARTIAL_TRIGGERS = {"bulletin", "stig_delta", "verify"}
+PARTIAL_TRIGGERS = {"bulletin", "stig_delta", "verify", "cluster_vulnerabilities"}
 
 
 def is_partial_run(run: dict) -> bool:
@@ -211,21 +211,55 @@ class StateStore:
         return self.current_findings()
 
     def current_findings(self) -> list[Finding]:
-        """The latest full scan's findings with every newer partial run overlaid by finding id.
+        """Published observations, with cluster coverage independent of unrelated full scans."""
+        return list(self.projected_observations()[0].values())
 
-        Finding ids are stable per (host, source, rule), so a targeted rescan replaces the findings it
-        re-evaluated and a bulletin match adds its findings, while everything else from the full scan stays."""
-        runs = self.list_scan_runs()
-        base_id = self.latest_scan_id(full_only=True)
-        if not base_id:
-            return []
-        base_run = next(r for r in runs if r["id"] == base_id)
-        merged = {f.id: f for f in self._run_findings(base_id)}
-        newer = [r for r in runs if r["id"] != base_id and r.get("started_at", "") >= base_run.get("started_at", "")]
-        for run in reversed(newer):          # oldest first, so the newest result wins
-            for f in self._run_findings(run["id"]):
-                merged[f.id] = f
-        return list(merged.values())
+    def projected_observations(self, scan_id: str = "", document: dict | None = None,
+                               kind: str = "current") -> tuple[dict[str, Finding], bool]:
+        """Project a publication using the same precedence as the current view.
+
+        Review/lifecycle publication can call this before writing either document. Missing findings
+        documents and empty in-progress runs cannot erase observations. Partial-only histories are
+        accumulated from oldest to newest. Cluster omissions are authoritative only for explicitly
+        assessed result scopes; a full STIG/hunt scan has no authority over cluster image evidence.
+        """
+        runs = {run["id"]: run for run in self.list_scan_runs()}
+        if kind == "run" and document is not None:
+            runs[scan_id] = document
+        merged: dict[str, Finding] = {}
+        can_remove = False
+        for run in sorted(runs.values(), key=lambda r: (r.get("started_at", ""), r["id"])):
+            sid = run["id"]
+            doc = (document if kind == "findings" and sid == scan_id else
+                   self.read_json(self.scans_dir / sid / "findings.json"))
+            if doc is None:
+                continue
+            findings = findings_from_doc(doc)
+            terminal = run.get("status") in {None, "done"}
+            if not is_partial_run(run) and terminal:
+                merged = {fid: f for fid, f in merged.items() if self._cluster_scope(f) is not None}
+                can_remove = True
+            if (run.get("trigger") == "cluster_vulnerabilities"
+                    and run.get("status") in {"done", "partial"}):
+                # Only this producer may reconcile its own scopes. A failed image or a missing
+                # result section is deliberately absent from this list, preserving earlier evidence.
+                coverage = (run.get("summary") or {}).get("cluster_vulnerabilities") or {}
+                scopes = coverage.get("assessed_scopes") or []
+                scopes = {scope for scope in scopes if isinstance(scope, str)}
+                if scopes:
+                    merged = {fid: f for fid, f in merged.items() if self._cluster_scope(f) not in scopes}
+                    can_remove = True
+            merged.update((f.id, f) for f in findings)
+        return merged, can_remove
+
+    @staticmethod
+    def _cluster_scope(finding: Finding) -> str | None:
+        provenance = finding.collection_provenance or {}
+        scope = provenance.get("observation_scope")
+        if (finding.source == "trivy" and provenance.get("producer") == "cluster_vulnerabilities"
+                and isinstance(scope, str) and scope):
+            return scope
+        return None
 
     def get_finding(self, finding_id: str, scan_id: str | None = None) -> Finding | None:
         for f in self.load_findings(scan_id):

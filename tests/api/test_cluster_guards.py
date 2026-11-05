@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -20,6 +22,14 @@ def cluster_isolation(ctx, monkeypatch):
     ctx.settings.bootstrap_cluster_target_id = "range-cluster"
     ctx.settings.scan_interval_s = 0
     ctx.settings.content_check_interval_s = 0
+    @contextmanager
+    def scan_context():
+        yield {"cache_dir": ctx.store.root / "managed-cache", "generation": "fixture-generation",
+               "state": "ready", "provenance": "offline_import", "integrity_verified": True,
+               "engine": {"available": True, "version": "0.71.1", "supported": True},
+               "databases": [{"kind": "main", "present": True, "stale": False}]}
+
+    ctx.vulnerabilities = SimpleNamespace(scan_context=scan_context, due_update=lambda: False)
     process = Mock(side_effect=AssertionError("unexpected subprocess"))
     network = Mock(side_effect=AssertionError("unexpected network call"))
     monkeypatch.setattr(service.subprocess, "run", process)

@@ -1,5 +1,7 @@
 """A requested cluster baseline persists risk profiles and the requesting actor."""
 from unittest.mock import Mock
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +23,14 @@ def isolated_cluster_runtime(ctx, monkeypatch):
 
 
 def test_baseline_records_operator_and_persists_risk(client, ctx, monkeypatch, isolated_cluster_runtime):
+    @contextmanager
+    def scan_context():
+        yield {"cache_dir": ctx.store.root / "managed-cache", "generation": "fixture-generation",
+               "state": "ready", "provenance": "offline_import", "integrity_verified": True,
+               "engine": {"available": True, "version": "0.71.1", "supported": True},
+               "databases": [{"kind": "main", "present": True, "stale": False}]}
+
+    ctx.vulnerabilities = SimpleNamespace(scan_context=scan_context, due_update=lambda: False)
     target = Target(id="explicit-range", name="Isolated test range", asset_type="kubernetes",
                     transport="kubeconfig", in_scope=True,
                     options={"kubeconfig": str(ctx.store.root / "fixture-config"), "context": "fixture-range"})
@@ -35,11 +45,14 @@ def test_baseline_records_operator_and_persists_risk(client, ctx, monkeypatch, i
                 "workloads": [{"namespace": "demo", "kind": "Deployment", "name": "web",
                                "images": ["example.test/web:1"]}], "errors": []}
 
-    def scan_image(image, run_dir, binding, actor):
+    def scan_image(image, run_dir, binding, actor, *, snapshot):
         assert binding.target_id == target.id and actor == ACTOR["X-Actor"]
         assert run_dir.parent == ctx.cluster.root / "baselines"
-        return {"image": image,
-                "vulnerabilities": [{"severity": "HIGH", "cvss": 8.0, "fixed_version": "2"}]}, None
+        assert snapshot["generation"] == "fixture-generation"
+        section = {"target": image, "class": "os-pkgs", "type": "debian"}
+        return {"image": image, "complete": True, "sections": [section],
+                "vulnerabilities": [{"id": "CVE-2026-12345", "package": "fixture-package", "installed_version": "1",
+                                     "severity": "HIGH", "cvss": 8.0, "fixed_version": "2", "section": section}]}, None
 
     monkeypatch.setattr(ctx.cluster, "_survey", survey)
     monkeypatch.setattr(ctx.cluster, "_scan_image", scan_image)

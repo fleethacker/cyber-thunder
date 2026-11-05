@@ -1,4 +1,4 @@
-FROM aquasec/trivy:0.56.2 AS trivy
+FROM aquasec/trivy:0.71.1@sha256:53570e6911c2361ebe7995228088cf83a6b9b73e7f3cdca44bd8f8f425e80fa7 AS trivy
 
 FROM python:3.12-slim-bookworm
 
