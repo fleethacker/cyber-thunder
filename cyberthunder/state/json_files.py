@@ -33,6 +33,18 @@ def replace_file(tmp: Path, dest: Path) -> None:
             time.sleep(0.05)
 
 
+def read_text_retry(p: Path) -> str:
+    """Read UTF-8 text across a transient Windows replacement; persistent access errors still raise.
+    Parsing and missing-file behavior belong to the caller, outside the retry."""
+    for attempt in range(20):
+        try:
+            return p.read_text(encoding="utf-8")
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.05)
+
+
 def write_json_file(p: Path, data: Any) -> None:
     """Indented JSON by temp file and rename, the way every document file has always been written."""
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -44,7 +56,7 @@ def write_json_file(p: Path, data: Any) -> None:
 def read_json_file(p: Path, default: Any = None) -> Any:
     if not p.exists():
         return default
-    return json.loads(p.read_text(encoding="utf-8"))
+    return json.loads(read_text_retry(p))
 
 
 @contextmanager

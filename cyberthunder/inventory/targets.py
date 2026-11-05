@@ -12,7 +12,7 @@ from pathlib import Path
 
 from cyberthunder.audit.chain import file_lock
 from cyberthunder.findings.schema import utcnow
-from cyberthunder.state.json_files import replace_file
+from cyberthunder.state.json_files import read_text_retry, replace_file
 
 ASSET_TYPES = ("linux", "windows", "cisco_ios", "kubernetes", "containers")
 # generic transports are implemented in cyberthunder.transport; adapter-specific ones (simulated, file,
@@ -82,7 +82,7 @@ class Inventory:
 
     @staticmethod
     def _read(p: Path) -> dict[str, dict]:
-        text = p.read_text(encoding="utf-8")
+        text = read_text_retry(p)
         if p.suffix in (".yaml", ".yml"):
             import yaml  # pyyaml, in requirements
             data = yaml.safe_load(text) or {}
