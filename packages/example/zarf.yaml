@@ -1,0 +1,34 @@
+# Minimal package to copy. The folder name under packages/ is what the dev poller watches, and
+# metadata.name must match it. Bump metadata.version when the contents change.
+kind: ZarfPackageConfig
+metadata:
+  name: example
+  description: Minimal example of a web app on UDS Core.
+  version: 0.0.1
+
+components:
+  # UDS configures the namespace from the Package resource, so this goes first.
+  - name: uds-integration
+    required: true
+    manifests:
+      - name: example-uds-config
+        namespace: example
+        files:
+          - uds.yaml
+    actions:
+      onDeploy:
+        after:
+          - description: Wait for UDS to configure the namespace before starting the app.
+            cmd: ./zarf tools kubectl wait package/example -n example --for=jsonpath='{.status.phase}'=Ready --timeout=300s
+
+  - name: app
+    required: true
+    manifests:
+      - name: example
+        namespace: example
+        files:
+          - app.yaml
+    # Every image the app uses goes here, so it is carried in the package and served from the
+    # in-cluster registry. Pin a version; never use latest.
+    images:
+      - ghcr.io/stefanprodan/podinfo:6.10.1
