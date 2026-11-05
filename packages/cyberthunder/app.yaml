@@ -1,0 +1,197 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cyberthunder
+  namespace: cyberthunder
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cyberthunder-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "nodes", "nodes/proxy", "pods", "serviceaccounts", "services"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterrolebindings", "rolebindings"]
+    verbs: ["get", "list"]
+  - nonResourceURLs: ["/version"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cyberthunder-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cyberthunder-readonly
+subjects:
+  - kind: ServiceAccount
+    name: cyberthunder
+    namespace: cyberthunder
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cyberthunder-kubeconfig
+  namespace: cyberthunder
+data:
+  kubeconfig: |
+    apiVersion: v1
+    kind: Config
+    clusters:
+      - name: in-cluster
+        cluster:
+          server: https://kubernetes.default.svc
+          certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    users:
+      - name: cyberthunder
+        user:
+          tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    contexts:
+      - name: in-cluster
+        context:
+          cluster: in-cluster
+          user: cyberthunder
+    current-context: in-cluster
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cyberthunder-state
+  namespace: cyberthunder
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cyberthunder
+  namespace: cyberthunder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cyberthunder
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cyberthunder
+    spec:
+      serviceAccountName: cyberthunder
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cyberthunder
+          image: ghcr.io/fleethacker/cyberthunder:0.2.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: CT_STATE_DIR
+              value: /var/lib/cyberthunder
+            - name: HOME
+              value: /var/lib/cyberthunder
+            - name: XDG_CACHE_HOME
+              value: /var/lib/cyberthunder/.cache
+            - name: TRIVY_CACHE_DIR
+              value: /var/lib/cyberthunder/trivy-cache
+            - name: CT_HOST
+              value: 0.0.0.0
+            - name: CT_PORT
+              value: "8000"
+            - name: CT_LLM_BACKEND
+              value: template
+            - name: CT_BOOTSTRAP_CLUSTER_TARGET
+              value: "true"
+            - name: CT_BOOTSTRAP_CLUSTER_KUBECONFIG
+              value: /etc/cyberthunder/kubeconfig
+            - name: CT_SCAN_INTERVAL_SECONDS
+              value: "21600"
+            - name: CT_CONTENT_CHECK_INTERVAL_SECONDS
+              value: "3600"
+            - name: CT_OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cyberthunder-openai
+                  key: api-key
+                  optional: true
+            - name: CT_OPENAI_MODEL
+              value: gpt-4o-mini
+          readinessProbe:
+            httpGet:
+              path: /api/v1/status
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/status
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/cyberthunder
+            - name: kubeconfig
+              mountPath: /etc/cyberthunder
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: cyberthunder-state
+        - name: kubeconfig
+          configMap:
+            name: cyberthunder-kubeconfig
+            items:
+              - key: kubeconfig
+                path: kubeconfig
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cyberthunder
+  namespace: cyberthunder
+spec:
+  selector:
+    app.kubernetes.io/name: cyberthunder
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

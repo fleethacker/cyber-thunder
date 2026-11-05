@@ -1,0 +1,10 @@
+.git
+.agents
+.aws
+.codex
+.build
+.pytest_cache
+node_modules
+results
+*.pyc
+__pycache__

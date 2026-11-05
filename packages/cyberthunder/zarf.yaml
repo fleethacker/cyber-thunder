@@ -1,0 +1,34 @@
+kind: ZarfPackageConfig
+metadata:
+  name: cyberthunder
+  description: Cyber Thunder compliance and vulnerability operations console.
+  version: 0.2.0
+
+variables:
+  - name: DOMAIN
+    description: Domain used by UDS Core.
+    default: uds.dev
+
+components:
+  - name: uds-integration
+    required: true
+    manifests:
+      - name: cyberthunder-uds-config
+        namespace: cyberthunder
+        files:
+          - uds.yaml
+    actions:
+      onDeploy:
+        after:
+          - description: Wait for UDS to configure the namespace before starting Cyber Thunder.
+            cmd: ./zarf tools kubectl wait package/cyberthunder -n cyberthunder --for=jsonpath='{.status.phase}'=Ready --timeout=300s
+
+  - name: app
+    required: true
+    manifests:
+      - name: cyberthunder
+        namespace: cyberthunder
+        files:
+          - app.yaml
+    images:
+      - ghcr.io/fleethacker/cyberthunder:0.2.0
