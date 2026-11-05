@@ -129,7 +129,7 @@ echo "Keycloak: https://keycloak.admin.uds.dev"
 echo "Grafana: https://grafana.admin.uds.dev"
 echo "Kubeconfig: $KUBECONFIG"
 if [ "$development_mode" = true ]; then
-  echo "UDS username: admin"
+  echo "UDS username: hacker"
   printf 'UDS password: %s\n' "$(cat .build/identity/admin-password)"
   echo "Password file: $repository_dir/.build/identity/admin-password"
 fi

@@ -46,6 +46,6 @@ DEV_MODE=true DOMAIN=uds.dev BOOTSTRAP_DRY_RUN=false \
   bash packages/identity-bootstrap/scripts/ensure-user.sh
 
 echo "SSO: https://sso.uds.dev"
-echo "UDS username: admin"
+echo "UDS username: hacker"
 printf 'UDS password: %s\n' "$(cat .build/identity/admin-password)"
 echo "Password file: $repository_dir/.build/identity/admin-password"

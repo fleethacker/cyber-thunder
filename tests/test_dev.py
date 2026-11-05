@@ -80,7 +80,7 @@ elif name == "curl":
         elif path.endswith("/authentication/flows/Authentication/executions"):
             response = []
         elif path == "/admin/realms/uds/users":
-            response = [{"id": "test-user", "username": "admin", "enabled": state["enabled"]}]
+            response = [{"id": "test-user", "username": "hacker", "enabled": state["enabled"]}]
         elif path == "/admin/realms/uds/users/test-user":
             if method == "PUT":
                 state["enabled"] = json.loads(arguments[arguments.index("--data-raw") + 1])["enabled"]
@@ -184,7 +184,7 @@ class DevelopmentModeTests(unittest.TestCase):
         self.assertTrue(any(character.isupper() for character in passwords[0]))
         self.assertTrue(any(character.islower() for character in passwords[0]))
         self.assertTrue(any(character.isdigit() for character in passwords[0]))
-        self.assertIn("UDS username: admin", result.stdout)
+        self.assertIn("UDS username: hacker", result.stdout)
         self.assertIn("UDS password: " + passwords[0], result.stdout)
         self.assertNotIn(passwords[0], json.dumps(calls))
 
@@ -288,7 +288,7 @@ class DevelopmentModeTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(passwords[0].endswith("Aa1!@"))
-        self.assertIn("UDS username: admin", result.stdout)
+        self.assertIn("UDS username: hacker", result.stdout)
         self.assertIn("UDS password: " + passwords[0], result.stdout)
         self.assertNotIn(passwords[0], json.dumps(calls))
         self.assertNotIn("test-master-token", result.stdout + json.dumps(calls))
