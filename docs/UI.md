@@ -15,7 +15,7 @@ one-pager. Not a dashboard of charts. A queue of decisions with everything neede
 - Every screen has loading, empty and error states. Errors show the API `detail` verbatim.
 
 ## Shell (every page)
-- Left nav: Decisions, Findings, Assets, Scans, Audit, Reports, Settings. Commander view linked at the bottom.
+- Left nav: Decisions, Mission, Findings, Assets, Scans, Audit, Reports, Settings. Commander view linked at the bottom.
 - Header: product name; **kill switch** button (red, always visible; engaged state turns the whole header
   red with the reason and who engaged it; release needs a reason); **audit chain badge** (green
   "Chain verified · N records · <head8>" or red "TAMPERED at #seq"); **link indicator** (connected /
@@ -36,6 +36,11 @@ before-state captured → applied → verified ✓, or failed → rolled back �
 **Rollback** on applied/verified. Policy chip when a proposal was auto-approved ("standing approval: <rule>, signed by <name>").
 Filters: host, severity, asset type, state. Bulk select → approve/deny. Sort: severity, host, age.
 Empty state: "Nothing waiting for a decision" with a button to start a scan.
+
+### Mission (`/mission`)
+The enclave pass, in order, on the workflow routes: what arrived (`GET /receive/cve`, `GET /receive/stig`),
+discover a system, scan one target, explain and propose from those results, apply approved checklist items,
+roll a version back, and read or write the per-target report. Each step shows the API detail on failure.
 
 ### Findings (`/findings`)
 Table (virtualized if > 200 rows): CAT, status, host, asset type, source, rule id/STIG id, title, fix available?,
@@ -91,7 +96,7 @@ decisions, audit head hash, link state. Refreshes every 10 s.
 cyberthunder/ui/
   package.json  vite.config.ts  tsconfig.json  index.html
   src/main.tsx  src/App.tsx  src/api/client.ts (typed fetch, X-Actor, SSE)  src/api/types.ts
-  src/pages/{Decisions,Findings,Assets,Scans,Audit,Reports,Settings,Commander}.tsx
+  src/pages/{Decisions,Mission,Findings,Assets,Scans,Audit,Reports,Settings,Commander}.tsx
   src/components/{Shell,KillSwitch,ChainBadge,LinkBadge,ActorChip,ProposalCard,FindingDrawer,SeverityBadge,ApplyTimeline,...}.tsx
   dist/   built output, committed (regenerate with `npm run build`; never hand-edit)
 ```
