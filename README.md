@@ -180,6 +180,8 @@ POA&M, checklist), `demo reset|run`, `state info|migrate` (where the documents l
 
 ## Documentation
 
+Automated regression configuration and its explicit platform limitations are described in [docs/CI.md](docs/CI.md).
+
 | Document | What it is |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | pipeline, contracts, guardrails, how to add an adapter |
