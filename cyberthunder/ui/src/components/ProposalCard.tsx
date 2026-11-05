@@ -4,7 +4,8 @@ import { Alert, Badge, Button, Card, Checkbox, Divider, Group, Stack, Text, Titl
 import { IconArrowBackUp, IconCheck, IconChecklist, IconPlayerPlay, IconX } from '@tabler/icons-react';
 import type { ReactNode } from 'react';
 import type { ProposalPlus } from '../api/types';
-import { fmtAgo, label } from '../lib/format';
+import { fmtAgo, fmtZonedTime, label } from '../lib/format';
+import { canRequestRollback, proposalChangedAt } from '../lib/proposalHistory';
 import { isSuppressed } from '../lib/findingAssurance';
 import { ApplyTimeline } from './ApplyTimeline';
 import { CitationChips } from './CitationChips';
@@ -43,7 +44,7 @@ export function RiskTags({ p }: { p: ProposalPlus }) {
 }
 
 export function ProposalCard({
-  p, actions, busy, selected, onSelect, focused,
+  p, actions, busy, selected, onSelect, focused, actionsDisabled = false,
 }: {
   p: ProposalPlus;
   actions: ProposalActions;
@@ -51,6 +52,7 @@ export function ProposalCard({
   selected?: boolean;
   onSelect?: (v: boolean) => void;
   focused?: boolean;
+  actionsDisabled?: boolean;
 }) {
   const f = p.finding;
   const ex = f?.explanation ?? null;
@@ -77,6 +79,7 @@ export function ProposalCard({
             <SeverityBadge severity={p.severity} size="lg" />
             <Stack gap={2}>
               <Title order={4} style={{ lineHeight: 1.25 }}>{f?.title ?? p.title}</Title>
+              <Text size="xs" ff="monospace" style={{ overflowWrap: 'anywhere' }}>Proposal {p.id}</Text>
               <Group gap={6}>
                 <AssetIcon type={p.target?.asset_type} size={16} />
                 <Text size="sm" fw={600}>{p.target?.name ?? p.host}</Text>
@@ -87,7 +90,8 @@ export function ProposalCard({
           </Group>
           <Stack gap={4} align="flex-end">
             <StateBadge state={p.state} />
-            <Text size="xs" c="dimmed">{fmtAgo(p.created_at)}</Text>
+            <Text size="xs" c="dimmed">Created {fmtZonedTime(p.created_at)}</Text>
+            <Text size="xs" c="dimmed">Last activity {fmtZonedTime(proposalChangedAt(p))}</Text>
           </Stack>
         </Group>
 
@@ -121,7 +125,7 @@ export function ProposalCard({
         </Q>
 
         <Q n={5} title="How to undo">
-          <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{fix?.rollback_plan ?? p.rollback_plan}</Text>
+          <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{p.rollback_plan || fix?.rollback_plan}</Text>
         </Q>
 
         {(auto || p.policy?.auto_eligible) && (
@@ -139,11 +143,21 @@ export function ProposalCard({
         )}
         {p.decided_by && (
           <Text size="xs" c="dimmed">
-            {label(p.state)} by {p.decided_by} {fmtAgo(p.decided_at)}{p.decision_note ? `: "${p.decision_note}"` : ''}
+            Decision recorded by {p.decided_by} {fmtAgo(p.decided_at)}{p.decision_note ? `: "${p.decision_note}"` : ''}
           </Text>
         )}
 
         <ApplyTimeline proposal={p} />
+        <Collapsible title="recorded history">
+          <Stack gap="xs">
+            {!p.history.length && <Text size="sm" c="dimmed">No transition history was reported.</Text>}
+            {p.history.slice().reverse().map((entry, index) => <Stack gap={2} key={index}>
+              <Text size="sm">{label(entry.state ?? entry.to)} · {entry.actor || 'Actor not recorded'} · {fmtZonedTime(entry.at ?? entry.ts)}</Text>
+              {entry.note && <Text size="sm" c="dimmed" style={{ whiteSpace: 'pre-wrap' }}>{entry.note}</Text>}
+            </Stack>)}
+          </Stack>
+        </Collapsible>
+        {p.state === 'rolled_back' && <Alert color="yellow">This change was rolled back. Earlier passing observations may no longer describe the target. Check its current condition with a fresh scan.</Alert>}
 
         <Divider />
         {suppressed && <Alert color="orange" title="Apply blocked by human review">
@@ -153,19 +167,19 @@ export function ProposalCard({
         <Group gap="sm">
           {p.state === 'proposed' && (
             <>
-              <Button size="md" color="green" leftSection={<IconCheck size={18} />} loading={busy} onClick={() => actions.approve(p)}>Approve</Button>
-              <Button size="md" color="red" variant="light" leftSection={<IconX size={18} />} disabled={busy} onClick={() => actions.deny(p)}>Deny</Button>
+              <Button size="md" color="green" leftSection={<IconCheck size={18} />} loading={busy} disabled={actionsDisabled || busy} onClick={() => actions.approve(p)}>Approve</Button>
+              <Button size="md" color="red" variant="light" leftSection={<IconX size={18} />} disabled={actionsDisabled || busy} onClick={() => actions.deny(p)}>Deny</Button>
             </>
           )}
           {p.state === 'approved' && (
-            <Button size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={suppressed} onClick={() => actions.apply(p)}>Apply</Button>
+            <Button size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={actionsDisabled || busy || suppressed} onClick={() => actions.apply(p)}>Apply</Button>
           )}
           {p.state === 'applying' && <Button size="md" loading variant="light">Applying</Button>}
-          {(p.state === 'applied' || p.state === 'verified') && (
-            <Button size="md" color="violet" variant="light" leftSection={<IconArrowBackUp size={18} />} loading={busy} onClick={() => actions.rollback(p)}>Rollback</Button>
+          {canRequestRollback(p) && (
+            <Button size="md" color="violet" variant="light" leftSection={<IconArrowBackUp size={18} />} loading={busy} disabled={actionsDisabled || busy} onClick={() => actions.rollback(p)}>Rollback</Button>
           )}
           {p.state === 'applied' && fix?.kind === 'runbook' && actions.verify && (
-            <Button size="md" color="teal" variant="light" leftSection={<IconChecklist size={18} />} loading={busy} onClick={() => actions.verify?.(p)}>Verify</Button>
+            <Button size="md" color="teal" variant="light" leftSection={<IconChecklist size={18} />} loading={busy} disabled={actionsDisabled || busy} onClick={() => actions.verify?.(p)}>Verify</Button>
           )}
           <PreviewButton proposalId={p.id} busy={busy} />
           <DiffButton proposalId={p.id} state={p.state} />
