@@ -72,6 +72,20 @@ def test_real_local_model(state_dir):
     assert len(report["skips"]) == 2 and all(s["allowed"] for s in report["skips"])
 
 
+def test_unhandled_background_thread_failure_is_red(tmp_path):
+    result, report = run_suite(tmp_path, {"tests/test_thread.py": '''import threading
+def test_background():
+    def fail():
+        raise RuntimeError("background work failed")
+    worker = threading.Thread(target=fail)
+    worker.start()
+    worker.join()
+'''})
+    assert result.returncode == report["exit_code"] == 1
+    assert "PytestUnhandledThreadExceptionWarning" in result.stdout
+    assert "background work failed" in result.stdout
+
+
 @pytest.mark.parametrize("source, diagnostic", [
     ("import pytest\n@pytest.mark.skip(reason='new dependency')\ndef test_new(): pass\n", "Unexpected skip"),
     ("import pytest\npytest.skip('module unavailable', allow_module_level=True)\n", "Collection skipped"),

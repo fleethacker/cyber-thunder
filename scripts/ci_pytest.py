@@ -189,7 +189,8 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="ct-ci-") as state:
         os.environ["CT_STATE_DIR"] = state
         return int(pytest.main(
-            ["tests", "-ra", "--strict-markers", f"--junitxml={output / 'pytest.xml'}"],
+            ["tests", "-ra", "--strict-markers", "-W", "error::pytest.PytestUnhandledThreadExceptionWarning",
+             f"--junitxml={output / 'pytest.xml'}"],
             plugins=[RegressionPolicy(ROOT, sys.platform)],
         ))
 

@@ -42,6 +42,11 @@ pytest's Cartesian-product indices need not match between backends.
 Skips match an exact node ID and exact reason in `expected_skips()`. There are
 no directory wildcards, class-wide allowances or pooled skip budgets. Fewer
 skips are acceptable. Another test cannot consume an unused allowance.
+
+Unhandled background thread exceptions fail both ordinary pytest and the CI
+runner. Scan tests that do not exercise explanations disable precomputation;
+worker tests explicitly start, wait for, and stop their workers.
+
 New skips, changed reasons, duplicate skips, teardown skips, xfail/xpass,
 deselection and collection skips fail the job. Files matching pytest's normal
 `test_*.py` / `*_test.py` names must contribute collected items, except the

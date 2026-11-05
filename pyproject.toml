@@ -32,3 +32,4 @@ cyberthunder = ["report/templates/*.j2", "adapters/*/stig_rules.json", "adapters
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
