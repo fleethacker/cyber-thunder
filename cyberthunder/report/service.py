@@ -10,7 +10,7 @@ import inspect
 import json
 from typing import TYPE_CHECKING
 
-from cyberthunder.report import checklist, coverage, fleet, friction, onepager, poam, score
+from cyberthunder.report import checklist, coverage, fleet, friction, history, onepager, poam, score
 from cyberthunder.report.render import FORMATS, ReportError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -43,18 +43,25 @@ class ReportService:
     def commander(self, scan_id: str | None = None, fmt: str = "html") -> str:
         fmt = self._fmt(fmt)
         text, data = onepager.render_commander(self.ctx, scan_id, fmt)
+        run = self.ctx.store.load_scan_run(data["scan_id"]) or {}
+        history.save(self.ctx, "commander", text, fmt, scan_id=data["scan_id"], targets=run.get("targets", []))
         self._audited("commander", data["audit"]["head"], scan_id=data["scan_id"], format=fmt)
         return text
 
     def poam_csv(self, scan_id: str | None = None) -> str:
         head = self._head()
         text = poam.poam_csv(self.ctx, scan_id)
+        sid = scan_id or self.ctx.store.latest_scan_id()
+        run = self.ctx.store.load_scan_run(sid) if sid else {}
+        history.save(self.ctx, "poam", text, "csv", scan_id=sid, targets=(run or {}).get("targets", []))
         self._audited("poam", head, scan_id=scan_id, rows=max(text.count("\n") - 1, 0))
         return text
 
     def checklist_cklb(self, scan_id: str | None = None, host: str | None = None) -> dict:
         head = self._head()
         doc = checklist.build_checklist(self.ctx, scan_id, host)
+        history.save(self.ctx, "checklist", doc, "cklb", scan_id=scan_id or self.ctx.store.latest_scan_id(),
+                     targets=[host or doc["target_data"]["host_name"]])
         self._audited("checklist", head, scan_id=scan_id, host=doc["target_data"]["host_name"],
                       rules=sum(len(s["rules"]) for s in doc["stigs"]))
         return doc
@@ -132,7 +139,8 @@ class ReportService:
             elif pname in _CONTENT_PARAMS:
                 kwargs[pname] = text
             elif pname in ("meta", "metadata"):
-                kwargs[pname] = {"report": kind, "scan_id": scan_id, "host": host, "bytes": len(text.encode("utf-8"))}
+                kwargs[pname] = {"report": kind, "scan_id": scan_id, "host": host, "bytes": len(text.encode("utf-8")),
+                                 "history_saved": kind in history.KINDS}
             elif pname == "actor":
                 kwargs[pname] = actor
             elif param.default is inspect.Parameter.empty and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY):

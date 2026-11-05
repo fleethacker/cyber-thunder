@@ -11,6 +11,7 @@ Service methods used (first name found wins; arguments are positional):
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, Query
@@ -23,6 +24,31 @@ from cyberthunder.api.util import ActorDep, CtxDep, call_first, safe_filename, t
 router = APIRouter(tags=["reports"], route_class=MappedRoute)
 
 Fmt = Literal["html", "md"]
+
+
+@router.get("/reports/history")
+def report_history(ctx=CtxDep, q: str = Query("", max_length=200),
+                   kind: Literal["commander", "poam", "checklist", "target"] | None = None,
+                   target: str | None = None, from_date: date | None = None, to_date: date | None = None,
+                   offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100)) -> dict:
+    from cyberthunder.report import history
+    return history.search(ctx, q=q, kind=kind, target=target, from_date=from_date, to_date=to_date,
+                          offset=offset, limit=limit)
+
+
+@router.get("/reports/history/{report_id}")
+def saved_report(report_id: str, ctx=CtxDep) -> dict:
+    from cyberthunder.report import history
+    return history.get(ctx, report_id)
+
+
+@router.get("/reports/history/{report_id}/download")
+def download_saved_report(report_id: str, ctx=CtxDep) -> Response:
+    from cyberthunder.report import history
+    doc = history.get(ctx, report_id)
+    filename = safe_filename(doc["filename"], "report.txt")
+    return Response(doc["content"], media_type=doc["media_type"],
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 def _svc(ctx):

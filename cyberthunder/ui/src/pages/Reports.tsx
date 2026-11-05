@@ -1,6 +1,5 @@
-// Reports: commander one-pager inline, downloads (HTML/MD, POA&M CSV, CKLB per host), path to fleet,
-// friction log, detection score, and the sync outbox.
-import { Badge, Button, Card, Group, Paper, Progress, SegmentedControl, Select, SimpleGrid, Stack, Table, Text } from '@mantine/core';
+// Reports: searchable saved snapshots, current reports, detection score and sync outbox.
+import { Badge, Button, Card, Group, Paper, Progress, Select, SimpleGrid, Stack, Table, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconCloudUpload, IconDownload, IconSend } from '@tabler/icons-react';
 import { useState, useEffect } from 'react';
@@ -9,6 +8,7 @@ import { ErrorBox, Loading, Mono, PageTitle } from '../components/common';
 import { fmtBytes, fmtSeconds, fmtTime } from '../lib/format';
 import { useAsync } from '../lib/hooks';
 import { useAppState } from '../state/AppState';
+import { ReportHistory } from '../components/ReportHistory';
 
 function Download({ href, label, file }: { href: string; label: string; file: string }) {
   return (
@@ -113,6 +113,9 @@ function OutboxCard() {
 
 type Doc = 'commander' | 'fleet' | 'friction' | 'coverage';
 const DOC_PATH: Record<Doc, string> = { commander: '/reports/commander', fleet: '/reports/fleet', friction: '/reports/friction', coverage: '/reports/coverage' };
+const DOC_LABEL: Record<Doc, string> = {
+  commander: 'Commander one-pager', fleet: 'Path to fleet', friction: 'Friction log', coverage: 'Check & fix coverage',
+};
 
 export default function Reports() {
   const [doc, setDoc] = useState<Doc>('commander');
@@ -144,18 +147,17 @@ export default function Reports() {
 
   return (
     <Stack gap="md">
-      <PageTitle title="Reports" subtitle="Generated offline from the current findings and the audit trail." />
+      <PageTitle title="Reports" subtitle="Search past reports or generate a report from the current findings and audit trail." />
+      <ReportHistory />
       <Paper withBorder radius="md" p="md">
         <Stack gap="sm">
           <Group justify="space-between" wrap="wrap">
-            <SegmentedControl value={doc} onChange={(v) => setDoc(v as Doc)} data={[
-              { value: 'commander', label: 'Commander one-pager' }, { value: 'fleet', label: 'Path to fleet' }, { value: 'friction', label: 'Friction log' },
-              { value: 'coverage', label: 'Check & fix coverage' },
-            ]} />
+            <Select label="Current report" value={doc} onChange={(value) => { if (value) setDoc(value as Doc); }}
+              data={Object.entries(DOC_LABEL).map(([value, label]) => ({ value, label }))} allowDeselect={false} w={250} />
             <Group gap="xs">
               <Download href={url(DOC_PATH[doc], { format: 'html' })} label="HTML" file={`${doc}.html`} />
               <Download href={url(DOC_PATH[doc], { format: 'md' })} label="Markdown" file={`${doc}.md`} />
-              <Button size="sm" variant="subtle" onClick={() => setFrameKey((k) => k + 1)}>Reload</Button>
+              <Button size="sm" variant="subtle" onClick={() => setFrameKey((k) => k + 1)}>{doc === 'commander' ? 'Generate report' : 'Refresh report'}</Button>
               {doc === 'commander' && (
                 <Button size="sm" leftSection={<IconSend size={14} />} loading={queueing === 'commander'} onClick={() => void queue('commander')}>Queue for sync</Button>
               )}
@@ -163,7 +165,7 @@ export default function Reports() {
           </Group>
           <iframe
             key={`${doc}-${frameKey}`}
-            title={doc}
+            title={DOC_LABEL[doc]}
             srcDoc={html}
             sandbox=""
             style={{ width: '100%', height: 640, border: '1px solid var(--mantine-color-default-border)', borderRadius: 8, background: 'white' }}

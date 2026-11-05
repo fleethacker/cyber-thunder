@@ -8,8 +8,8 @@ serves it with the Python API on port 8000. It runs as UID/GID 10001.
 With a running Docker daemon, replace the example registry with yours:
 
 ```sh
-docker build -t registry.example.com/team/cyberthunder:0.2.5 .
-docker push registry.example.com/team/cyberthunder:0.2.5
+docker build -t registry.example.com/team/cyberthunder:0.2.6 .
+docker push registry.example.com/team/cyberthunder:0.2.6
 ```
 
 Change `image` in `deploy/kubernetes/cyberthunder.yaml` to that published image.
@@ -20,8 +20,8 @@ reference it in the pod specification. Build for the cluster node architecture
 For a local k3d cluster, you can instead use:
 
 ```sh
-docker build -t cyberthunder:0.2.5 .
-k3d image import cyberthunder:0.2.5 -c cyber-thunder
+docker build -t cyberthunder:0.2.6 .
+k3d image import cyberthunder:0.2.6 -c cyber-thunder
 ```
 
 ## Deploy and open
@@ -79,7 +79,7 @@ choices survive restarts. The deployment sets
 `CT_BOOTSTRAP_CLUSTER_TARGET=true`; set it to `false` to disable registration.
 Register external clusters manually with their separately mounted kubeconfigs.
 
-The already-built `0.2.4` and `0.2.5` package archives predate these guardrails
+The already-built `0.2.4`, `0.2.5` and `0.2.6` package archives predate these guardrails
 and initially register new host-cluster assets in scope. Rebuild the image and
 package from this source to get out-of-scope registration; the checked-in
 archives have not been rebuilt by this change.
@@ -94,7 +94,7 @@ container and therefore describe the container, not its host.
 ## Troubleshooting
 
 If a configuration scan reports `Forbidden` while listing service accounts,
-services, RBAC bindings or network policies, upgrade to package `0.2.5` or apply
+services, RBAC bindings or network policies, upgrade to package `0.2.6` or apply
 the [RBAC-only correction](../../packages/cyberthunder/README.md#upgrade-existing-scan-permissions)
 from the updated checkout. The app keeps read-only access to scan inputs.
 

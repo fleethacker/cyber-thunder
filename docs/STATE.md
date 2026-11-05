@@ -5,7 +5,8 @@ in the container). Two kinds of thing live there, and the difference decides whe
 
 **Documents** are JSON the application reads and writes only through `StateStore` (`cyberthunder/store.py`):
 scan runs and findings, explanations, the link state, the presenter's demo switch, STIG delta and bulletin
-records, discovery scopes, assets and sweep runs, the content index, update check, source and pull jobs. A
+records, discovery scopes, assets and sweep runs, Kubernetes known-good exceptions, the content index, update
+check, source and pull jobs. A
 document has a logical path such as `scans/<id>/run.json`, and the backend chosen by `CT_STATE_BACKEND` holds it.
 
 **Files** are read from disk by other programs, people or transports, so they stay files under every backend:
@@ -16,14 +17,15 @@ document has a logical path such as `scans/<id>/run.json`, and the backend chose
 | `proposals.json`, `policy.json`, `targets.yaml`, `killswitch.json`, `KILL` | their owners take a file path and hold their own cross-process lock |
 | `scans/<id>/raw/<target>/*` | the scanner's working files (collected facts, XCCDF results, configs) that checklists and bulletin re-matching read |
 | `snapshots/<proposal>/*` | before-state captured before a fix, needed by rollback |
+| `cluster/baselines/*` | Kubernetes namespace risk baseline artifacts and Trivy image reports |
 | `outbox/*`, `synced/*` | payloads queued for shore and their `.meta.json` sidecars, moved together |
 | `content/files`, `content/scap`, `content/quarantine`, `content/manifest.json`, `ingest/catalog/*.xml`, `ingest/uploads` | downloads, extracted datastreams, the manifest that travels on removable media |
 | `simulated/*` | the simulated hosts' state, written by the adapters |
 
 The routing list is `is_document()` in `cyberthunder/state/__init__.py`. It is a positive list: a JSON path
 not named there is a file, which is what every path was before the backends existed. A new area that writes
-JSON through the store (the cluster baseline under `cluster/`, for example) keeps writing files until it is
-added to the list, which is a one-line change once nothing reads those files from disk.
+JSON through the store keeps writing files until it is added to the list, which is a one-line change once
+nothing reads those files from disk.
 
 ## The two backends
 
@@ -95,3 +97,10 @@ Proposals, the policy and the inventory stay files because their owners (`Approv
 `Inventory`) take a file path and lock it themselves; moving them onto the document backend means giving them a
 store instead of a path. PostgreSQL for the UDS deployment and more than one node are the rest of SCL-01 in
 [BACKLOG.md](BACKLOG.md).
+
+## Saved reports
+
+Report snapshots are portable files under `reports/history/<id>.json` for both backends.
+Each holds its metadata and original rendered content. Include `reports/` in backups;
+opening an older report does not regenerate it from current state. Existing target
+reports and retained outbox exports are imported into history when searched.

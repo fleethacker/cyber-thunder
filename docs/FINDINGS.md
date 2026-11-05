@@ -56,8 +56,10 @@ The page displays matching versus total counts and the range shown on the curren
 | Not assessed | `not_reviewed` |
 | Collection error | `error` |
 
-These statuses describe scanner/check outcomes, not a human assessment of validity or confidence.
-No confidence score or false-positive/review controls are introduced. Human approval remains in the
+These statuses primarily describe scanner/check outcomes. Kubernetes known-good exceptions can also
+change matching open results to Not applicable on later scans; their tags and evidence record the
+exception and reason. That exception mechanism is not a confidence score or a separate review disposition.
+The Findings page introduces no confidence or false-positive/review controls. Human approval remains in the
 proposal workflow. Existing verified fixes display as passed; their original scanner status stays
 in the response's remediation metadata. A newer scan finding the issue open again takes precedence.
 The API retains that existing remediation decoration even when an explicit scan ID is requested.

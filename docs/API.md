@@ -58,7 +58,8 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
   whitespace. CSV-quote values containing commas or quotes; for example `benchmark_release="Release 1, November"`.
   Omit a filter or send an empty string to select all values. `__missing__` selects absent/blank text fields.
 - `status` values remain `open`, `not_a_finding`, `not_applicable`, `not_reviewed`, `error`.
-  These are scanner results, not human triage. The UI labels them Failed / open, Passed, Not applicable,
+  These are result statuses, not general human triage. Kubernetes known-good exceptions can change
+  an open result to `not_applicable`, with an exception tag and reason in its evidence. The UI labels them Failed / open, Passed, Not applicable,
   Not assessed, and Collection error. Verified fixes continue to appear passed (`not_a_finding`).
   Without a status filter the API includes every result; only the UI defaults to open.
 - `severity` accepts the existing aliases, including `CAT I`, `CAT II`, `CAT III`, plus `info` and `unknown`.
@@ -81,6 +82,16 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 - Invalid enumerated filters, sort fields/directions, malformed CSV lists and out-of-range pagination
   return `400` with a string `detail`. Unseen host/source/type/benchmark/release values are valid and
   return zero matches, allowing saved selections to survive changes in the current view.
+
+## Cluster
+| GET | `/cluster/survey` | `?target_id` → Kubernetes namespace/workload survey using the authorized inventory connection. Requires `X-Actor`, an in-scope target and a released kill switch |
+|---|---|---|
+| POST | `/cluster/baseline` | `{target_id?, use_openai?: bool}` → persisted namespace image-risk baseline. Requires `X-Actor`, an in-scope target and a released kill switch. Audit `cluster.baseline` |
+| GET | `/cluster/risk` | → latest persisted namespace risk profiles |
+| GET | `/cluster/known-good` | → `{exceptions: [KnownGoodException]}`. Exceptions are applied to future Kubernetes scans before summaries and proposals |
+| POST | `/cluster/known-good/exceptions` | `{target_id, reason, rule_id?, rule_version?, group_id?, object?, object_prefix?, expires_at?}` → KnownGoodException, `201`. Audit `known_good.add` |
+| POST | `/cluster/known-good/from-finding/{finding_id}` | `{reason, scope?: "object"|"object_prefix"|"rule", expires_at?}` → KnownGoodException, `201`. `object_prefix` keeps generated pod-name changes accepted, for example `kube-system/pod/metrics-collector-*` |
+| DELETE | `/cluster/known-good/exceptions/{id}` | → `204`. Audit `known_good.delete` |
 
 ## Proposals (the decision queue)
 | GET | `/proposals` | `?state&host&asset_type` (each takes comma-separated values; an unknown `state` is `400`) → `{proposals: [Proposal+]}` oldest first |
@@ -132,8 +143,11 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/ingest/import-dir` | `{path}` (a folder on this node) → `{imported, refused: [{filename, reason}], skipped, missing, verified_by, deltas}`; verified against `manifest.lock.json` when present. Audit `content.import`, `content.quarantine` |
 
 ## Reports
-| GET | `/reports/commander` | `?scan_id&format=html|md` → rendered one-pager |
+| GET | `/reports/history` | `?q&kind&target&from_date&to_date&offset&limit` → `{reports, total, offset, limit}`; keyword search covers saved contents and metadata; kind is `commander`, `poam`, `checklist` or `target`; dates are inclusive UTC `YYYY-MM-DD`; limit defaults to 20 (max 100) |
 |---|---|---|
+| GET | `/reports/history/{id}` | → saved metadata and `content`; does not re-render current state |
+| GET | `/reports/history/{id}/download` | → original saved content as an attachment |
+| GET | `/reports/commander` | `?scan_id&format=html|md` → rendered one-pager and a saved history snapshot |
 | GET | `/reports/poam.csv` | `?scan_id` → CSV |
 | GET | `/reports/checklist.cklb` | `?scan_id&host` → CKLB JSON with statuses written back |
 | GET | `/reports/fleet` | `?format=html|md` → path-to-fleet one-pager |

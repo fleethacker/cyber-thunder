@@ -332,6 +332,24 @@ export interface SyncResult { sent: number; bytes: number; seconds: number }
 export interface ScoreItem { id: string; kind: string; what: string; found: boolean; finding_ids: string[] }
 export interface Score { seeded: number; found: number; share: number; items: ScoreItem[] }
 
+export type ReportKind = 'commander' | 'poam' | 'checklist' | 'target';
+export interface SavedReport {
+  id: string;
+  kind: ReportKind;
+  title: string;
+  format: string;
+  generated_at: string;
+  generated_by: string;
+  scan_id: string | null;
+  targets: string[];
+  target_names: string[];
+  filename: string;
+  media_type: string;
+  bytes: number;
+}
+export interface ReportHistory { reports: SavedReport[]; total: number; offset: number; limit: number }
+export interface SavedReportContent extends SavedReport { content: string }
+
 export interface DemoStatus { available: boolean; loaded: boolean; targets: string[]; simulate_verify_fail_next: boolean }
 
 export interface ApiErrorBody { detail: string }
