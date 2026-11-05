@@ -23,9 +23,9 @@ DEMO_FILE = "demo.json"
 
 # -- the verify-fail switch ----------------------------------------------------------------------
 def _read_flag(ctx: "AppContext") -> bool:
-    path = ctx.store.root / DEMO_FILE
     try:
-        return bool(json.loads(path.read_text(encoding="utf-8")).get("simulate_verify_fail_next", False))
+        doc = ctx.store.read_json(ctx.store.root / DEMO_FILE, {}) or {}
+        return bool(doc.get("simulate_verify_fail_next", False))
     except (OSError, ValueError):
         return False
 

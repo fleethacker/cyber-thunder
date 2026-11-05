@@ -12,6 +12,7 @@ from pathlib import Path
 
 from cyberthunder.audit.chain import file_lock
 from cyberthunder.findings.schema import utcnow
+from cyberthunder.state.json_files import replace_file
 
 ASSET_TYPES = ("linux", "windows", "cisco_ios", "kubernetes", "containers")
 # generic transports are implemented in cyberthunder.transport; adapter-specific ones (simulated, file,
@@ -140,7 +141,7 @@ class Inventory:
                 text = json.dumps(data, indent=2)
             tmp = p.with_name(p.name + ".tmp")
             tmp.write_text(text, encoding="utf-8")
-            tmp.replace(p)
+            replace_file(tmp, p)               # another process may be reading the file at this moment (Windows)
             if own:
                 self._base = {d["id"]: copy.deepcopy(d) for d in data["targets"]}
                 self._sig = self._file_sig()
