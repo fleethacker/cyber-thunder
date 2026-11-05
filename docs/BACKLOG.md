@@ -79,9 +79,9 @@ What is real: machine identities can never take a human edge, and every action i
 - Done when: alice proposes and approves, refused and audited; for a CAT I, bob approves (1 of 2), bob again (refused), carol (APPROVED); a policy matching a CAT I does not auto-approve; old `proposals.json` loads.
 
 **ZT-10 Scope-based authorization by enclave and host group.** Pillars: User, Network, Data. Step: 60 days. Effort: 4-5 days. Depends: ZT-02, ZT-08.
-- Today: `Inventory.assert_in_scope` (`inventory/targets.py:187`) checks the target, not who is asking.
+- Today: `Inventory.assert_in_scope` (`inventory/targets.py:187`) checks the target, not who is asking. Its shared cache can retain authorization when the inventory file disappears. The cluster baseline path now adds its own fail-closed check; other active consumers still need the same missing/unreadable-source protection.
 - Target: targets gain `enclave` and `groups`; principals carry scopes from a claim; `control/authz.py authorize(principal, target, action)` beside every `assert_in_scope` call and in the approve path.
-- Done when: an approver scoped to enclave A gets 403 on a host in enclave B, audited with both scopes; an out-of-scope scan is refused before any transport is built.
+- Done when: an approver scoped to enclave A gets 403 on a host in enclave B, audited with both scopes; an out-of-scope scan is refused before any transport is built; every active consumer stops when persisted scope cannot be read or verified, including mid-run removal, without continuing on cached authorization.
 
 **ZT-11 Policy signing bound to a verified approver and to the policy content.** Pillars: User, Data, Automation. Step: 60 days; PIV signature at 180 days. Effort: 2-3 days, plus 3 for PIV. Depends: ZT-05, ZT-08.
 - Today: `sign` and the policy PUT set `signed_by` to the caller's string (`control/policy.py:54-56`, `api/routes/policy.py:90`); `_policy_on_file` (`control/approvals.py:184-192`) checks only `enabled` and `signed_by` in the file on disk, so a hand edit of the rules in that file keeps the signature.
