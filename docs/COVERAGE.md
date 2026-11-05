@@ -62,10 +62,15 @@ The override is CLI-only and cannot be combined with `--queue`; use `--out` to
 export selected content. Queued coverage reports use the node's default content
 sources. The HTTP endpoint cannot select arbitrary filesystem paths.
 Import/extract ZIP files through the existing Content updates workflow;
-coverage reads XML, deduplicates identical files by SHA-256 and lists unreadable
+coverage reads XML, deduplicates identical content by SHA-256 and lists unreadable
 or malformed sources as errors. Different releases remain separate. A manual
 benchmark borrows SCAP eligibility only from a matching benchmark ID and release.
-JSON includes the hashes and individual mapped/unmapped rule IDs for review.
+For a split XCCDF/OVAL pair, content identity includes the companion files and
+whether each is missing; a complete pair is never discarded because an identical
+XCCDF without its companions was found first. Companion changes are re-read on
+each report. JSON includes source and content hashes, companion hashes, and
+individual mapped/unmapped rule IDs for review. Unavailable adapter catalogs are
+listed as incomplete inventory without breaking reports for the other adapters.
 
 With no usable benchmark XML, totals and gaps are **unknown**, not zero and not
 100 percent. The report does not download content, scan an asset or change state

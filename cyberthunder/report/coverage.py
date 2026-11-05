@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from hashlib import sha256
+import json
 from pathlib import Path
 import re
 from types import CodeType
@@ -17,7 +18,7 @@ import xml.etree.ElementTree as ET
 from cyberthunder.findings.schema import utcnow
 from cyberthunder.remediation.library import FixEntry
 from cyberthunder.report.render import ReportError, render
-from cyberthunder.scap.datastream import Benchmark, Datastream, Rule, load_cached
+from cyberthunder.scap.datastream import Benchmark, Datastream, Rule, OVAL_SYSTEM, load
 
 EXECUTABLE_KINDS = {
     "linux": {"script"}, "windows": {"powershell"}, "cisco_ios": {"config_snippet"},
@@ -61,50 +62,55 @@ def _constants(value) -> set[str]:
     return set()
 
 
-def native_catalogs() -> list[NativeCatalog]:
-    from cyberthunder.adapters.linux import checks as linux, rules as lr
-    from cyberthunder.adapters.windows import checks as win
-    from cyberthunder.adapters.cisco import rules as cisco
-    from cyberthunder.adapters.kubernetes import checks as kube
-    from cyberthunder.adapters.containers import checks as containers
-
+def native_catalogs(asset_types: set[str] | None = None) -> list[NativeCatalog]:
+    selected = set(EXECUTABLE_KINDS) if asset_types is None else asset_types
     result = []
-    native = [r for r in linux.NATIVE if r.family in linux.FAMILY]
-    for stig, title, release, size in (
-        (True, lr.BENCHMARK, lr.RELEASE, len(lr.stig_rules())),
-        (False, "Cyber Thunder Linux checks", "bundled", sum(not r.stig_id for r in native)),
-    ):
-        rows = {r.rule_id: _keys(r.rule_id, r.stig_id, r.ssg,
-                               lr.SSG_PREFIX + r.ssg if r.ssg else None)
-                for r in native if bool(r.stig_id) == stig}
-        result.append(NativeCatalog("linux", title, release, size, rows))
-    cat = win.catalog()
-    for stig, title, release, size in (
-        (True, cat["benchmark"], cat["release"], len(cat["rules"])),
-        (False, "Cyber Thunder Windows checks", "bundled", sum(not c.stig_id for c in win.CHECKS)),
-    ):
-        rows = {c.stig_id or c.rule_id: _keys(c.stig_id, c.rule_id, c.fix_ref)
-                for c in win.CHECKS if bool(c.stig_id) == stig}
-        result.append(NativeCatalog("windows", title, release, size, rows))
-    for family, (title, release) in cisco.FAMILY_BENCHMARK.items():
-        rules = [r for r in cisco.load_rules() if r.family == family]
-        result.append(NativeCatalog("cisco_ios", title, release, len(rules),
-                                    {r.stig_id: _keys(r.stig_id, r.rule_id) for r in rules}))
-    referenced = set(kube.APISERVER_RULES)
-    for fn in kube.ALL_CHECKS:
-        referenced.update(_constants(fn.__code__))
-    result.append(NativeCatalog("kubernetes", "Kubernetes STIG", "V2R4 (includes legacy checks)",
-                                len(kube.stig_rules()),
-                                {sid: {sid} for sid in kube.stig_rules() if sid in referenced}))
-    for title, release, rules in (
-        ("CIS Kubernetes Benchmark", "v1.8", kube.CIS_RULES.values()),
-        ("Cyber Thunder Kubernetes checks", "bundled", kube.LOCAL_RULES.values()),
-    ):
-        rows = {r.base: {r.base} for r in rules}
-        result.append(NativeCatalog("kubernetes", title, release, len(rows), rows))
-    for title in sorted({r.benchmark for r in containers.RULES.values()}):
-        rows = {r.base: {r.base} for r in containers.RULES.values() if r.benchmark == title}
-        result.append(NativeCatalog("containers", title, "bundled", len(rows), rows))
+    if "linux" in selected:
+        from cyberthunder.adapters.linux import checks as linux, rules as lr
+        native = [r for r in linux.NATIVE if r.family in linux.FAMILY]
+        for stig, title, release, size in (
+            (True, lr.BENCHMARK, lr.RELEASE, len(lr.stig_rules())),
+            (False, "Cyber Thunder Linux checks", "bundled", sum(not r.stig_id for r in native)),
+        ):
+            rows = {r.rule_id: _keys(r.rule_id, r.stig_id, r.ssg,
+                                   lr.SSG_PREFIX + r.ssg if r.ssg else None)
+                    for r in native if bool(r.stig_id) == stig}
+            result.append(NativeCatalog("linux", title, release, size, rows))
+    if "windows" in selected:
+        from cyberthunder.adapters.windows import checks as win
+        cat = win.catalog()
+        for stig, title, release, size in (
+            (True, cat["benchmark"], cat["release"], len(cat["rules"])),
+            (False, "Cyber Thunder Windows checks", "bundled", sum(not c.stig_id for c in win.CHECKS)),
+        ):
+            rows = {c.stig_id or c.rule_id: _keys(c.stig_id, c.rule_id, c.fix_ref)
+                    for c in win.CHECKS if bool(c.stig_id) == stig}
+            result.append(NativeCatalog("windows", title, release, size, rows))
+    if "cisco_ios" in selected:
+        from cyberthunder.adapters.cisco import rules as cisco
+        for family, (title, release) in cisco.FAMILY_BENCHMARK.items():
+            rules = [r for r in cisco.load_rules() if r.family == family]
+            result.append(NativeCatalog("cisco_ios", title, release, len(rules),
+                                        {r.stig_id: _keys(r.stig_id, r.rule_id) for r in rules}))
+    if "kubernetes" in selected:
+        from cyberthunder.adapters.kubernetes import checks as kube
+        referenced = set(kube.APISERVER_RULES)
+        for fn in kube.ALL_CHECKS:
+            referenced.update(_constants(fn.__code__))
+        result.append(NativeCatalog("kubernetes", "Kubernetes STIG", "V2R4 (includes legacy checks)",
+                                    len(kube.stig_rules()),
+                                    {sid: {sid} for sid in kube.stig_rules() if sid in referenced}))
+        for title, release, rules in (
+            ("CIS Kubernetes Benchmark", "v1.8", kube.CIS_RULES.values()),
+            ("Cyber Thunder Kubernetes checks", "bundled", kube.LOCAL_RULES.values()),
+        ):
+            rows = {r.base: {r.base} for r in rules}
+            result.append(NativeCatalog("kubernetes", title, release, len(rows), rows))
+    if "containers" in selected:
+        from cyberthunder.adapters.containers import checks as containers
+        for title in sorted({r.benchmark for r in containers.RULES.values()}):
+            rows = {r.base: {r.base} for r in containers.RULES.values() if r.benchmark == title}
+            result.append(NativeCatalog("containers", title, "bundled", len(rows), rows))
     return result
 
 
@@ -161,7 +167,7 @@ def _scap_eligible(ds: Datastream, rule: Rule, asset: str | None) -> bool:
 
 
 def benchmark_rows(documents: list[tuple[Datastream, str]], catalogs: list[NativeCatalog],
-                   entries: list[FixEntry]) -> list[dict]:
+                   entries: list[FixEntry], sources: dict | None = None) -> list[dict]:
     rows = []
     for ds, digest in documents:
         for benchmark in ds.benchmarks:
@@ -182,6 +188,7 @@ def benchmark_rows(documents: list[tuple[Datastream, str]], catalogs: list[Nativ
                 "asset_type": asset or "unmapped", "benchmark": benchmark.title,
                 "benchmark_id": benchmark.id, "release": benchmark.release or benchmark.version or "unknown",
                 "source": Path(ds.path).name, "sha256": digest, "kind": ds.kind,
+                **(sources or {}).get(str(ds.path), {}),
                 "published_rules": len(rules), "native_checks": len(native_ids), "scap_eligible": len(scap_ids),
                 "not_covered": len(missing), "not_covered_rule_ids": missing,
                 "native_rule_ids": sorted(native_ids), "scap_rule_ids": sorted(scap_ids),
@@ -204,11 +211,65 @@ def _paths(ctx, benchmark_dir: str | None) -> list[Path]:
     return sorted({p.resolve() for root in roots if root.is_dir() for p in root.rglob("*.xml")})
 
 
+def _load_content(path: Path) -> tuple[Datastream, str, dict] | None:
+    """Fingerprint a document and its local OVAL companions, then parse a fresh snapshot."""
+    versions = {}
+
+    def read(p: Path) -> bytes:
+        stat = p.stat()
+        if stat.st_size > 256 * 1024 * 1024:
+            raise ValueError("benchmark exceeds the 256 MiB content limit")
+        versions[p] = (stat.st_mtime_ns, stat.st_size)
+        return p.read_bytes()
+
+    data = read(path)
+    digest = sha256(data).hexdigest()
+    root = ET.fromstring(data)
+    local = lambda tag: tag.rsplit("}", 1)[-1]
+    if local(root.tag) == "oval_definitions":
+        return None  # Companions are evaluated with their XCCDF, not as separate benchmarks.
+    dependencies = {}
+    if local(root.tag) == "Benchmark":
+        refs = set()
+        for el in root.iter():
+            if el.get("system", "").rstrip("/") != OVAL_SYSTEM:
+                continue
+            if local(el.tag) == "check":
+                refs.update(ref.get("href") for ref in el if local(ref.tag) == "check-content-ref")
+            elif local(el.tag) == "check-fact-ref":
+                refs.add(el.get("href"))
+        for href in sorted(ref for ref in refs if ref):
+            companion = path.parent / Path(href).name
+            if companion.exists():
+                dependencies[companion.name] = sha256(read(companion)).hexdigest()
+            else:
+                versions[companion] = None
+                dependencies[companion.name] = None
+    # The shared scan cache is keyed by the XCCDF file alone. Reports must also
+    # notice an OVAL file being added, removed or changed between renders.
+    ds = load(path)
+    for source, before in versions.items():
+        after = source.stat() if source.exists() else None
+        signature = (after.st_mtime_ns, after.st_size) if after else None
+        if before != signature:
+            raise ValueError("benchmark changed while reading; regenerate the report")
+    if not ds.benchmarks:
+        raise ValueError("no XCCDF benchmark")
+    content_digest = sha256(json.dumps([digest, dependencies], sort_keys=True).encode()).hexdigest()
+    return ds, digest, {"content_sha256": content_digest, "oval_dependencies": dependencies}
+
+
 def build_coverage(ctx, benchmark_dir: str | None = None) -> dict:
     """Read installed checks, library entries and local content. No transports or scanners are called."""
-    catalogs = native_catalogs()
-    entries, inventories, errors = [], [], []
-    for adapter in ctx.adapters.all():
+    catalogs, entries, inventories, errors = [], [], [], []
+    adapters = list(ctx.adapters.all())
+    loaded = {a.asset_type for a in adapters}
+    for asset in sorted(loaded):
+        try:
+            catalogs.extend(native_catalogs({asset}))
+        except Exception as exc:
+            errors.append(f"{asset}: native catalog unavailable ({type(exc).__name__})")
+    for adapter in adapters:
         try:
             fixes = {e.fix_ref: e for e in adapter.fixes()}
         except Exception as exc:
@@ -219,7 +280,6 @@ def build_coverage(ctx, benchmark_dir: str | None = None) -> dict:
                             "by_kind": dict(sorted(Counter(e.kind for e in fixes.values()).items())),
                             "by_source": dict(sorted(Counter(e.source for e in fixes.values()).items())),
                             "fix_refs": sorted(fixes)})
-    loaded = {a.asset_type for a in ctx.adapters.all()}
     for asset in sorted(set(EXECUTABLE_KINDS) - loaded):
         errors.append(f"{asset}: adapter not loaded; its checks and fixes are unavailable")
     native = []
@@ -231,27 +291,22 @@ def build_coverage(ctx, benchmark_dir: str | None = None) -> dict:
                        "published_rules": None, "scap_eligible": None, "not_covered": None,
                        "native_rule_ids": sorted(c.rules),
                        **fix_counts(c.rules, [e for e in entries if e.asset_type == c.asset_type])})
-    documents, seen = [], set()
+    documents, seen, sources = [], set(), {}
     for path in _paths(ctx, benchmark_dir):
         try:
-            if path.stat().st_size > 256 * 1024 * 1024:
-                raise ValueError("benchmark exceeds the 256 MiB content limit")
-            before = path.stat()
-            digest = sha256(path.read_bytes()).hexdigest()
-            if digest in seen:
+            content = _load_content(path)
+            if content is None:
                 continue
-            ds = load_cached(path)
-            after = path.stat()
-            if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
-                raise ValueError("benchmark changed while reading; regenerate the report")
-            if not ds.benchmarks:
-                raise ValueError("no XCCDF benchmark")
+            ds, digest, metadata = content
+            if metadata["content_sha256"] in seen:
+                continue
             documents.append((ds, digest))
-            seen.add(digest)
+            sources[str(ds.path)] = metadata
+            seen.add(metadata["content_sha256"])
         except (OSError, ValueError, ET.ParseError) as exc:
             errors.append(f"{path.name}: benchmark unavailable ({type(exc).__name__})")
     return {"schema_version": 1, "generated_at": utcnow(), "limitations": list(LIMITATIONS),
             "native_catalogs": native,
-            "benchmarks": benchmark_rows(documents, [c for c in catalogs if c.asset_type in loaded], entries),
+            "benchmarks": benchmark_rows(documents, catalogs, entries, sources),
             "fix_library": inventories, "library_entries": sum(i["entries"] for i in inventories),
             "errors": errors}

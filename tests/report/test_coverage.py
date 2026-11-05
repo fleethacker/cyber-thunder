@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -200,3 +201,86 @@ def test_custom_content_is_not_silently_replaced_when_queueing(tmp_path):
     assert result.returncode == 2
     assert "use --out" in result.stderr
     assert not (state / "outbox").exists()
+
+
+def split_fixture(destination):
+    destination.mkdir(parents=True, exist_ok=True)
+    root = ET.parse(DS).getroot()
+    local = lambda tag: tag.rsplit("}", 1)[-1]
+    benchmark = next(el for el in root.iter() if local(el.tag) == "Benchmark")
+    path = destination / "benchmark.xml"
+    path.write_bytes(ET.tostring(benchmark))
+    ds = load(DS)
+    refs = {c.component: Path(c.href).name for r in ds.benchmark.rules.values() for c in r.checks
+            if c.is_oval and c.component}
+    companions = []
+    for component in root:
+        name = refs.get(component.get("id"))
+        if name:
+            oval = next(el for el in component if local(el.tag) == "oval_definitions")
+            companion = destination / name
+            companion.write_bytes(ET.tostring(oval))
+            companions.append(companion)
+    return path, companions
+
+
+def test_split_content_dedup_preserves_complete_pair_after_incomplete_copy(tmp_path):
+    complete, companions = split_fixture(tmp_path / "z-complete")
+    assert companions
+    incomplete = tmp_path / "a-incomplete"
+    incomplete.mkdir()
+    shutil.copy(complete, incomplete / complete.name)
+    result = coverage.build_coverage(node_at(tmp_path), str(tmp_path))
+    assert result["errors"] == []
+    rows = result["benchmarks"]
+    assert len(rows) == 2
+    assert len({r["sha256"] for r in rows}) == 1
+    assert len({r["content_sha256"] for r in rows}) == 2
+    assert max(r["scap_eligible"] for r in rows) > 0
+    assert any(None in r["oval_dependencies"].values() for r in rows)
+
+
+def test_split_oval_changes_and_removal_refresh_counts(tmp_path):
+    xccdf, companions = split_fixture(tmp_path)
+    ctx = node_at(tmp_path)
+    first = coverage.build_coverage(ctx, str(tmp_path))["benchmarks"][0]
+    assert first["scap_eligible"] > 0
+    unchanged_xccdf = xccdf.stat()
+    originals = {p: p.read_bytes() for p in companions}
+    for p in companions:
+        root = ET.fromstring(originals[p])
+        for child in root:
+            if child.tag.rsplit("}", 1)[-1] == "definitions":
+                child.clear()
+        p.write_bytes(ET.tostring(root))
+    changed = coverage.build_coverage(ctx, str(tmp_path))["benchmarks"][0]
+    assert changed["scap_eligible"] == 0
+    assert changed["sha256"] == first["sha256"]
+    assert changed["content_sha256"] != first["content_sha256"]
+    assert xccdf.stat().st_mtime_ns == unchanged_xccdf.st_mtime_ns
+    for p in companions:
+        p.unlink()
+    missing = coverage.build_coverage(ctx, str(tmp_path))["benchmarks"][0]
+    assert missing["scap_eligible"] == 0
+    for p, data in originals.items():
+        p.write_bytes(data)
+    restored = coverage.build_coverage(ctx, str(tmp_path))["benchmarks"][0]
+    assert restored["content_sha256"] == first["content_sha256"]
+    assert restored["scap_eligible"] == first["scap_eligible"]
+
+
+def test_unavailable_native_catalog_does_not_break_other_reports(node, tmp_path, monkeypatch):
+    from cyberthunder.adapters.windows import checks as win
+    def missing_catalog():
+        raise FileNotFoundError("catalog unavailable")
+    monkeypatch.setattr(win, "catalog", missing_catalog)
+    result = coverage.build_coverage(node, str(tmp_path))
+    assert any("windows: native catalog unavailable" in error for error in result["errors"])
+    assert any(row["asset_type"] == "linux" for row in result["native_catalogs"])
+    assert not any(row["asset_type"] == "windows" for row in result["native_catalogs"])
+    assert "445" in node.reports.commander()
+    available = [a for a in node.adapters.all() if a.asset_type != "windows"]
+    node.adapters = SimpleNamespace(all=lambda: available)
+    result = coverage.build_coverage(node, str(tmp_path))
+    assert any("windows: adapter not loaded" in error for error in result["errors"])
+    assert not any("native catalog unavailable" in error for error in result["errors"])
