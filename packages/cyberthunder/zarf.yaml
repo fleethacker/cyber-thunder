@@ -9,6 +9,14 @@ variables:
     description: Domain used by UDS Core and Cyber Thunder SSO.
     default: uds.dev
 
+  - name: SCAN_TARGET_CIDR
+    description: Approved SSH target address or subnet. Set a real /32 to enable VM access.
+    default: 192.0.2.1/32
+
+  - name: SCAN_SSH_PORT
+    description: SSH destination port, including a host-forwarded port for a local VM.
+    default: "22"
+
 components:
   - name: uds-integration
     required: true

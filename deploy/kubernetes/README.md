@@ -61,6 +61,12 @@ Inject target credentials using Kubernetes Secrets (the transports expect
 Credentials and local state are excluded from the Docker build context.
 Network policy must allow access to the targets and any configured model server.
 
+The optional `cyberthunder-target-credentials` Secret is mounted read-only at
+`/etc/cyberthunder/targets` with mode `0440`. An `id_ed25519` entry is available
+at `/etc/cyberthunder/targets/id_ed25519` for the asset's SSH key file setting.
+See [VM credentials and UDS egress](../../packages/cyberthunder/README.md#ssh-access-to-an-external-vm)
+for provisioning and package deployment variables.
+
 The image supports the Python SSH and WinRM transports and includes kubectl
 v1.36.4 and Trivy v0.56.2. The deployment mounts a local-cluster kubeconfig and
 rotating service account token. Its RBAC permits only `get` and `list` of

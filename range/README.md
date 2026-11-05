@@ -46,6 +46,46 @@ ssh acd@<vm-ip> 'sudo -n true && echo SUDO_OK'
 
 6. Take a snapshot named **`clean`**.
 
+## QEMU SSH from a UDS deployment
+
+For the local k3d range, QEMU forwards `172.18.0.1:2222` to the guest's SSH
+port 22. A listening host port alone does not establish access from the scanner
+pod: UDS must allow egress, and the pod must mount the target's SSH key.
+Package upgrades can remove these environment-specific settings while leaving
+the target in the persistent inventory.
+
+If discovery reports `Error reading SSH protocol banner`, compare
+`ssh-keyscan -T 8 -p 2222 172.18.0.1` on the host with the scanner's Istio logs.
+A host banner together with `PassthroughCluster` and
+`delayed_connect_error:_Connection_refused` in the sidecar can indicate missing
+egress. Check `spec.network.allow` on the `cyberthunder` UDS Package.
+
+The repair patches here match this local range. The egress patch appends a rule
+for `app=cyberthunder` to `172.18.0.1/32`, TCP port 2222, preserving the existing
+Kubernetes API rule. Apply it once when that VM rule is missing. The credentials
+patch restores the existing `cyberthunder-target-credentials` Secret at
+`/etc/cyberthunder/targets`, read-only with mode `0440`; it preserves the other
+volumes and mounts. That Secret must already contain `id_ed25519` and
+`known_hosts`. Adjust the address, port and Secret name for another environment.
+
+From the repository root, with kubectl pointed at the local range:
+
+```bash
+kubectl -n cyberthunder patch package cyberthunder --type=json \
+  --patch-file=range/qemu-ssh-egress.patch.json
+kubectl -n cyberthunder patch deployment cyberthunder --type=strategic \
+  --patch-file=range/qemu-ssh-credentials.patch.json
+kubectl -n cyberthunder rollout status deployment/cyberthunder --timeout=180s
+kubectl -n cyberthunder exec deployment/cyberthunder -c cyberthunder -- \
+  python -m cyberthunder --actor range-operator targets discover acd-qemu-01
+```
+
+The mount change restarts the scanner pod. To retain both settings on upgrades,
+rebuild the package from this source and deploy with `SCAN_TARGET_CIDR=172.18.0.1/32`
+and `SCAN_SSH_PORT=2222`; see [package VM access](../packages/cyberthunder/README.md#ssh-access-to-an-external-vm).
+Existing archives can overwrite live patches. No SSH timeout change is needed
+for this failure.
+
 ## k3s and podman on the same VM
 
 Install what the Kubernetes and container areas need (needs a one-time internet connection, so do it before
