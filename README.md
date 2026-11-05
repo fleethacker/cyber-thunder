@@ -155,9 +155,12 @@ python -m cyberthunder audit verify
 ```
 
 Other commands: `targets ...` (inventory; `targets discover <id>` reads asset facts), `discover scopes|sweep|list|accept|ignore|findings|applicable`
-(network discovery, needs a saved scope first), `ingest stig|bulletin` (constrained-link updates), `link show|set`
-(kbps, latency, connected), `outbox list|sync` (reports queued for sync), `report ...` (one-pager, POA&M,
-checklist, path to fleet), `demo reset|run`.
+(network discovery, needs a saved scope first), `scap info|plan|eval|subset` (DISA SCAP benchmarks run by the tool;
+[docs/SCAP.md](docs/SCAP.md)), `ingest stig|bulletin` (constrained-link updates by file), `ingest check|pull|updates|content|manifest|fetch-manifest|import-dir`
+(STIG content from cyber.mil when the link is up, a manifest round trip when it is not; [docs/CONTENT.md](docs/CONTENT.md)),
+`link show|set` (kbps, latency, connected), `outbox list|sync` (reports queued for sync), `verify` and `diff` (a proposal
+after apply), `kill engage|release`, `audit verify|tail`, `parse` (scanner output files to findings), `report ...` (one-pager,
+POA&M, checklist, path to fleet), `demo reset|run`.
 
 ## Documentation
 
