@@ -167,7 +167,7 @@ class DevelopmentModeTests(unittest.TestCase):
         result, calls, config, passwords, _ = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         deployment = next(call for call in calls if call["arguments"][:1] == ["deploy"])
-        self.assertIn("uds-k3d-dev,init,core,podinfo", deployment["arguments"])
+        self.assertIn("uds-k3d-dev,init,core,podinfo,nginx-bad", deployment["arguments"])
         self.assertNotIn("identity-bootstrap", config.get("variables", {}))
         self.assertNotIn("UDS password:", result.stdout)
         self.assertEqual(passwords, [])
@@ -176,7 +176,7 @@ class DevelopmentModeTests(unittest.TestCase):
         result, calls, config, passwords, _ = self.run_script(arguments=("dev",))
         self.assertEqual(result.returncode, 0, result.stderr)
         deployment = next(call for call in calls if call["arguments"][:1] == ["deploy"])
-        self.assertIn("uds-k3d-dev,init,core,identity-bootstrap,podinfo", deployment["arguments"])
+        self.assertIn("uds-k3d-dev,init,core,identity-bootstrap,podinfo,nginx-bad", deployment["arguments"])
         self.assertTrue(config["variables"]["core"]["INSECURE_ADMIN_PASSWORD_GENERATION"])
         self.assertEqual(config["variables"]["identity-bootstrap"]["DEV_MODE"], "true")
         self.assertEqual(config["variables"]["identity-bootstrap"]["ADMIN_PASSWORD"], passwords[0])
@@ -197,7 +197,7 @@ class DevelopmentModeTests(unittest.TestCase):
         result, calls, _, _, _ = self.run_script(arguments=("dev",), TEST_EXISTING_CLUSTER="1")
         self.assertEqual(result.returncode, 0, result.stderr)
         deployment = next(call for call in calls if call["arguments"][:1] == ["deploy"])
-        self.assertIn("identity-bootstrap,podinfo", deployment["arguments"])
+        self.assertIn("identity-bootstrap,podinfo,nginx-bad", deployment["arguments"])
         self.assertTrue(any(call["arguments"][:2] == ["kubeconfig", "get"] for call in calls))
 
     def test_failed_verification_does_not_print_credentials(self):
