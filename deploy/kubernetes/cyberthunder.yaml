@@ -110,7 +110,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cyberthunder
-          image: cyberthunder:0.2.5
+          image: cyberthunder:0.2.6
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

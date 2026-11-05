@@ -381,10 +381,13 @@ def _checklist_for(ctx, target_id: str) -> tuple[dict | None, str | None]:
 
 
 def _build_report(ctx, target_id: str, actor: str) -> dict:
+    from cyberthunder.report import history
     target = ctx.inventory.get(target_id)
+    history.import_existing(ctx)
     findings = [f for f in ctx.store.load_findings() if f.host == target_id]
     checklist, checklist_error = _checklist_for(ctx, target_id)
     doc = {
+        "report_id": ctx.store.new_id("report-"),
         "target": target.to_dict(),
         "generated_at": utcnow(),
         "generated_by": actor,
@@ -394,6 +397,8 @@ def _build_report(ctx, target_id: str, actor: str) -> dict:
         "checklist": checklist,
         "checklist_error": checklist_error,
     }
+    history.save(ctx, "target", doc, "json", report_id=doc["report_id"], targets=[target_id], actor=actor,
+                 generated_at=doc["generated_at"], scan_id=ctx.store.latest_scan_id())
     ctx.store.write_json(_report_path(ctx, target_id), doc)
     ctx.audit.append("report.render", actor, {"kind": "target", "target": target_id, "findings": len(findings),
                                               "open": doc["open"]}, subject=target_id)

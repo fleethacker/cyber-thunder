@@ -27,7 +27,7 @@ Every action, including refusals and blocks, lands in the hash-chained audit tra
 
 ![Audit trail](docs/images/audit.jpg)
 
-Reports replace the paperwork: commander one-pager, POA&M, checklist, path to fleet, and the detection score against the range answer keys.
+Reports keep searchable history of commander one-pagers, POA&Ms, checklists and target reports, alongside the detection score against the range answer keys.
 
 ![Reports](docs/images/reports.jpg)
 
@@ -54,7 +54,7 @@ WinRM against a real Windows host is next.
 | Local-model explanations with citation validation | `cyberthunder/explain/` | built |
 | STIG delta ingest, link emulation, outbox | `cyberthunder/ingest/` | built |
 | DISA content pull (public STIG index, resumable allow-listed downloads, manifest round trip for disconnected sites) | `cyberthunder/ingest/content/` | built |
-| Reports (one-pager, POA&M, checklist, path to fleet) | `cyberthunder/report/` | built |
+| Reports (one-pager, POA&M, checklist, searchable history) | `cyberthunder/report/` | built |
 | HTTP API | `cyberthunder/api/` | built |
 | Web UI | `cyberthunder/ui/` | built |
 | Asset discovery (scoped sweeps, device typing, propose-only inventory, rogue devices) | `cyberthunder/discovery/` | built |
@@ -160,7 +160,7 @@ Other commands: `targets ...` (inventory; `targets discover <id>` reads asset fa
 (STIG content from cyber.mil when the link is up, a manifest round trip when it is not; [docs/CONTENT.md](docs/CONTENT.md)),
 `link show|set` (kbps, latency, connected), `outbox list|sync` (reports queued for sync), `verify` and `diff` (a proposal
 after apply), `kill engage|release`, `audit verify|tail`, `parse` (scanner output files to findings), `report ...` (one-pager,
-POA&M, checklist, path to fleet), `demo reset|run`, `state info|migrate` (where the documents live: json files or SQLite;
+POA&M, checklist), `demo reset|run`, `state info|migrate` (where the documents live: json files or SQLite;
 [docs/STATE.md](docs/STATE.md)).
 
 ## Documentation

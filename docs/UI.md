@@ -66,9 +66,19 @@ details JSON and hashes. Filters by action/actor/subject. "Verify chain" button 
 Download audit.jsonl.
 
 ### Reports (`/reports`)
-Commander one-pager rendered inline (iframe of the HTML) with download HTML/MD; POA&M CSV; updated checklist
-(CKLB) per host; path to fleet; friction log; **detection score** card (seeded vs found vs answer key) when the
-range answer key is present. "Queue for sync" puts a report in the outbox; outbox list with sync button.
+Report history searches saved commander reports, POA&Ms, checklists and target reports by contents,
+asset name/ID, scan ID and operator. Filters narrow by report type and inclusive UTC date range; results
+are newest first with pagination. Open a saved report to preview its original contents or download the
+original HTML, Markdown, CSV, CKLB or JSON. Historical previews do not regenerate from live findings.
+
+Current reports include the commander one-pager with HTML/Markdown downloads, POA&M CSV and an updated
+checklist (CKLB) per host. Each render saves a snapshot; Mission's per-target reports retain every revision.
+Existing target reports and report exports still in the pending/synced outbox are imported once.
+Report history lives in `<state>/reports/history/` as portable files for both state backends. Earlier
+reports that were never retained cannot be recovered from the audit log alone.
+
+The **detection score** card compares seeded issues with findings when the range answer key is present.
+"Queue for sync" puts a report in the outbox; the outbox list includes a sync button.
 
 ### Settings (`/settings`)
 

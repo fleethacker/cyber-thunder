@@ -5,7 +5,7 @@ import type {
   DemoStatus, DiscoveredAsset, DiscoveredTarget, DiscoveryAccept, Finding, DiscoveryMode, DiscoveryOverview, DiscoveryRun, DiscoveryScope,
   DiscoveryStatus, Explanation, FindingPlus, FindingsPage, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
   Outbox, PolicyDecision, ProposalDiff, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
-  TargetOutcome, TargetReport, UpdateCheck,
+  ReportHistory, SavedReportContent, TargetOutcome, TargetReport, UpdateCheck,
 } from './types';
 
 export const API_BASE = '/api/v1';
@@ -182,6 +182,8 @@ export const api = {
   sync: () => post<SyncResult>('/outbox/sync'),
 
   score: (scan_id?: string) => get<Score>('/reports/score', { scan_id }),
+  reportHistory: (q?: Query) => get<ReportHistory>('/reports/history', q),
+  savedReport: (id: string) => get<SavedReportContent>(`/reports/history/${enc(id)}`),
   queueReport: (kind: 'commander' | 'poam' | 'checklist', scan_id?: string, host?: string) =>
     post<unknown>('/reports/queue', { kind, scan_id, host }),
   reportText: (path: string, q?: Query) => get<string>(path, q),

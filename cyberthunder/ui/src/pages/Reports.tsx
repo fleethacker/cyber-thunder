@@ -1,6 +1,5 @@
-// Reports: commander one-pager inline, downloads (HTML/MD, POA&M CSV, CKLB per host), path to fleet,
-// friction log, detection score, and the sync outbox.
-import { Badge, Button, Card, Group, Paper, Progress, SegmentedControl, Select, SimpleGrid, Stack, Table, Text } from '@mantine/core';
+// Reports: searchable saved snapshots, current reports, detection score and sync outbox.
+import { Badge, Button, Card, Group, Paper, Progress, Select, SimpleGrid, Stack, Table, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconCloudUpload, IconDownload, IconSend } from '@tabler/icons-react';
 import { useState, useEffect } from 'react';
@@ -9,6 +8,7 @@ import { ErrorBox, Loading, Mono, PageTitle } from '../components/common';
 import { fmtBytes, fmtSeconds, fmtTime } from '../lib/format';
 import { useAsync } from '../lib/hooks';
 import { useAppState } from '../state/AppState';
+import { ReportHistory } from '../components/ReportHistory';
 
 function Download({ href, label, file }: { href: string; label: string; file: string }) {
   return (
@@ -111,11 +111,7 @@ function OutboxCard() {
   );
 }
 
-type Doc = 'commander' | 'fleet' | 'friction';
-const DOC_PATH: Record<Doc, string> = { commander: '/reports/commander', fleet: '/reports/fleet', friction: '/reports/friction' };
-
 export default function Reports() {
-  const [doc, setDoc] = useState<Doc>('commander');
   const [host, setHost] = useState<string | null>(null);
   const [queueing, setQueueing] = useState<string | null>(null);
   const targets = useAsync(async () => (await api.targets()).targets, []);
@@ -124,11 +120,11 @@ export default function Reports() {
   useEffect(() => {
     let alive = true;
     setHtml('');
-    request<string>('GET', DOC_PATH[doc], { query: { format: 'html' } })
+    request<string>('GET', '/reports/commander', { query: { format: 'html' } })
       .then((h) => { if (alive) setHtml(h); })
       .catch((e) => { if (alive) setHtml(`<p style="font-family:sans-serif;color:#b00020;padding:16px">${errorText(e)}</p>`); });
     return () => { alive = false; };
-  }, [doc, frameKey]);
+  }, [frameKey]);
 
   const queue = async (kind: 'commander' | 'poam' | 'checklist') => {
     setQueueing(kind);
@@ -144,25 +140,22 @@ export default function Reports() {
 
   return (
     <Stack gap="md">
-      <PageTitle title="Reports" subtitle="Generated offline from the current findings and the audit trail." />
+      <PageTitle title="Reports" subtitle="Search past reports or generate a report from the current findings and audit trail." />
+      <ReportHistory />
       <Paper withBorder radius="md" p="md">
         <Stack gap="sm">
           <Group justify="space-between" wrap="wrap">
-            <SegmentedControl value={doc} onChange={(v) => setDoc(v as Doc)} data={[
-              { value: 'commander', label: 'Commander one-pager' }, { value: 'fleet', label: 'Path to fleet' }, { value: 'friction', label: 'Friction log' },
-            ]} />
+            <Text fw={700}>Commander one-pager</Text>
             <Group gap="xs">
-              <Download href={url(DOC_PATH[doc], { format: 'html' })} label="HTML" file={`${doc}.html`} />
-              <Download href={url(DOC_PATH[doc], { format: 'md' })} label="Markdown" file={`${doc}.md`} />
-              <Button size="sm" variant="subtle" onClick={() => setFrameKey((k) => k + 1)}>Reload</Button>
-              {doc === 'commander' && (
+              <Download href={url('/reports/commander', { format: 'html' })} label="HTML" file="commander.html" />
+              <Download href={url('/reports/commander', { format: 'md' })} label="Markdown" file="commander.md" />
+              <Button size="sm" variant="subtle" onClick={() => setFrameKey((k) => k + 1)}>Generate report</Button>
                 <Button size="sm" leftSection={<IconSend size={14} />} loading={queueing === 'commander'} onClick={() => void queue('commander')}>Queue for sync</Button>
-              )}
             </Group>
           </Group>
           <iframe
-            key={`${doc}-${frameKey}`}
-            title={doc}
+            key={frameKey}
+            title="Commander one-pager"
             srcDoc={html}
             sandbox=""
             style={{ width: '100%', height: 640, border: '1px solid var(--mantine-color-default-border)', borderRadius: 8, background: 'white' }}
