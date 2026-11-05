@@ -52,3 +52,8 @@ cyberthunder/ui/*.local
 # UDS deployment outputs
 .build/
 *.tar.zst
+
+# untracked range secrets (passwords, filled kickstart)
+range/.local/
+# built range install media
+range/vmware/*.iso

@@ -19,6 +19,12 @@ used for the detection score on the Reports page and must never be shown to the 
 
 ## Rocky 9 VM (one time, about 25 minutes)
 
+> **Automated path (VMware Workstation):** [`range/vmware/new-range-vm.ps1`](vmware/README.md) does
+> steps 1–6 below hands-off: it writes the vmx, bakes an `OEMDRV` kickstart ISO, drives the unattended
+> install, checks SSH and passwordless sudo, and snapshots `clean`. The manual steps below still apply
+> to any other hypervisor. See [the first real-host run](#first-real-host-run-from-the-laptop) for the
+> scan results this produced.
+
 1. Download `Rocky-9-latest-x86_64-minimal.iso` from the Rocky Linux site.
 2. In the hypervisor: new VM, Linux / RHEL 9 64-bit, name `acd-target-01`, 2 vCPU, 4 GB RAM (8 GB if k3s
    and podman run on it), 40 GB disk, **NAT** network.
@@ -116,3 +122,109 @@ content, use the CIS profile for the first day and drop upstream content into
 
 Every rule in the benchmark carries a shell fix; the parser lifts it into the finding and the fix library
 holds the vetted subset. Rollback restores the before-state the apply step captured, then rescans.
+
+## First real-host run (from the laptop)
+
+Register the three range assets in a scratch state directory and scan them from the laptop. The scan
+account `acd` reaches the VM over SSH with the key `new-range-vm.ps1` installed; no password is on the
+wire and none is in the inventory.
+
+```bash
+# PowerShell: $env:CT_STATE_DIR="C:\ct\range-state"; $env:CT_ACTOR="IT1 Ott"
+export CT_STATE_DIR=/c/ct/range-state
+export CT_ACTOR="IT1 Ott"
+KEY="C:\Users\joshu\.ssh\ct_range_ed25519"
+```
+
+`CT_STATE_DIR` must be an environment variable (not only `--state-dir`): the Kubernetes `node_target`
+feature re-reads it from the environment when it opens the server node's SSH transport.
+
+Linux host, SSH with a key file and no password:
+
+```bash
+python -m cyberthunder targets add --id acd-target-01 --name acd-target-01 --type linux --transport ssh --address <ip> --username acd --option key_file=$KEY --in-scope --reason "range build"
+```
+
+Container host, podman over the same SSH host:
+
+```bash
+python -m cyberthunder targets add --id acd-containers --name acd-containers --type containers --transport ssh --address <ip> --username acd --option key_file=$KEY --option engine=podman --option 'allowed_registries=["registry.local","docker.io/library"]' --option 'expected_containers=["web","ops-agent","ops-dashboard","metrics-relay"]' --option 'expected_ports=[443]' --option 'critical_containers=["web"]' --in-scope --reason "range build"
+```
+
+k3s cluster, kubeconfig transport; `node_target` reads the control-plane flags over the Linux target's SSH:
+
+```bash
+python -m cyberthunder targets add --id acd-k3s --name acd-k3s --type kubernetes --transport kubeconfig --option kubeconfig=C:\ct\kubeconfig-acd-k3s.yaml --option kubectl=C:\Tools\kubectl\kubectl.exe --option node_target=acd-target-01 --option node_name=acd-target-01 --option 'allowed_registries=["registry.local","docker.io/library"]' --in-scope --reason "range build"
+```
+
+Copy the kubeconfig off the VM first and point it at the VM address (it is cluster-admin; keep it private):
+
+```bash
+scp -i %USERPROFILE%\.ssh\ct_range_ed25519 acd@<ip>:/etc/rancher/k3s/k3s.yaml C:\ct\kubeconfig-acd-k3s.yaml
+# then replace 127.0.0.1 with <ip> in that file
+```
+
+Scan, score against the answer keys, and take one fix end to end:
+
+`report score` prints seeded vs found per answer key. `apply` captures the before-state, applies and
+verifies; `rollback` restores the before-state and rescans; `audit verify` checks the hash chain.
+
+```bash
+python -m cyberthunder --actor "IT1 Ott" scan
+python -m cyberthunder report score
+python -m cyberthunder proposals list
+python -m cyberthunder proposals approve <proposal-id>
+python -m cyberthunder apply <proposal-id>
+python -m cyberthunder diff <proposal-id>
+python -m cyberthunder rollback <proposal-id>
+python -m cyberthunder audit verify
+```
+
+### Results (first real-host run, 2026-11-04)
+
+First scan of a real host, not the in-process simulator: the automated Rocky 9 VM above, seeded with all
+three Linux/Kubernetes/container seed scripts, scanned from the laptop over SSH and a kubeconfig.
+
+**Detection.** Every one of the 28 seeded items on the three scanned targets was detected. The scoreboard
+(`report score`) credits 23 of 28; the five-item gap is a scoring-identifier mismatch, not a detection
+miss (detail below).
+
+| Target | Seeded | Detected | Scoreboard credits |
+|---|---|---|---|
+| `acd-target-01` (linux) | 12 | 12 | 10 |
+| `acd-containers` (podman) | 6 | 6 | 6 |
+| `acd-k3s` (kubernetes) | 10 | 10 | 7 |
+| **Total** | **28** | **28** | **23 (82%)** |
+
+The full `report score` also lists the cisco, windows and discovery keys as `not_scanned` (33 + 10 + 3
+items): those targets were out of scope for this run, so the raw overall figure (22–23 of 74) understates
+the result. Scope the score to what was built and it is 23 of 28.
+
+**One fix, end to end on the real host.** Proposal `ssg:file_permissions_etc_shadow` (STIG RHEL-09-232270,
+Linux M3): approved as `IT1 Ott`, applied (`/etc/shadow` 0644 -> 0000, before-state captured), verified by
+re-check, then rolled back (restored to 0644) and confirmed on the host. `audit verify` reported the chain
+intact (hash-linked, checkpoint matches).
+
+**What the adapters got wrong (and what this run fixed).**
+
+- **Kubernetes RBAC check crashed on a real cluster (fixed in this PR).** `check_rbac` and
+  `hunt_admin_bindings` raised `invalid object name 'system:controller:bootstrap-signer'` and aborted,
+  because `ObjRef` validated namespaced RoleBinding names with the DNS-1123 pattern, which forbids the `:`
+  that every real cluster's built-in `system:` bindings carry (the simulator has none, so this never
+  surfaced before). The crash hid the seeded `system-monitor-binding` (k8s I1). Fixed by letting namespaced
+  `roles`/`rolebindings` use the colon-tolerant RBAC name pattern; k8s I1 is now detected.
+- **Answer keys were scoped to simulated targets only (fixed in this PR).** `kubernetes.json` and
+  `containers.json` named only `sim-k8s-01` / `sim-docker-01`, so real-range findings scored as
+  `not_scanned`. They now carry `target: acd-k3s` / `acd-containers` with the simulated id moved to
+  `sim_target`, mirroring `linux.json`. The simulated demo still scores through `sim_target`.
+- **Five items are detected but not credited (scoreboard identifier mismatch, left as-is).** k8s M2/M3/M5
+  (apiserver `anonymous-auth`, kubelet `read-only-port`, missing audit log) are detected on the node as
+  `CNTR-K8-000360/000330/000610` against `-/node/acd-target-01`, but the answer key's `object` names the
+  simulated apiserver pod `kube-system/pod/kube-apiserver-k3s-01`; on k3s the control plane runs in-process,
+  not as a pod (see [k8s/README.md](k8s/README.md)). Linux M5/M6 (ctrl-alt-del, world-writable dir) are
+  detected by OpenSCAP as `xccdf_org.ssgproject.content_rule_*`, but the key's `check_id` uses the
+  simulator's internal `linux:` ids. These need a real/sim identifier split in the keys like the one added
+  for `target`; left for a follow-up so the change can be reviewed against the simulated scorer.
+
+Reproduce: build with `range/vmware/new-range-vm.ps1`, seed per [vmware/README.md](vmware/README.md), then
+run the commands above with `CT_STATE_DIR` pointed at a scratch directory.
