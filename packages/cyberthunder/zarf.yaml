@@ -1,0 +1,16 @@
+kind: ZarfPackageConfig
+metadata:
+  name: cyberthunder
+  description: Cyber Thunder API and web UI with persistent application state.
+  version: 0.2.1
+
+components:
+  - name: cyberthunder
+    required: true
+    manifests:
+      - name: cyberthunder
+        namespace: cyberthunder
+        files:
+          - ../../deploy/kubernetes/cyberthunder.yaml
+    images:
+      - cyberthunder:0.2.1
