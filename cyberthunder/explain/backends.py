@@ -6,8 +6,10 @@ deterministic template, so a dead or slow model never blocks a scan or the appro
 """
 from __future__ import annotations
 
+import http.client
 import json
 import logging
+import os
 import threading
 import time
 import urllib.error
@@ -29,14 +31,50 @@ class Backend(Protocol):
     def available(self) -> tuple[bool, str]: ...
 
 
-def _http_json(method: str, url: str, body: dict | None, timeout: float) -> dict:
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Credentialed requests must stay at the configured endpoint."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _http_json(method: str, url: str, body: dict | None, timeout: float,
+               *, bearer_token: str | None = None) -> dict:
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
                                  headers={"Content-Type": "application/json", "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:   # noqa: S310  local model server only
+    open_request = urllib.request.urlopen
+    if bearer_token:
+        req.add_unredirected_header("Authorization", f"Bearer {bearer_token}")
+        open_request = urllib.request.build_opener(_RefuseRedirects()).open
+    with open_request(req, timeout=timeout) as resp:   # noqa: S310  local model server only
         raw = resp.read().decode("utf-8", errors="replace")
     out = json.loads(raw) if raw.strip() else {}
+    if bearer_token and _contains_secret(out, bearer_token):
+        raise ValueError("model server response contained a credential")
     return out if isinstance(out, dict) else {}
+
+
+def _contains_secret(value, secret: str) -> bool:
+    """Reject reflected credentials before response text can reach persisted explanations."""
+    if isinstance(value, str):
+        return secret in value
+    if isinstance(value, dict):
+        return any(_contains_secret(k, secret) or _contains_secret(v, secret) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_contains_secret(item, secret) for item in value)
+    return False
+
+
+def _compatible_failure(error: Exception) -> str:
+    """Only fixed diagnostics may leave this backend; remote error text is untrusted."""
+    if isinstance(error, urllib.error.HTTPError):
+        if error.code in (401, 403):
+            return "model server authentication failed; check CT_LLM_API_KEY and endpoint access"
+        if error.code in (301, 302, 303, 307, 308):
+            return "model server redirect refused; configure the final endpoint directly"
+        return "model server returned an HTTP error"
+    return "model server request failed; check endpoint, credential format and server availability"
 
 
 class _CachedAvailability:
@@ -125,18 +163,29 @@ class OpenAICompatBackend:
         self.json_mode_supported = True     # cleared the first time the server rejects response_format
         self._avail = _CachedAvailability()
 
+    def _request(self, method: str, url: str, body: dict | None, timeout: float) -> dict:
+        # Read for every attempt, including the JSON-mode fallback; never retain the credential.
+        key = os.environ.get("CT_LLM_API_KEY", "").strip()
+        return _http_json(method, url, body, timeout, bearer_token=key or None)
+
     def _probe(self) -> tuple[bool, str]:
         try:
-            out = _http_json("GET", f"{self.url}/v1/models", None, self.probe_timeout)
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            return False, f"model server unreachable at {self.url}: {e}"
-        ids = {m.get("id") for m in out.get("data", []) if isinstance(m, dict)}
-        ids.discard(None)
+            out = self._request("GET", f"{self.url}/v1/models", None, self.probe_timeout)
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
+            return False, _compatible_failure(e)
+        models = out.get("data", [])
+        if "error" in out or not isinstance(models, list):
+            return False, "model server returned an invalid model list"
+        ids = {m["id"] for m in models if isinstance(m, dict) and isinstance(m.get("id"), str)}
         if not ids or self.model in ids:
-            return True, f"openai-compatible {self.url} model {self.model}"
-        return False, f"openai-compatible {self.url}: model {self.model} not loaded (have: {', '.join(sorted(ids))})"
+            return True, "compatible model server available"
+        return False, "configured model not loaded on compatible server"
 
     def available(self) -> tuple[bool, str]:
+        if os.environ.get("CT_LLM_API_KEY", "").strip():
+            # Do not let a cached success or failure hide credential rotation or revocation.
+            self._avail.clear()
+            return self._probe()
         return self._avail.get(self._probe)
 
     def _body(self, prompt: str, json_mode: bool) -> dict:
@@ -151,16 +200,16 @@ class OpenAICompatBackend:
         url = f"{self.url}/v1/chat/completions"
         try:
             try:
-                out = _http_json("POST", url, self._body(prompt, json_mode), timeout)
+                out = self._request("POST", url, self._body(prompt, json_mode), timeout)
             except urllib.error.HTTPError as e:
                 if e.code in (400, 422) and json_mode and self.json_mode_supported:
                     # this server does not accept response_format; ask again without it
                     self.json_mode_supported = False
-                    out = _http_json("POST", url, self._body(prompt, json_mode), timeout)
+                    out = self._request("POST", url, self._body(prompt, json_mode), timeout)
                 else:
                     raise
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            log.warning("openai-compatible generate failed: %s", e)
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
+            log.warning("compatible generate failed: %s", _compatible_failure(e))
             self._avail.clear()
             return None
         try:
