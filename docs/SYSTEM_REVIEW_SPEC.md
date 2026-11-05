@@ -264,6 +264,51 @@ Kubernetes manifest fixes are constrained as follows:
 - Verification re-runs detection and health checks, including API server reachability, node readiness, and `kube-system` pod health.
 - Human approval or signed automation policy approval is required before any state-changing Kubernetes fix executes.
 
+### 5.7 Rollback Behavior
+
+Rollback is implemented by the remediation engine plus the asset adapter. The shared engine controls when rollback can occur, and the adapter controls how the target is restored.
+
+The shared rollback flow is:
+
+1. A proposal is approved.
+2. Before apply, the adapter captures `BeforeState` into the proposal snapshot directory.
+3. The exact `FixEntry` approved by the operator is saved with the proposal.
+4. The adapter applies the approved fix.
+5. The adapter verifies the finding and target health.
+6. If apply or verify fails, the engine attempts automatic rollback for payload fixes.
+7. A human operator can manually request rollback later for proposals in an applied or verified state.
+8. Rollback actions are kill-switch guarded and audited. If rollback succeeds, the proposal moves to `ROLLED_BACK`; if it fails, `proposal.rollback_error` is recorded.
+
+Runbook fixes are different: the tool does not change the target, so rollback is an operator procedure described by the runbook's rollback steps.
+
+#### VM / Host Fix Rollback
+
+For VM-style targets, rollback depends on the host adapter. In this codebase that means Linux over SSH/local transport and Windows over WinRM/PowerShell.
+
+| Target type | Before-state capture | Rollback method | Notes |
+| --- | --- | --- | --- |
+| Linux VM / host | Captures files named by the fix, matching directory globs, command outputs, service enable/active state, sysctl values, SELinux mode, path modes, and selected package NEVRAs as declared by the fix's `before_state` | Restores captured file bytes, mode, owner, and group; moves quarantined files back when applicable; restores service enable/active state; restores sysctl and SELinux runtime values; restores path modes; reloads/restarts services listed by the fix; attempts package reinstall from the enclave mirror for captured packages | Linux executable fixes must have a `# cyberthunder-fix: <fix_ref>` header matching the approved `FixEntry`. Hunt-fix subjects are validated before being written to the target. |
+| Windows VM / host | Runs a generated PowerShell `snapshot.ps1` based on the fix's snapshot spec and saves the exported state as `snapshot.json` | Runs `restore.ps1` with the saved state embedded as structured data | Snapshot specs cover registry values, security policy settings, services, scheduled tasks, local group membership, accounts, firewall profiles, audit policy, Defender state, and SMB state. Nothing is restored from model text. |
+
+For Linux, if a captured file's local copy does not match its recorded SHA-256, rollback refuses to restore that file. If before-state capture cannot read a required file, the adapter fails before applying the fix so it does not create an unrollbackable partial change.
+
+For Windows, rollback restores the exported state that the fix declared it would touch. If no snapshot is available, rollback fails with `no exported before-state to restore` rather than guessing.
+
+#### Kubernetes Fix Rollback
+
+Kubernetes rollback is manifest-based:
+
+| Fix type | Before-state capture | Rollback method |
+| --- | --- | --- |
+| Patch an existing object, for example a Deployment or ServiceAccount | `kubectl get <kind> <name> -n <namespace> -o json`; server-owned metadata and status are stripped into a clean saved object | If the object still exists, `kubectl replace -f -` with the saved object; if it was deleted, `kubectl apply -f -` with the saved object |
+| Delete an object, for example a rogue stand-alone pod or exposed Service | Same saved object capture before deletion | Re-create the deleted object from the saved clean manifest |
+| Create an object, for example a default-deny NetworkPolicy that was absent before | Captures that the object was absent | Delete that object on rollback with `--ignore-not-found` |
+| Runbook control-plane/kubelet fixes | No cluster object is changed by the tool | Operator follows manual rollback steps in the runbook |
+
+After a Kubernetes rollback of a Deployment fix, the adapter waits for rollout status when the fix metadata says a rollout is expected. Kubernetes rollback also records the object reference used for restore, so rollback targets the object captured at approval/apply time rather than recomputing it from current finding text.
+
+The Kubernetes rollback payload is constrained the same way as apply: only vetted `FixEntry` templates are used, object names are validated through the `ObjRef` parser, and live `kubectl` execution is not run through a shell.
+
 ## 6. Security Controls Relevant to Review
 
 | Control | Implementation |
