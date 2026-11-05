@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
+from time import sleep
 
 from cyberthunder.audit.chain import AuditLog, file_lock
 from cyberthunder.control.identity import (MACHINE_ACTORS, POLICY_PREFIX, is_machine, is_policy_actor,
@@ -123,10 +124,19 @@ class ApprovalGate:
     def _reload(self, force: bool = False) -> None:
         """Bring the in-memory view in line with the file. Existing Proposal objects are updated in place so
         references held by callers see the new state."""
-        sig = self._file_sig()
-        if not force and sig == self._sig:
-            return
-        data = json.loads(self.store.read_text(encoding="utf-8")) if sig is not None else []
+        # Windows may allow stat but refuse the read while another process replaces the file.
+        # Match the bounded write retry; an inaccessible file must never authorize cached state.
+        for attempt in range(20):
+            try:
+                sig = self._file_sig()
+                if not force and sig == self._sig:
+                    return
+                data = json.loads(self.store.read_text(encoding="utf-8")) if sig is not None else []
+                break
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                sleep(0.05)
         fresh: dict[str, Proposal] = {}
         for d in data:
             p = Proposal.from_dict(d)

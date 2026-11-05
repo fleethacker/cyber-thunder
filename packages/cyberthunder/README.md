@@ -32,7 +32,7 @@ for the host cluster. Enter your operator name in **Settings**, enable the
 asset's scope, then use **Discover** to retrieve the Kubernetes version, node
 names and readiness. Discover returns HTTP 403 before scope is authorized.
 
-The already-built `0.2.4` archives listed below retain the earlier behavior:
+The already-built `0.2.4` and `0.2.5` archives retain the earlier behavior:
 newly registered host-cluster assets start in scope. Those archives have not
 been rebuilt with these guardrails. Rebuild both the image and package from
 this source to get out-of-scope registration; existing operator scope choices

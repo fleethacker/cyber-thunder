@@ -78,7 +78,7 @@ choices survive restarts. The deployment sets
 `CT_BOOTSTRAP_CLUSTER_TARGET=true`; set it to `false` to disable registration.
 Register external clusters manually with their separately mounted kubeconfigs.
 
-The already-built `0.2.4` package archives in `packages/` predate this change
+The already-built `0.2.4` and `0.2.5` package archives predate these guardrails
 and initially register new host-cluster assets in scope. Rebuild the image and
 package from this source to get out-of-scope registration; the checked-in
 archives have not been rebuilt by this change.
