@@ -41,7 +41,7 @@ def export(output):
     licenses = '\n\n'.join(path.read_text(encoding='utf-8') for path in sorted((source / 'assets/font-licenses').glob('*.txt')))
     html = html.replace('</html>', '<!-- Bundled font licenses\n' + licenses.replace('--', '—') + '\n-->\n</html>')
     html = '\n'.join(line.rstrip() for line in html.splitlines()) + '\n'
-    standalone = output / 'cyber-thunder-demo.html'
+    standalone = output / 'index.html'
     standalone.write_text(html, encoding='utf-8')
     package = output / 'cyber-thunder-demo.zip'
     with zipfile.ZipFile(package, 'w', zipfile.ZIP_DEFLATED) as archive:
