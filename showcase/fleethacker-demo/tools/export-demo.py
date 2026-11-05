@@ -64,5 +64,5 @@ def export(output):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output-directory', type=Path, default=ROOT.parent)
+    parser.add_argument('--output-directory', type=Path, default=ROOT.parents[1])
     export(parser.parse_args().output_directory.resolve())

@@ -2,7 +2,7 @@
 
 An interactive pitch for the Autonomous Cyber Defender prototype: **Close the gap. Keep the watch.**
 
-Open [the standalone HTML](../cyber-thunder-demo.html) directly in a browser. It embeds the screenshots,
+Open [the standalone HTML](../../cyber-thunder-demo.html) directly in a browser. It embeds the screenshots,
 fonts, styling and interactions, so the presentation works without a server or network connection.
 [Preview the design](../cyber-thunder-demo-preview.png).
 
