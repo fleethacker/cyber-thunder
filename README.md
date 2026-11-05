@@ -60,7 +60,7 @@ These are recorded real-target results, not full benchmark coverage. Windows/Win
 | Linux, Cisco, Kubernetes, container, Windows adapters | `cyberthunder/adapters/<type>/` | built |
 | DISA SCAP benchmarks run by the tool itself (OVAL evaluator for Windows, DISA datastreams through oscap on Linux) | `cyberthunder/scap/` | built |
 | Local-model explanations with citation validation | `cyberthunder/explain/` | built |
-| STIG delta ingest, link emulation, outbox | `cyberthunder/ingest/` | built |
+| STIG delta ingest, observed link state, explicit test mode and local outbox staging | `cyberthunder/ingest/` | built |
 | STIG Library (saved product/type subscriptions, catalog versions, validated uploads, resumable downloads and offline manifests) | `cyberthunder/ingest/content/` | built |
 | Reports (one-pager, POA&M, checklist, searchable history) | `cyberthunder/report/` | built |
 | HTTP API | `cyberthunder/api/` | built |
@@ -149,10 +149,10 @@ Start the server and open the UI at <http://127.0.0.1:8000>:
 python -m cyberthunder serve
 ```
 
-In the UI, set your name in Settings, open **Decisions**, press **Approve** on a card, then **Apply**. The card
+In the UI, set your name in Settings, open **Decisions**, press **Approve** to review the assessment or record an explicit bypass reason, then confirm the decision and choose **Apply**. The card
 shows the step timeline: scope check, before-state captured, applied, verified.
 
-Open **STIG Library** for uploads, downloads, versions and separate live-check/download/import times.
+Open **STIG Library** for Downloaded, Maintained, Updates, Browse all and Import/transfer views, with versions and separate live-check/download/import times.
 Subscriptions default to inventory matches; choose manual product/type checkboxes and **Save selections**
 before checking or pulling. XML/ZIP uploads work offline (32 MiB per file), as do manifest/folder imports.
 Reconnect options apply only on reconnect; periodic checks are server-configured. Bundled references and
@@ -182,7 +182,7 @@ Other commands: `targets ...` (inventory; `targets discover <id>` reads asset fa
 (network discovery, needs a saved scope first), `scap info|plan|eval|subset` (DISA SCAP benchmarks run by the tool;
 [docs/SCAP.md](docs/SCAP.md)), `ingest stig|bulletin` (constrained-link updates by file), `ingest check|pull|updates|content|manifest|fetch-manifest|import-dir`
 (STIG content from cyber.mil when the link is up, a manifest round trip when it is not; [docs/CONTENT.md](docs/CONTENT.md)),
-`link show|set` (kbps, latency, connected), `outbox list|sync` (reports queued for sync), `verify` and `diff` (a proposal
+`link show|set` (observed conditions, offline control and explicit test mode), `outbox list|sync` (local report staging; remote delivery remains open), `verify` and `diff` (a proposal
 after apply), `kill engage|release`, `audit verify|tail`, `parse` (scanner output files to findings), `report ...` (one-pager,
 POA&M, checklist), `demo reset|run`, `state info|migrate` (where the documents live: json files or SQLite;
 [docs/STATE.md](docs/STATE.md)).
@@ -201,6 +201,10 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/REPORT_ASSURANCE.md](docs/REPORT_ASSURANCE.md) | raw scanner results and review decisions in commander and POA&M reports |
 | [docs/REMEDIATION_PLAN.md](docs/REMEDIATION_PLAN.md) | static change previews, declared capture paths, verification and rollback instructions |
 | [docs/CHANGE_HISTORY.md](docs/CHANGE_HISTORY.md) | persistent change history, finding status after rollback, restore guards and coverage limits |
+| [docs/KUBERNETES_FIX_SAFETY.md](docs/KUBERNETES_FIX_SAFETY.md) | investigation-first Kubernetes guidance, retired deletion actions and recovery limits |
+| [docs/HOST_SCOPE.md](docs/HOST_SCOPE.md) | container-host setup, explicit host access and reviewed IP/range scope |
+| [docs/SCAN_CONTENT.md](docs/SCAN_CONTENT.md) | missing content, scanner configuration, applicability and incomplete scan coverage |
+| [docs/LINK.md](docs/LINK.md) | observed request conditions, offline control and explicit demonstration mode |
 | [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |
 | [docs/CONTENT.md](docs/CONTENT.md) | STIG Library, saved subscriptions, versions and sync times, uploads/downloads and offline transfers |
 | [docs/VULNERABILITY_DATA.md](docs/VULNERABILITY_DATA.md) | public CVE database updates, freshness, offline transfer and cluster findings |
@@ -211,6 +215,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/UI.md](docs/UI.md) | screens and behaviour |
 | [docs/FINDINGS.md](docs/FINDINGS.md) | finding categories, filters, search, sorting and saved views |
 | [docs/DEMO.md](docs/DEMO.md) | 10-minute demo runbook |
+| [docs/TESTING_CHECKPOINT.md](docs/TESTING_CHECKPOINT.md) | separate home rehearsal, operator checks and checkpoint recovery boundaries |
 | [docs/SUBMISSION.md](docs/SUBMISSION.md) | portal submission draft |
 | [docs/BACKLOG.md](docs/BACKLOG.md) | what should be done and is not: identity and zero trust first, then what stands between the prototype and a limited deployment, then every other known gap |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | working in this repo |

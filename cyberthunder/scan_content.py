@@ -129,13 +129,33 @@ class ScanContentService:
         if not isinstance(raw, dict):
             warnings.append("Stored collector metadata is invalid; scanner capability is unknown.")
             raw = {}
+        observation = _observation(raw.get("scanner_coverage"))
+        if raw.get("scanner_coverage") and not observation:
+            warnings.append("Stored scanner metadata is invalid; capability is unknown.")
+        observed_at = observation.get("observed_at")
+        age = age_seconds(observed_at)
+        binding_matches = observation.get("configuration_sha256") == configuration_sha256(target)
+        stale = bool(observation) and (age is None or age > OBSERVATION_MAX_AGE_S or not binding_matches)
         facts_at = collected.get("collected_at") if collected.get("facts") else None
-        products, reasons, unknown = products_for(target, collected)
+        facts_age = age_seconds(facts_at)
+        # Current collection can discover OS facts without optional SCAP. Stored facts need a
+        # fresh matching binding; a reused target ID alone does not identify the same host.
+        facts_current = (isinstance(collected.get("facts"), dict) and facts_age is not None
+                         and facts_age <= OBSERVATION_MAX_AGE_S
+                         and collected.get("target_id") == target.id
+                         and collected.get("asset_type") == target.asset_type
+                         and ((observed and not raw.get("scanner_coverage"))
+                              or (bool(observation) and not stale)))
+        if collected.get("facts") and not facts_current:
+            warnings.append("Stored OS facts are stale or lack a current target/configuration binding; excluded from product applicability.")
+        products, reasons, unknown = products_for(target, collected if facts_current else None)
         options = target.options or {}
-        configured = bool(options.get("stig_products") or options.get("facts"))
+        explicit_products = bool(options.get("stig_products"))
+        configured = explicit_products or (bool(options.get("facts")) and not facts_current)
+        current_facts_at = facts_at if facts_current and not explicit_products else None
         applicability = {"status": "unknown" if unknown else "configured" if configured else "inferred",
-                         "reasons": reasons, "unknown": unknown, "observed_at": facts_at,
-                         "age_seconds": age_seconds(facts_at)}
+                         "reasons": reasons, "unknown": unknown, "observed_at": current_facts_at,
+                         "age_seconds": age_seconds(current_facts_at)}
         if unknown:
             warnings.append(unknown)
         rows = []
@@ -157,13 +177,6 @@ class ScanContentService:
         engine = "openscap" if target.asset_type == "linux" else "windows-scap" if target.asset_type == "windows" else None
         location = "target" if target.asset_type == "linux" else "operator" if target.asset_type == "windows" else None
         path_configured = bool(options.get("benchmark_path") if target.asset_type == "linux" else options.get("scap_datastream"))
-        observation = _observation(raw.get("scanner_coverage"))
-        if raw.get("scanner_coverage") and not observation:
-            warnings.append("Stored scanner metadata is invalid; capability is unknown.")
-        observed_at = observation.get("observed_at")
-        age = age_seconds(observed_at)
-        binding_matches = observation.get("configuration_sha256") == configuration_sha256(target)
-        stale = bool(observation) and (age is None or age > OBSERVATION_MAX_AGE_S or not binding_matches)
         scanner = {"engine": engine, "location": location,
                    "status": "not_requested" if not check else "configured_unverified" if path_configured else "unknown",
                    "content_status": "configured_unverified" if path_configured else "unknown",

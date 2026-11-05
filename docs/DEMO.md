@@ -47,19 +47,19 @@ repo for the CLI steps.
 
 ## Steps
 
-### 1. The link is throttled; a new STIG release arrives as a delta (1:00)
+### 1. Explicit link test mode; a new STIG release arrives as a delta (1:00)
 
 Two release pairs work for this step. The repository ships `tests/fixtures/windows/w11_subset-xccdf.xml` (old) and `tests/fixtures/ingest/w11_subset_new-xccdf.xml` (new). If `range/downloads/` holds the real DISA pair `U_MS_Windows_11_V1R3_STIG_SCAP_1-2_Benchmark.zip` and `U_MS_Windows_11_V2R11_STIG_SCAP_1-3_Benchmark.zip`, use those: the delta is 15 rules added, 204 changed, 6 removed; the full download is 1.4 MB (200 s at 56 kbps) and the compressed delta 27 KB (4.4 s), 51 times smaller.
 
-Click: **Scans**, Link controls: set 56 kbps, 500 ms, connected. Drop the new STIG release into the Ingest panel.
+Click: **Settings**, Link controls: explicitly choose test mode, then set 56 kbps, 500 ms and connected. In **STIG Library > Import / transfer**, import the new STIG release.
 The delta summary shows rules added, removed and changed, and sizes: full download vs delta vs compressed, with
-transfer time at the current link speed for each. The **Rescan changed rules** button reruns only the changed
+estimated transfer time under the configured test model for each. Normal production mode starts with unknown rate and does not impose those numbers. The **Rescan changed rules** button reruns only the changed
 rules (you can press it here or fold it into step 3).
 
 CLI equivalent:
 
 ```bash
-python -m cyberthunder link set --kbps 56 --latency-ms 500 --connected true
+python -m cyberthunder link set --mode test --kbps 56 --latency-ms 500 --connected true
 ```
 
 ```bash
@@ -68,10 +68,14 @@ python -m cyberthunder ingest stig tests/fixtures/windows/w11_subset-xccdf.xml
 
 On a fresh state the first release has nothing to compare with, so the summary shows only added rules. To show
 changed and removed rules, pass the previous release: `ingest stig <new.xml> --old <old.xml>`. The repository
-ships a single release file, so an old and new pair has to be prepared before the event.
+ships the old and new subset pair named above; use that pair when the full releases are unavailable.
 
-Say: "This is a 56 kilobit link. The full benchmark would take minutes; the compressed delta is a fraction of
-that and tells us exactly which rules changed, so we only recheck those."
+Say: "This demonstration models a 56 kilobit link. These are estimates, not measured network bandwidth.
+The compressed delta is smaller and identifies changed rules for a targeted recheck."
+
+This setting does not shape all host traffic. Content pacing also requires the explicit download pacing option;
+actual range traffic shaping is a separate setup. Return to normal behavior after the demonstration with
+`python -m cyberthunder link set --mode production`.
 
 ### 2. Discovery finds the enclave's assets and a rogue device (0:45)
 
@@ -121,7 +125,8 @@ Click: **Findings**, filter source = hunt. Expected indicators on the Linux host
 entry with a timestomped script, an unexpected listener on tcp/4444, a SUID copy of the shell, a sudoers
 override. Open one: the evidence is shown and the citation is an ATT&CK technique.
 
-Say: "The seeded intrusion is found by deterministic hunt checks. The model did not find it and cannot hide it."
+Say: "Deterministic hunt checks found the seeded indicators. On a real system, an indicator needs investigation;
+it does not by itself prove malice or justify deleting a workload."
 
 ### 5. Explanations with citations (0:45)
 
@@ -134,7 +139,8 @@ is not on the finding is stripped. If the model is down, a template explains ins
 ### 6. IT approves two fixes and denies one (0:45)
 
 Click: **Decisions**. Read a card top to bottom (what is wrong, why it matters, what will change, could it break
-something, how to undo). Keyboard: `j` to move, `a` approve, `d` deny. Approve the SSH root login fix and the
+something, how to undo). Keyboard: `j` to move, `a` to open the approval review, `d` to deny. Review dependency evidence,
+unknowns and recovery limits; collecting a new assessment is an explicit action. Approve the SSH root login fix and the
 duplicate uid-0 account removal; deny one with a note ("needs change window").
 
 ```bash
@@ -152,7 +158,9 @@ python -m cyberthunder proposals deny <proposal-id> --note "needs change window"
 The scan already creates a proposal for every finding with a library fix. `proposals show <proposal-id>` prints
 the `finding_id` to use with `explain` and `propose`.
 
-Say: "Nothing happens without a named human. The machine can propose; it cannot approve."
+Say: "The default flow waits for an operator decision. An assessment supplies advice and never authorizes a change."
+The demonstration's typed acting name is attribution, not verified login identity. Direct CLI approval without an
+assessment is recorded as unassessed; it is not equivalent to having reviewed a dependency receipt.
 
 ### 7. Apply, then verify (0:45)
 

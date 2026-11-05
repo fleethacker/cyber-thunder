@@ -65,6 +65,8 @@ def test_facts_refine_product_but_missing_download_is_explicit(ctx):
     assert result["products"][0]["manual"]["status"] == "not_downloaded"
     assert result["scanner"]["status"] == "collected"
     assert result["scanner"]["age_seconds"] is not None
+    assert result["applicability"]["status"] == "inferred"
+    assert result["applicability"]["observed_at"] is not None
     assert not result["complete"]
 
 
@@ -82,6 +84,9 @@ def test_old_or_rebound_observations_cannot_claim_current_capability(ctx, change
     assert result["scanner"]["stale"]
     assert result["scanner"]["status"] in {"unknown", "configured_unverified"}
     assert result["scanner"]["last_observation"]["status"] == "collected"
+    assert result["products"] == []
+    assert result["applicability"]["status"] == "unknown"
+    assert result["applicability"]["observed_at"] is None
 
 
 def test_windows_configured_path_is_never_opened_by_preflight(ctx, monkeypatch):
@@ -163,3 +168,68 @@ def test_newest_unreadable_collection_does_not_fall_back_to_older_capability(ctx
     result = row(ctx)
     assert result["scanner"]["status"] == "unknown"
     assert any("could not be read" in w for w in result["warnings"])
+
+
+@pytest.mark.parametrize("hint", ["facts", "products", "none"])
+def test_repointed_target_uses_current_hints_or_unknown_not_historical_os(ctx, monkeypatch, hint):
+    target = ctx.inventory.get("host")
+    target.address = "old-host"
+    col = save_collection(ctx)
+    path = ctx.store.scans_dir / "scan-one" / "raw" / "host" / "collected.json"
+    original = path.read_bytes()
+    target.address = "replacement-host"
+    if hint == "facts":
+        target.options["facts"] = {"model": "ubuntu", "os_name": "Ubuntu", "os_version": "24.04"}
+    elif hint == "products":
+        target.options["stig_products"] = ["CAN_Ubuntu_24-04"]
+    ctx.inventory.save()
+    def forbidden(*args, **kwargs):
+        raise AssertionError("preflight must remain local and read-only")
+    monkeypatch.setattr(ctx, "transport_for", forbidden)
+    monkeypatch.setattr(ctx, "adapter_for", forbidden)
+    monkeypatch.setattr(ctx.audit, "append", forbidden)
+    monkeypatch.setattr(ctx.store, "write_json", forbidden)
+    result = row(ctx, target_ids=["host"], modules=["check"])
+    assert [p["product_key"] for p in result["products"]] == ([] if hint == "none" else ["CAN_Ubuntu_24-04"])
+    assert result["applicability"]["status"] == ("unknown" if hint == "none" else "configured")
+    assert result["applicability"]["observed_at"] is None
+    assert result["applicability"]["age_seconds"] is None
+    assert result["scanner"]["stale"] and not result["scanner"]["configuration_matches"]
+    assert result["scanner"]["last_observation"]["observed_at"] == col.collected_at
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("hint", [True, False])
+def test_stale_stored_facts_use_current_operator_facts_or_unknown(ctx, hint):
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    save_collection(ctx, at=old)
+    if hint:
+        ctx.inventory.get("host").options["facts"] = {"model": "ubuntu", "os_name": "Ubuntu", "os_version": "24.04"}
+    result = row(ctx)
+    assert [p["product_key"] for p in result["products"]] == (["CAN_Ubuntu_24-04"] if hint else [])
+    assert result["applicability"]["status"] == ("configured" if hint else "unknown")
+    assert result["applicability"]["observed_at"] is None
+
+
+def test_unbound_legacy_os_facts_cannot_establish_current_applicability(ctx):
+    save_collection(ctx, observation=False)
+    result = row(ctx)
+    assert result["products"] == []
+    assert result["applicability"]["status"] == "unknown"
+
+
+def test_fresh_scanner_metadata_does_not_refresh_old_collected_facts(ctx):
+    col = save_collection(ctx)
+    col.collected_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    ctx.store.write_json(ctx.store.scans_dir / "scan-one" / "raw" / "host" / "collected.json", col.to_dict())
+    result = row(ctx)
+    assert result["products"] == []
+    assert result["applicability"]["status"] == "unknown"
+
+
+def test_current_native_collection_can_infer_os_without_optional_scap(ctx):
+    col = save_collection(ctx, observation=False)
+    result = ScanContentService(ctx).observed(ctx.inventory.get("host"), col, [])
+    assert result["products"][0]["product_key"] == "RHEL_9"
+    assert result["applicability"]["status"] == "inferred"
+    assert result["applicability"]["observed_at"] == col.collected_at

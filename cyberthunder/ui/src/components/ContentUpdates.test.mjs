@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { browser, errorText, evaluate, format, libraryFixture, mount, tableStubs, ui } from '../lib/contentTestSupport.mjs';
+import { browser, errorText, evaluate, format, libraryFixture, linkPresentation, mount, tableStubs, ui } from '../lib/contentTestSupport.mjs';
 
 async function setup(t, overrides = {}) {
   const env = browser(t), calls = [];
@@ -18,7 +18,7 @@ async function setup(t, overrides = {}) {
       importDir: async (path) => { calls.push(['import', path]); return { imported: [], refused: [], skipped: [], missing: [], deltas: [], verified_by: 'hash' }; },
       writeManifest: async () => { calls.push(['manifest']); return { items: [] }; },
     } }, '../lib/format': format, '../state/AppState': { useAppState: () => context }, './ActorChip': { actorProblem: () => null },
-    './LibraryTables': tableStubs, './common': ui,
+    './LibraryTables': tableStubs, './common': ui, '../lib/linkPresentation': linkPresentation,
   }).ContentUpdates, props);
   env.cleanup(() => panel.unmount()); await panel.settle();
   return { ...panel, props, calls, context, env, failRead: () => { readFailure = true; } };
@@ -42,6 +42,21 @@ test('only explicit download submits selected filenames and exposes transfer pro
   assert.equal(panel.button('Download selected (1)').props.disabled, true);
   panel.env.tick(); await panel.settle();
   assert.ok(panel.calls.some(([kind]) => kind === 'job'));
+});
+
+test('leaving test mode disables pacing even when the earlier test toggle remains selected', async (t) => {
+  const panel = await setup(t);
+  Object.assign(panel.context.status.link, { mode: 'test', test_connected: true, kbps: 56 });
+  await panel.rerender(panel.props);
+  await panel.change('Pace downloads to the configured TEST rate', true);
+  await panel.change('Download tracked.zip', true);
+  panel.context.status.link.mode = 'production';
+  await panel.rerender(panel.props);
+  const pace = panel.control('Pace downloads to the configured TEST rate');
+  assert.equal(pace.props.disabled, true);
+  assert.equal(pace.props.checked, false);
+  await panel.click('Download selected (1)');
+  assert.deepEqual(panel.calls[0], ['pull', { filenames: ['tracked.zip'], pace: false }]);
 });
 test('dirty, disabled and offline gates refuse direct download handlers', async (t) => {
   const panel = await setup(t);

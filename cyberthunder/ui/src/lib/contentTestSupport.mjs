@@ -24,6 +24,7 @@ export function evaluate(url, imports = {}) {
 }
 export const { ApiError, errorText } = evaluate(new URL('../api/client.ts', import.meta.url));
 export const tasks = evaluate(new URL('./contentTasks.ts', import.meta.url));
+export const linkPresentation = evaluate(new URL('./linkPresentation.ts', import.meta.url));
 export const format = { fmtZonedTime: (at, missing = 'Not recorded') => at || missing, fmtTime: (at) => at, fmtSeconds: (n) => n + ' seconds', fmtBytes: (n) => n + ' bytes', statusColor: () => 'blue' };
 export const labels = { manual_stig: 'Manual STIG', srg: 'SRG', scap_benchmark: 'SCAP benchmark' };
 export const tableStubs = { ...ui, LibraryTable: 'LibraryTable', HeldTable: 'HeldTable', AvailableTable: 'AvailableTable', CatalogTable: 'CatalogTable', FileProvenance: 'FileProvenance', DisplayedSelection: 'DisplayedSelection', KIND_LABELS: labels, kindLabel: (kind) => labels[kind] ?? kind };

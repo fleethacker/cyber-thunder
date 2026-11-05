@@ -15,11 +15,11 @@ one-pager. Not a dashboard of charts. A queue of decisions with everything neede
 - Every screen has loading, empty and error states. Errors show the API `detail` verbatim.
 
 ## Shell (every page)
-- Left nav: Decisions, Mission, Findings, Assets, Scans, STIG Library, Audit, Reports, Settings. Commander view linked at the bottom.
+- Left nav: Decisions, Mission, Findings, Assets, Scans, STIG Library, Vulnerability data, Audit, Reports, Settings. Commander view linked at the bottom.
 - Header: product name; **kill switch** button (red, always visible; engaged state turns the whole header
   red with the reason and who engaged it; release needs a reason); **audit chain badge** (green
-  "Chain verified · N records · <head8>" or red "TAMPERED at #seq"); **link indicator** (connected /
-  disconnected, kbps, outbox pending count); **actor chip** ("Acting as IT1 Smith", click to change);
+  "Chain verified · N records · <head8>" or red "TAMPERED at #seq"); **link indicator** (unknown/observed endpoint
+  reachability, operator offline or explicit test mode, with local outbox count); **actor chip** ("Acting as IT1 Smith", click to change);
   model indicator (backend/model, available or fallback).
 
 ## Pages
@@ -53,7 +53,7 @@ Table paginated in groups of 200: severity, scanner result, confidence, human re
 benchmark/release, observation time and fix/explanation/proposal availability. Searchable multi-select filters,
 quick views and explicit ascending/descending sorts run before pagination; preferences survive refresh.
 See [FINDINGS](FINDINGS.md) for category definitions and missing metadata behavior.
-Click → **drawer**: description, check text, evidence, fix text, citations
+Click the whole row or use Enter/Space → **drawer**; nested buttons/links retain their own actions. Details include description, check text, evidence, fix text, citations
 with links (public.cyber.mil search for STIG ids, nvd.nist.gov for CVEs, attack.mitre.org for techniques — links
 are plain anchors; offline they simply do not resolve), explanation panel (with Regenerate), fix entry panel,
 "Propose fix" button, proposal history.
@@ -67,26 +67,33 @@ results and overall counts remain visible when filtering by review or confidence
 Inventory table: name, type, transport, address, in scope (toggle; asks for a reason; audited), simulated badge,
 last scan, open findings by CAT. Add/edit modal with per-type fields. "Discover" action shows AssetFacts.
 "Load simulated range" button when the inventory is empty.
+Deployment-host setup distinguishes native/runtime-local collection from an explicit SSH/WinRM host
+connection. Registration requires reviewed scope; testing connectivity is a separate action. The range editor
+previews IPs/CIDRs/ranges/exclusions and requires acknowledgment of normalization before saving. See [HOST_SCOPE](HOST_SCOPE.md).
 
 ### Scans (`/scans`)
 Start scan (targets multi-select, modules check/hunt/cve). Run list with progress bars and per-target status and
 errors. The ingest panel links STIG uploads and versions to the **STIG Library**. Drop a bulletin (IAVM JSON)
-→ affected hosts and new findings. Link controls (kbps, latency, connected toggle).
+→ affected hosts and new findings. Local content preflight and per-run coverage expose missing, unconfigured
+and stale scanner/content information without contacting a target or downloading. See [SCAN_CONTENT](SCAN_CONTENT.md).
 
 ### STIG Library (`/content`)
 
 One page for uploads, downloads, catalog versions and sync times, with searchable, paginated tables:
 
-- **Library**: local files with product/type/version and provenance; rule catalogs from earlier imports
+- **Downloaded**: local files with product/type/version and provenance; rule catalogs from earlier imports
   and bundled reference XMLs. Bundled references are labelled separately and do not represent synchronized or
-  installed downloads. Open a product in Update selections to compare held and available releases and dates.
-- **Update selections**: defaults to matching in-scope inventory, not all STIGs. Manual mode offers persistent
+  installed downloads. Open a product in Browse all to compare local and listed releases and dates.
+- **Maintained**: defaults to matching in-scope inventory, not all STIGs. Manual mode offers persistent
   product checkboxes, including products with no inventory target; type checkboxes select manual STIG, SRG and
   SCAP benchmark. **Select displayed / Clear displayed** affect only the visible page. **Use inventory
   recommendations** copies recommendations into a manual list. **Save selections** persists the draft;
   concurrent edits require loading the latest revision. Empty products/types do not mean everything is current.
-- **Transfers / import**: separate file checkboxes and **Download selected**, optional link pacing, per-file
-  progress, the latest 20 download jobs, deltas and **Rescan changed rules**. Upload XML/ZIP files from the
+- **Updates**: separate file checkboxes and **Download selected** for saved maintenance choices. Optional pacing
+  is available only in explicit test mode; downloads open the transfer view.
+- **Browse all**: searchable recognized products in the saved catalog, including products outside inventory,
+  with type/selection/update filters and product-version details. This is not every raw publication format.
+- **Import / transfer**: per-file progress, the latest 20 download jobs, deltas and **Rescan changed rules**. Upload XML/ZIP files from the
   browser computer offline, up to 32 MiB each, sequentially with individual errors and refresh after success.
   **Download manifest** and **Import folder** support the disconnected round trip; the folder must exist on
   the server. Unrecognized raw XML without a lock-file entry uses the 32 MiB upload validation path and shows
@@ -139,7 +146,8 @@ The **detection score** card compares seeded issues with findings when the range
 **Open STIG Library** links to `/content` for subscriptions, updates and imports.
 Actor name. Model status and backend. Standing approval policy editor: enable requires signer (= actor) and
 reason; rules with asset types, max disruption, allow reboot / patch / service restart, allowlists, time window;
-"Evaluate against current queue" preview. Link emulation. Demo controls: load simulated range, reset, "force
+"Evaluate against current queue" preview. Link observations, operator-offline control, explicitly enabled test
+emulation and bounded opt-in probes ([LINK](LINK.md)). Demo controls: load simulated range, reset, "force
 verification failure on next apply" toggle (clearly labelled as a demonstration control).
 
 ### Commander view (`/commander`)

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { browser, errorText, evaluate, format, libraryFixture, mount, tasks, text, ui } from '../lib/contentTestSupport.mjs';
+import { browser, errorText, evaluate, format, libraryFixture, linkPresentation, mount, tasks, text, ui } from '../lib/contentTestSupport.mjs';
 
 async function setup(t, query = '', initial = {}) {
   const env = browser(t), calls = [];
@@ -16,6 +16,7 @@ async function setup(t, query = '', initial = {}) {
       '../components/ContentUpdates': { ContentUpdates: 'ContentUpdates', jobRunning: (job) => ['running', 'queued'].includes(job.state) },
       '../components/LibrarySelections': ui, '../components/LibraryTables': ui, '../components/common': ui,
       '../lib/format': format, '../lib/hooks': libHooks, '../state/AppState': { useAppState: () => context }, '../lib/contentTasks': tasks,
+      '../lib/linkPresentation': linkPresentation,
     }).default;
   });
   env.cleanup(() => panel.unmount()); await panel.settle();
