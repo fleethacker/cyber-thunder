@@ -285,47 +285,8 @@ class ReviewService:
 
 
 def _projected_observations(store, scan_id: str, document: dict, kind: str):
-    """Mirror current-findings precedence, excluding unpublished/empty-in-progress runs.
-
-    A run published after its findings becomes visible here on save_scan_run. An older run
-    completing late cannot replace a newer full scan or newer partial observation.
-    """
-    from cyberthunder.store import is_partial_run
-    runs = {run["id"]: run for run in store.list_scan_runs()}
-    if kind == "run":
-        runs[scan_id] = document
-    ordered = sorted(runs.values(), key=lambda r: r.get("started_at", ""), reverse=True)
-    available = []
-    observations = {}
-    for run in ordered:
-        sid = run["id"]
-        doc = document if kind == "findings" and sid == scan_id else store.read_json(store.scans_dir / sid / "findings.json")
-        if doc is None:
-            continue
-        observations[sid] = findings_from_doc(doc)
-        if not observations[sid] and run.get("status") in {"pending", "running"}:
-            continue
-        available.append(run)
-
-    def merge(runs):
-        if not runs:
-            return {}, False
-        base = next((run for run in runs if not is_partial_run(run)), runs[0])
-        merged = {}
-        if not is_partial_run(base) and base.get("status") in {"pending", "running"}:
-            # Incremental full-scan output supplies new observations, not final removals
-            # of hosts/rules the scanner has not reached yet. Completion makes omissions
-            # authoritative and therefore must acquire those findings' lifecycle locks.
-            older = [run for run in runs if run.get("started_at", "") < base.get("started_at", "")]
-            merged, _ = merge(older)
-        merged.update((f.id, f) for f in observations[base["id"]])
-        newer = [run for run in runs if run["id"] != base["id"]
-                 and run.get("started_at", "") >= base.get("started_at", "")]
-        for run in reversed(newer):
-            merged.update((f.id, f) for f in observations[run["id"]])
-        return merged, not is_partial_run(base) and base.get("status") == "done"
-
-    return merge(available)
+    """Share current-view precedence so publication locks cover the same observations."""
+    return store.projected_observations(scan_id, document, kind)
 
 
 def save_observation_document(store, scan_id: str, document: dict, *, kind: str) -> None:

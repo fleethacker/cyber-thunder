@@ -679,6 +679,58 @@ export interface StigLibrary {
 
 export interface ContentUploadResult { record: HeldFile; delta: PullDelta | null }
 
+// -- Managed vulnerability databases -----------------------------------------------------------
+export interface VulnerabilitySettings {
+  revision: number;
+  auto_update: boolean;
+  interval_hours: number;
+  include_java: boolean;
+}
+
+export type VulnerabilitySettingsInput = Omit<VulnerabilitySettings, 'revision'> & { expected_revision: number };
+
+export interface VulnerabilityDatabase {
+  kind: 'main' | 'java';
+  present: boolean;
+  schema: number | null;
+  updated_at: string | null;
+  next_update: string | null;
+  downloaded_at: string | null;
+  stale: boolean;
+  sha256: string | null;
+  bytes: number | null;
+}
+
+export interface VulnerabilityJob {
+  id: string;
+  kind: 'update';
+  state: 'pending' | 'running' | 'completed' | 'failed' | 'stopped';
+  started_at: string | null;
+  finished_at: string | null;
+  actor: string;
+  error: string | null;
+  generation: string | null;
+}
+
+export interface VulnerabilityStatus {
+  version: 1;
+  engine: { available: boolean; version: string | null; supported: boolean; error: string | null };
+  state: 'missing' | 'invalid' | 'ready' | 'stale' | 'unavailable';
+  generation: string | null;
+  updated_at: string | null;
+  imported_at: string | null;
+  last_attempt: string | null;
+  last_success: string | null;
+  last_error: string | null;
+  source: string | null;
+  provenance: 'official_download' | 'offline_import' | 'unknown';
+  integrity_verified: boolean;
+  databases: VulnerabilityDatabase[];
+  settings: VulnerabilitySettings;
+  active_job: VulnerabilityJob | null;
+  warnings: string[];
+}
+
 /** A Target returned by POST /discover. `facts` is set on the system that was read. */
 export interface DiscoveredTarget extends Target {
   facts?: AssetFacts | null;

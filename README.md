@@ -196,6 +196,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/REMEDIATION_PLAN.md](docs/REMEDIATION_PLAN.md) | static change previews, declared capture paths, verification and rollback instructions |
 | [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |
 | [docs/CONTENT.md](docs/CONTENT.md) | STIG Library, saved subscriptions, versions and sync times, uploads/downloads and offline transfers |
+| [docs/VULNERABILITY_DATA.md](docs/VULNERABILITY_DATA.md) | public CVE database updates, freshness, offline transfer and cluster findings |
 | [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |
 | [docs/API.md](docs/API.md) | HTTP API v1 |
 | [docs/STATE.md](docs/STATE.md) | the state directory: documents (json files or SQLite) and files, `state migrate` and `state info`, WAL on a local volume only, backups |

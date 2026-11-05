@@ -97,6 +97,9 @@ def status_for(exc: BaseException) -> tuple[int, str] | None:
             return 501, str(exc)
         return 501, f"feature {UNAVAILABLE}" + (f" ({exc})" if str(exc) else "")
     for dotted, code in (("cyberthunder.ingest.outbox.LinkDisconnected", 409),
+                         ("cyberthunder.vulnerabilities.service.VulnerabilityUnavailable", 409),
+                         ("cyberthunder.vulnerabilities.service.VulnerabilityConflict", 409),
+                         ("cyberthunder.vulnerabilities.service.VulnerabilityError", 400),
                          ("cyberthunder.findings.lifecycle.ReviewConflict", 409),
                          ("cyberthunder.remediation.engine.EngineError", 409),
                          ("cyberthunder.ingest.service.IngestError", 400),
