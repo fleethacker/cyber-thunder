@@ -3,7 +3,7 @@
 import type {
   AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, ContentManifest, DeltaReport,
   DemoStatus, DiscoveredAsset, DiscoveredTarget, DiscoveryAccept, Finding, DiscoveryMode, DiscoveryOverview, DiscoveryRun, DiscoveryScope,
-  DiscoveryStatus, Explanation, FindingPlus, FindingsPage, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
+  DiscoveryStatus, Explanation, FindingPlus, FindingsPage, FindingsQuery, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
   Outbox, PolicyDecision, ProposalDiff, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
   TargetOutcome, TargetReport, UpdateCheck,
 } from './types';
@@ -128,7 +128,7 @@ export const api = {
   scans: () => get<{ scans: ScanRun[] }>('/scans'),
   scan: (id: string) => get<ScanRun>(`/scans/${enc(id)}`),
 
-  findings: (q: Query) => get<FindingsPage>('/findings', q),
+  findings: (q: FindingsQuery) => get<FindingsPage>('/findings', q),
   finding: (id: string) => get<FindingPlus>(`/findings/${enc(id)}`),
   propose: (id: string) => post<ProposalPlus>(`/findings/${enc(id)}/propose`),
   explain: (id: string, force = false) => post<Explanation>(`/findings/${enc(id)}/explain`, { force }),

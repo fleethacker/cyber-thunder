@@ -14,7 +14,8 @@ proposal · `403` scope violation or machine actor on a human edge · `423` kill
 `400` validation · `503` adapter/transport failure (detail carries the message).
 
 **Shapes.** `Finding` = `Finding.to_dict()`. `Finding+` adds `cat` ("CAT I"), `explanation` (Explanation or null),
-`fix` (FixEntry.to_dict() or null), `proposal` ({id, state} or null). `Proposal+` = `Proposal.to_dict()` plus
+`fix` (FixEntry.to_dict() or null), `proposal` ({id, state} or null), and `categories` (overlapping
+`stig`, `cve`, `hunt`, or fallback `other`). `Proposal+` = `Proposal.to_dict()` plus
 `fix`, `finding` (Finding+ without nested proposal), `policy` (PolicyDecision or null), `severity`, `cat`,
 `target` ({id, name, asset_type, simulated}). `Target` = `Target.to_dict()`. `ScanRun` = `ScanRun.to_dict()`
 plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` = `Explanation.to_dict()`.
@@ -39,12 +40,47 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/scans/{id}` | → ScanRun |
 
 ## Findings
-| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&q&limit=200&offset=0` → `{findings: [Finding+], total, scan_id, summary, limit, offset}`. Default = the current picture (latest full scan with newer bulletin and targeted-rescan runs overlaid). Filters accept comma-separated values; `severity` also accepts `CAT I`/`CAT II`/`CAT III`; an unknown `status` or `severity` is `400`. `q` matches title/rule_id/rule_version |
+| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&category&benchmark&benchmark_release&q&sort_by&sort_dir&limit=200&offset=0` → `{findings: [Finding+], total, unfiltered_total, scan_id, view, summary, facets, sort_by, sort_dir, limit, offset}`. Filters and sorting run before pagination; see query contract below |
 |---|---|---|
 | GET | `/findings/{id}` | → Finding+ |
 | POST | `/findings/{id}/propose` | → Proposal+ (`409` if a live proposal already exists, `404` if no library fix) |
 | POST | `/findings/{id}/explain` | `{force?: bool}` → Explanation (synchronous; may take up to `CT_LLM_TIMEOUT`) |
 | POST | `/findings/explain` | `{ids?: [..]}` → `{queued: n}`; background precompute, default = all open findings of the latest scan |
+
+### Findings query contract
+
+- Omitted `scan_id` uses the store's current picture: the latest full scan plus newer partial runs.
+  `scan_id` in the response remains the baseline metadata anchor; `view` is `current`.
+  Explicit `scan_id` selects only that run and returns `view: "scan"`; unknown IDs return `404`.
+  Existing verified-remediation status decoration is retained for both views.
+- `host`, `asset_type`, `source`, `status`, `severity`, `category`, `benchmark`, and `benchmark_release`
+  accept comma-separated values (OR within an axis, AND across axes). Matching ignores case and outer
+  whitespace. CSV-quote values containing commas or quotes; for example `benchmark_release="Release 1, November"`.
+  Omit a filter or send an empty string to select all values. `__missing__` selects absent/blank text fields.
+- `status` values remain `open`, `not_a_finding`, `not_applicable`, `not_reviewed`, `error`.
+  These are scanner results, not human triage. The UI labels them Failed / open, Passed, Not applicable,
+  Not assessed, and Collection error. Verified fixes continue to appear passed (`not_a_finding`).
+  Without a status filter the API includes every result; only the UI defaults to open.
+- `severity` accepts the existing aliases, including `CAT I`, `CAT II`, `CAT III`, plus `info` and `unknown`.
+  `category` accepts `stig`, `cve`, `hunt`, `other`; categories can overlap. Classification uses normalized
+  references, rule identifiers, scanner provenance and STIG benchmark names, not title keywords.
+  See [FINDINGS.md](FINDINGS.md) for classification details.
+- `q` is a case-insensitive substring of title, machine/host ID, rule ID, rule version, group ID,
+  reference identifiers (including CVEs and STIGs), source, benchmark, or release.
+- `sort_by` accepts `default`, `severity`, `host`, `asset_type`, `category`, `title`, `rule_id`,
+  `rule_version`, `source`, `collected_at`, `benchmark`, `benchmark_release`.
+  `sort_dir` is `asc` (default) or `desc`. The omitted/default sort preserves severity descending,
+  open first, host, then rule version or rule ID; it accepts only `asc` as its direction token.
+  Explicit sorts use case-insensitive text, numeric severity, UTC-normalized observation time,
+  or the alphabetically sorted tuple of category names. Ties use finding ID ascending in either
+  direction. Missing/invalid values, including unknown severity, come last for explicit sorts.
+- `total` remains the filtered count. `unfiltered_total`, `summary`, and `facets` describe the complete
+  selected view before filters or pagination. `facets` has one key per filter axis, each containing
+  `{value, label, count}` entries. Values are normalized filter tokens, labels retain source spelling,
+  and counts are findings, not pages. Overlapping category counts can exceed the result total.
+- Invalid enumerated filters, sort fields/directions, malformed CSV lists and out-of-range pagination
+  return `400` with a string `detail`. Unseen host/source/type/benchmark/release values are valid and
+  return zero matches, allowing saved selections to survive changes in the current view.
 
 ## Proposals (the decision queue)
 | GET | `/proposals` | `?state&host&asset_type` (each takes comma-separated values; an unknown `state` is `400`) → `{proposals: [Proposal+]}` oldest first |

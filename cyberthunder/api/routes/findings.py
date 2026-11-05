@@ -14,9 +14,13 @@ router = APIRouter(tags=["findings"], route_class=MappedRoute)
 @router.get("/findings")
 def list_findings(ctx=CtxDep, scan_id: str | None = None, host: str | None = None, status: str | None = None,
                   severity: str | None = None, source: str | None = None, asset_type: str | None = None,
+                  category: str | None = None, benchmark: str | None = None, benchmark_release: str | None = None,
+                  sort_by: str = "default", sort_dir: str = "asc",
                   q: str | None = None, limit: int = Query(200, ge=1, le=5000), offset: int = Query(0, ge=0)) -> dict:
     return util.list_findings(ctx, scan_id=scan_id, limit=limit, offset=offset, host=host, status=status,
-                              severity=severity, source=source, asset_type=asset_type, q=q)
+                              severity=severity, source=source, asset_type=asset_type, q=q, category=category,
+                              benchmark=benchmark, benchmark_release=benchmark_release,
+                              sort_by=sort_by, sort_dir=sort_dir)
 
 
 @router.post("/findings/explain")
