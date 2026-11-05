@@ -386,3 +386,12 @@ The identity scripts derive from `uds-proving-ground-local` commit
 `scripts/ensure-keycloak-bootstrap-admin.sh`. The Cyber Thunder copy omits the
 CAT audience mapper and requires dev mode and the local cluster context. The
 existing-cluster bundle excludes these development identity changes.
+
+## Cyber Thunder application container
+
+To build and run the software in `cyberthunder/` inside Kubernetes, see
+[the application container guide](../deploy/kubernetes/README.md). It includes
+Docker build/push commands and standalone manifests with persistent state.
+
+For a transferable archive containing both the application image and Kubernetes
+resources, use the [Cyber Thunder Zarf package](../packages/cyberthunder/README.md).

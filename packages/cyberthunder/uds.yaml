@@ -12,24 +12,21 @@ spec:
   network:
     serviceMesh:
       mode: sidecar
-    allow:
-      - description: Kubernetes API access for cluster survey
-        direction: Egress
-        selector:
-          app.kubernetes.io/name: cyberthunder
-        remoteGenerated: KubeAPI
-      - description: OpenAI API access for optional risk profile summaries
-        direction: Egress
-        port: 443
-        remoteHost: api.openai.com
-        remoteProtocol: TLS
-        selector:
-          app.kubernetes.io/name: cyberthunder
-        serviceAccount: cyberthunder
     expose:
       - service: cyberthunder
         selector:
-          app.kubernetes.io/name: cyberthunder
+          app: cyberthunder
         gateway: tenant
         host: cyberthunder
-        port: 8000
+        port: 80
+        targetPort: 8000
+  sso:
+    - name: Cyber Thunder
+      clientId: cyber-thunder-app
+      redirectUris:
+        - https://cyberthunder.###ZARF_VAR_DOMAIN###/login
+      enableAuthserviceSelector:
+        app: cyberthunder
+      groups:
+        anyOf:
+          - /UDS Core/Admin
