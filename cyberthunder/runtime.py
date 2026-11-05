@@ -1,7 +1,8 @@
 """Runtime helpers for the packaged service.
 
-The CLI stays explicit and quiet by default. The Kubernetes deployment can opt in to a tiny background loop
-that checks content updates and periodically scans already in-scope inventory targets.
+The Kubernetes deployment registers its own cluster using its mounted service account kubeconfig.
+The CLI stays explicit by default. Optional background tasks check content updates and periodically
+scan already in-scope inventory targets.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ log = logging.getLogger(__name__)
 
 
 def bootstrap_cluster_target(ctx: "AppContext") -> None:
+    """Register the configured host cluster once; retain operator edits and scope across restarts."""
     settings = ctx.settings
     if not settings.bootstrap_cluster_target:
         return
@@ -34,10 +36,11 @@ def bootstrap_cluster_target(ctx: "AppContext") -> None:
         name=settings.bootstrap_cluster_name,
         asset_type="kubernetes",
         transport="kubeconfig",
+        sudo=False,
         tags=["bootstrap", "discovery-source", "cluster"],
         in_scope=True,
         options={"kubeconfig": str(kubeconfig), "context": "in-cluster", "kubectl": "kubectl"},
-        notes="Bootstrapped by the packaged service so discovery can enumerate the test cluster.",
+        notes="Registered by the packaged service from its own in-cluster Kubernetes context.",
     )
     ctx.inventory.add(target)
     ctx.save_inventory(settings.scheduler_actor, "inventory.bootstrap", {"target": target.id, "source": "kubernetes"})

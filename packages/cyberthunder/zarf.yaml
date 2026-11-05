@@ -2,7 +2,7 @@ kind: ZarfPackageConfig
 metadata:
   name: cyberthunder
   description: Cyber Thunder cluster survey and image risk assessment with UDS ingress, Keycloak SSO, and persistent state.
-  version: 0.2.3
+  version: 0.2.4
 
 variables:
   - name: DOMAIN
@@ -30,4 +30,4 @@ components:
         files:
           - ../../deploy/kubernetes/cyberthunder.yaml
     images:
-      - cyberthunder:0.2.3
+      - cyberthunder:0.2.4

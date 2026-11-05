@@ -254,10 +254,10 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 
 ### 2.3 Plumbing for scale
 
-**SCL-01 State store behind the existing interface.** Step: before fleet. Effort: 1-2 weeks. Depends: none.
-- Today: JSON and YAML files under the state directory (`store.py:36-65`), written by temp file and replace (`store.py:80-94`); the audit log, proposals and inventory take a cross-process file lock (`audit/chain.py:28-63`, `control/approvals.py:143`, `inventory/targets.py:131`); scan runs and findings do not.
-- Target: SQLite in WAL mode for a single node and PostgreSQL under UDS, behind `StateStore`; a `state migrate` tool that imports an existing directory and verifies the audit chain afterwards.
-- Done when: a test runs two API workers and the CLI against one state, approving, scanning and editing inventory concurrently, with no lost update; migrating the range state directory keeps every proposal and `audit verify` passes.
+**SCL-01 State store behind the existing interface.** Step: before fleet. Effort: 1 week for PostgreSQL. Depends: none.
+- Today: documents (scan runs, findings, explanations, link state, deltas, bulletins, discovery, content index and jobs) sit behind `StateStore` in a backend chosen by `CT_STATE_BACKEND`: json files (the default) or SQLite in WAL mode (`cyberthunder/state/`, [STATE.md](STATE.md)); `state migrate` moves a directory between them and verifies the copy and the audit chain; the suite runs on both and `tests/state/test_concurrency.py` runs two API workers and the CLI against one state with no lost update. Proposals, the policy and the inventory are still files with their own cross-process lock, because `ApprovalGate`, `load_policy` and `Inventory` take a file path (`control/approvals.py:100`, `inventory/targets.py:77`); the default backend is still json.
+- Target: proposals, policy and inventory served by the document backend through a store handle instead of a path, with the gate's lock becoming the backend lock; PostgreSQL as a third backend for the UDS deployment (the interface in `cyberthunder/state/__init__.py` is five calls: get, put, delete, list, lock), with the audit chain staying a file on a persistent volume; sqlite made the default once the container image mounts the state directory from local storage.
+- Done when: the concurrency test passes with proposals and inventory in the database; a node under UDS runs two API replicas against one PostgreSQL with the test green; migrating the range state directory keeps every proposal and `audit verify` passes.
 
 **SCL-02 Scheduling and queued jobs.** Step: before fleet. Effort: 1 week. Depends: SCL-01, ZT-17.
 - Today: manual scans, content pulls and reconnect checks use daemon threads; PR #20 adds opt-in periodic scans/content checks in `cyberthunder/runtime.py`. There is still no durable job queue or restart recovery. Verify runs inside `execute`.

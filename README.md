@@ -168,7 +168,8 @@ Other commands: `targets ...` (inventory; `targets discover <id>` reads asset fa
 (STIG content from cyber.mil when the link is up, a manifest round trip when it is not; [docs/CONTENT.md](docs/CONTENT.md)),
 `link show|set` (kbps, latency, connected), `outbox list|sync` (reports queued for sync), `verify` and `diff` (a proposal
 after apply), `kill engage|release`, `audit verify|tail`, `parse` (scanner output files to findings), `report ...` (one-pager,
-POA&M, checklist, path to fleet), `demo reset|run`.
+POA&M, checklist, path to fleet), `demo reset|run`, `state info|migrate` (where the documents live: json files or SQLite;
+[docs/STATE.md](docs/STATE.md)).
 
 ## Documentation
 
@@ -181,6 +182,7 @@ POA&M, checklist, path to fleet), `demo reset|run`.
 | [docs/CONTENT.md](docs/CONTENT.md) | how STIGs and SCAP benchmarks reach the node: pull when connected, manifest and removable media when not |
 | [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |
 | [docs/API.md](docs/API.md) | HTTP API v1 |
+| [docs/STATE.md](docs/STATE.md) | the state directory: documents (json files or SQLite) and files, `state migrate` and `state info`, WAL on a local volume only, backups |
 | [docs/UI.md](docs/UI.md) | screens and behaviour |
 | [docs/DEMO.md](docs/DEMO.md) | 10-minute demo runbook |
 | [docs/SUBMISSION.md](docs/SUBMISSION.md) | portal submission draft |

@@ -3,7 +3,7 @@
 import { ActionIcon, AppShell, Burger, Group, NavLink, ScrollArea, Stack, Text, Tooltip, useMantineColorScheme } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
-  IconBolt, IconChecklist, IconFileReport, IconHistory, IconListDetails, IconMoon, IconRadar, IconServer2, IconSettings,
+  IconBolt, IconChecklist, IconFileReport, IconHistory, IconListDetails, IconMoon, IconRadar, IconRoute, IconServer2, IconSettings,
   IconStar, IconSun,
 } from '@tabler/icons-react';
 import type { ReactNode } from 'react';
@@ -16,6 +16,7 @@ import { KillSwitch } from './KillSwitch';
 
 const NAV = [
   { to: '/', label: 'Decisions', icon: IconChecklist },
+  { to: '/mission', label: 'Mission', icon: IconRoute },
   { to: '/findings', label: 'Findings', icon: IconListDetails },
   { to: '/assets', label: 'Assets', icon: IconServer2 },
   { to: '/scans', label: 'Scans', icon: IconRadar },

@@ -123,7 +123,7 @@ class ContentStore:
         return None
 
     def jobs(self) -> list[dict]:
-        out = [self.state.read_json(p) for p in self.jobs_dir.glob("*.json")] if self.jobs_dir.is_dir() else []
+        out = [self.state.read_json(p) for p in self.state.list_json(self.jobs_dir)]
         return sorted((j for j in out if j), key=lambda j: j.get("created_at", ""), reverse=True)
 
     def source(self) -> dict:

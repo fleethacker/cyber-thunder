@@ -2,10 +2,10 @@
 // Errors come back as ApiError with the server's {detail} verbatim.
 import type {
   AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, ContentManifest, DeltaReport,
-  DemoStatus, DiscoveredAsset, DiscoveryAccept, Finding, DiscoveryMode, DiscoveryOverview, DiscoveryRun, DiscoveryScope,
+  DemoStatus, DiscoveredAsset, DiscoveredTarget, DiscoveryAccept, Finding, DiscoveryMode, DiscoveryOverview, DiscoveryRun, DiscoveryScope,
   DiscoveryStatus, Explanation, FindingPlus, FindingsPage, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
-  Outbox, PolicyDecision, ProposalDiff, ProposalPlus, PullJob, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
-  UpdateCheck,
+  Outbox, PolicyDecision, ProposalDiff, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
+  TargetOutcome, TargetReport, UpdateCheck,
 } from './types';
 
 export const API_BASE = '/api/v1';
@@ -190,6 +190,20 @@ export const api = {
   demoLoad: () => post<{ targets: Target[] }>('/demo/load'),
   demoReset: () => post<{ ok: boolean }>('/demo/reset'),
   demoToggle: (simulate_verify_fail_next: boolean) => put<DemoStatus>('/demo', { simulate_verify_fail_next }),
+
+  receiveCves: () => get<{ cves: ReceivedCve[] }>('/receive/cve'),
+  receiveStigs: () => get<{ stigs: ReceivedStig[] }>('/receive/stig'),
+  discoverSystem: (system: string) => post<{ targets: DiscoveredTarget[] }>('/discover', { system }),
+  scanTarget: (target: string, modules?: string[]) =>
+    post<{ target: string; results: Record<string, TargetOutcome> }>('/scan', modules ? { target, modules } : { target }),
+  explainResults: (results: unknown) => post<{ explanations: Explanation[]; truncated: number }>('/generate/explain', { results }),
+  proposeResults: (results: unknown) => post<{ proposals: ProposalPlus[]; skipped: { id: string; reason: string }[] }>('/generate/propose', { results }),
+  applyChecklists: (targets: string[], checklists: string[]) =>
+    post<{ results: Record<string, TargetOutcome> }>('/apply', { targets, checklists }),
+  rollbackVersions: (targets: string[], versions: string[]) =>
+    post<{ results: Record<string, TargetOutcome> }>('/rollback', { targets, versions }),
+  targetReport: (target: string) => get<TargetReport>(`/reports/${enc(target)}`),
+  generateTargetReport: (target: string) => post<TargetReport>('/reports', { target }),
 };
 
 /** Error text for display: the API detail verbatim when we have one. */

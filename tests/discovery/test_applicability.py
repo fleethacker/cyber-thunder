@@ -77,8 +77,7 @@ def test_discovery_version_mismatch_excludes_but_coarse_guess_does_not(ctx):
         "b1": {"id": "b1", "inventory_target_id": "node-b", "os_guess": "Linux 5.0 - 5.14", "facts": {}},
         "c1": {"id": "c1", "inventory_target_id": "node-c", "os_guess": None, "facts": {"os_image": "Rocky Linux 9.4 (Blue Onyx)"}},
     }
-    (ctx.store.root / "discovery").mkdir(exist_ok=True)
-    (ctx.store.root / "discovery" / "assets.json").write_text(json.dumps(assets), encoding="utf-8")
+    ctx.store.write_json(ctx.store.root / "discovery" / "assets.json", assets)      # a store document
     rows = {r["target"]: r for r in DiscoveryService(ctx).applicable(benchmark_id="RHEL_9_STIG")}
     assert "node-a" not in rows                                   # right family, wrong major version
     assert rows["node-b"]["basis"] == "type"                      # coarse nmap guess falls through

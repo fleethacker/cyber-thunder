@@ -152,6 +152,23 @@ class TestApprovalGate(unittest.TestCase):
                          ["proposed", "approved", "applying", "applied", "verified"])
         self.assertTrue(self.audit.verify().ok)
 
+    def test_one_live_proposal_per_finding_under_the_lock(self):
+        kw = dict(finding_id="abc", host="acd-target-01", title="t", fix_ref="ssg:x", fix_preview="p",
+                  rollback_plan="r", risk="k", citations=[])
+        first = self.gate.propose(one_live_per_finding=True, **kw)
+        again = self.gate.propose(one_live_per_finding=True, **kw)
+        self.assertEqual(first.id, again.id)                                  # still live: handed back
+        other = ApprovalGate(self.store, self.audit, self.ks)                  # another process, same file
+        self.assertEqual(other.propose(one_live_per_finding=True, **kw).id, first.id)
+        self.assertEqual(len(self.gate.list()), 1)
+        self.gate.deny(first.id, "sailor1", "no")
+        fresh = self.gate.propose(one_live_per_finding=True, **kw)
+        self.assertNotEqual(fresh.id, first.id)                               # terminal: a new one is made
+        self.assertEqual(len(self.gate.list()), 2)
+        self.assertEqual(len({p.id for p in (fresh, self.gate.propose(**kw))}), 2)   # without the flag: as before
+        self.assertFalse(list(self.store.parent.glob("*.tmp")))              # the per-process temp file is gone
+        self.assertTrue(self.audit.verify().ok)
+
     def test_agent_cannot_approve(self):
         p = self._propose()
         with self.assertRaises(PermissionError):

@@ -116,3 +116,24 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 ## Discovery
 The `/discovery/*` routes (scopes, sweeps, discovered assets, discovery findings, applicable benchmarks) are
 documented in [DISCOVERY.md](DISCOVERY.md). They follow the same actor and error rules as above.
+
+## Workflow
+One pass over an isolated enclave: receive what came across the link, discover the system, scan a target,
+explain and propose from those results, apply approved checklist items, report, and roll back.
+These routes call the same services as the routes above. Apply and rollback still require a human approval
+on each fix and still stop when the kill switch is engaged. A checklist entry is a rule id, STIG id, rule
+version, CVE or other citation, fix ref, or proposal id. A rollback version is a proposal id, a scan id,
+or a benchmark release.
+
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | `/receive/cve` | → `{cves: [bulletin]}` newest first. Bulletin fields: id, title, severity, cves, published, source, ingested_at, hosts_affected, findings, scan_id |
+| GET | `/receive/stig` | → `{stigs: [delta]}` newest first. Delta fields match the ingest history summary (id, benchmark, releases, counts, sizes, transfer) |
+| POST | `/discover` | `{system: target id}` (or `{target}`) → `{targets: [Target+]}`. Target+ is a Target plus `facts` on the system that was read. Other in-scope targets come along when `options.system` or `options.members` names that system, or the system id is one of their tags. `202` is not used; discover is read-only |
+| POST | `/scan` | `{target, modules?}` → `202 {target, results: {<target>: {target, ok, scan_id, status, findings, open, errors}}}`. Poll `GET /scans/{scan_id}` until `status` is `done` |
+| POST | `/generate/explain` | `{results}` → `{explanations: [Explanation], truncated}`. `results` is `{scan_id?, target?, finding_ids?}` or the POST /scan body. Named finding ids are explained as given; otherwise open findings for that scan and target. At most 40 explanations per call (`truncated` is how many were left) |
+| POST | `/generate/propose` | `{results}` → `{proposals: [Proposal+], skipped: [{id, reason}]}`. Creates a proposal only when a library fix exists and the finding has no live proposal |
+| POST | `/apply` | `{targets: [id], checklists: [id]}` → `{results: {<target>: {target, ok, applied: [{proposal_id, state, version}], skipped, errors}}}`. Applies approved proposals that match the checklist. Anything not approved is skipped and not changed. `423` when the kill switch is engaged |
+| POST | `/rollback` | `{targets: [id], versions: [id]}` (`version` may be a string or a list) → `{results: {<target>: {target, ok, rolled_back: [{proposal_id, state, version}], skipped, errors}}}`. Rolls back applied, verified, or failed proposals on those targets whose id, scan, or benchmark release is in `versions` |
+| GET | `/reports/{target}` | → the last report saved for that target (`404` if none). A target id does not shadow `/reports/commander`, `/reports/score`, and the other fixed report paths |
+| POST | `/reports` | `{target}` → the same report, written for that target: inventory record, finding counts, summary, and a CKLB checklist when the report service can build one |
