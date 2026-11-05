@@ -69,11 +69,19 @@ and the cluster survey and baseline endpoints;
 it cannot apply Kubernetes remediation or read Secrets. Use a kubectl version
 compatible with the target cluster (`--build-arg KUBECTL_VERSION=vX.Y.Z`).
 
-On startup, **Local Kubernetes cluster** (`local-cluster`) appears automatically
-in **Assets**, with the mounted in-cluster kubeconfig and discovery enabled.
-Existing names, options and scope choices survive restarts. The deployment sets
+With an image rebuilt from this source, **Local Kubernetes cluster**
+(`local-cluster`) appears automatically in **Assets**, with the mounted
+in-cluster kubeconfig and **out of scope**. Enter your operator name in
+**Settings** and enable the asset's scope before using **Discover**; discovery
+returns HTTP 403 until scope is authorized. Existing names, options and scope
+choices survive restarts. The deployment sets
 `CT_BOOTSTRAP_CLUSTER_TARGET=true`; set it to `false` to disable registration.
 Register external clusters manually with their separately mounted kubeconfigs.
+
+The already-built `0.2.4` package archives in `packages/` predate this change
+and initially register new host-cluster assets in scope. Rebuild the image and
+package from this source to get out-of-scope registration; the checked-in
+archives have not been rebuilt by this change.
 
 Before image baselines, stage a matching Trivy vulnerability database on the
 state PVC and allow access to the image registries, including credentials for
