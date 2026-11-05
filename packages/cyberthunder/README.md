@@ -1,38 +1,38 @@
 # Cyber Thunder Zarf package
 
-Built using the installed Zarf v0.89.0. The package includes the local
-`cyberthunder:0.2.0` image, its SBOM, and the Deployment, Service, Namespace and
+Built using the installed Zarf v0.85.0. The package includes the local
+`cyberthunder:0.2.1` image, its SBOM, and the Deployment, Service, Namespace and
 10 GiB PVC from `deploy/kubernetes/cyberthunder.yaml`.
 
 ## Deploy to a remote cluster
 
-Copy these repository-root artifacts to the deployment machine:
+Copy these artifacts from `.build/` to the deployment machine:
 
-- `zarf-package-cyberthunder-amd64-0.2.0.tar.zst`
-- `zarf-package-cyberthunder-amd64-0.2.0.tar.zst.sha256`
+- `zarf-package-cyberthunder-amd64-0.2.1.tar.zst`
+- `zarf-package-cyberthunder-amd64-0.2.1.tar.zst.sha256`
 
-Use Zarf v0.89.0 and credentials for the intended remote cluster:
+Use Zarf v0.85.0 and credentials for the intended remote cluster:
 
 ```sh
 export KUBECONFIG=/path/to/remote-kubeconfig
 kubectl config current-context
-sha256sum -c zarf-package-cyberthunder-amd64-0.2.0.tar.zst.sha256
+sha256sum -c zarf-package-cyberthunder-amd64-0.2.1.tar.zst.sha256
 ```
 
 The package requires Linux amd64 nodes, a default storage class that supports
 ReadWriteOnce and fsGroup, and an initialized Zarf cluster. On a cluster that
-has not been initialized, first transfer the matching Zarf v0.89.0 amd64 init
+has not been initialized, first transfer the matching Zarf v0.85.0 amd64 init
 package and initialize it (this installs Zarf infrastructure):
 
 ```sh
-zarf init /path/to/zarf-init-amd64-v0.89.0.tar.zst --confirm
+zarf init /path/to/zarf-init-amd64-v0.85.0.tar.zst --confirm
 ```
 
 Skip initialization on an already initialized cluster, including an existing
 UDS cluster. Deploy the application:
 
 ```sh
-zarf package deploy ./zarf-package-cyberthunder-amd64-0.2.0.tar.zst --confirm
+zarf package deploy ./zarf-package-cyberthunder-amd64-0.2.1.tar.zst --confirm
 kubectl -n cyberthunder rollout status deployment/cyberthunder
 kubectl -n cyberthunder port-forward service/cyberthunder 8000:80
 ```
@@ -54,10 +54,11 @@ A non-default storage class requires updating the PVC manifest and rebuilding.
 From the repository root with a running Docker daemon:
 
 ```sh
-docker load -i cyberthunder-0.2.0.tar
+mkdir -p .build
+docker build --platform linux/amd64 -t cyberthunder:0.2.1 .
 zarf dev lint packages/cyberthunder
-zarf package create packages/cyberthunder --confirm --architecture amd64 --output .
-sha256sum zarf-package-cyberthunder-amd64-0.2.0.tar.zst > zarf-package-cyberthunder-amd64-0.2.0.tar.zst.sha256
+zarf package create packages/cyberthunder --confirm --architecture amd64 --output .build
+(cd .build && sha256sum zarf-package-cyberthunder-amd64-0.2.1.tar.zst > zarf-package-cyberthunder-amd64-0.2.1.tar.zst.sha256)
 ```
 
 Zarf falls back to the local Docker image when the tag cannot be found in a

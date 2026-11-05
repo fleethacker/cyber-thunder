@@ -8,8 +8,8 @@ serves it with the Python API on port 8000. It runs as UID/GID 10001.
 With a running Docker daemon, replace the example registry with yours:
 
 ```sh
-docker build -t registry.example.com/team/cyberthunder:0.2.0 .
-docker push registry.example.com/team/cyberthunder:0.2.0
+docker build -t registry.example.com/team/cyberthunder:0.2.1 .
+docker push registry.example.com/team/cyberthunder:0.2.1
 ```
 
 Change `image` in `deploy/kubernetes/cyberthunder.yaml` to that published image.
@@ -20,8 +20,8 @@ reference it in the pod specification. Build for the cluster node architecture
 For a local k3d cluster, you can instead use:
 
 ```sh
-docker build -t cyberthunder:0.2.0 .
-k3d image import cyberthunder:0.2.0 -c cyber-thunder
+docker build -t cyberthunder:0.2.1 .
+k3d image import cyberthunder:0.2.1 -c cyber-thunder
 ```
 
 ## Deploy and open
