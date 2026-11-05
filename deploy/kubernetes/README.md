@@ -8,8 +8,8 @@ serves it with the Python API on port 8000. It runs as UID/GID 10001.
 With a running Docker daemon, replace the example registry with yours:
 
 ```sh
-docker build -t registry.example.com/team/cyberthunder:0.2.4 .
-docker push registry.example.com/team/cyberthunder:0.2.4
+docker build -t registry.example.com/team/cyberthunder:0.2.5 .
+docker push registry.example.com/team/cyberthunder:0.2.5
 ```
 
 Change `image` in `deploy/kubernetes/cyberthunder.yaml` to that published image.
@@ -20,8 +20,8 @@ reference it in the pod specification. Build for the cluster node architecture
 For a local k3d cluster, you can instead use:
 
 ```sh
-docker build -t cyberthunder:0.2.4 .
-k3d image import cyberthunder:0.2.4 -c cyber-thunder
+docker build -t cyberthunder:0.2.5 .
+k3d image import cyberthunder:0.2.5 -c cyber-thunder
 ```
 
 ## Deploy and open
@@ -64,8 +64,9 @@ Network policy must allow access to the targets and any configured model server.
 The image supports the Python SSH and WinRM transports and includes kubectl
 v1.36.4 and Trivy v0.56.2. The deployment mounts a local-cluster kubeconfig and
 rotating service account token. Its RBAC permits only `get` and `list` of
-namespaces, nodes and workload resources, plus `get /version`, for discovery
-and the cluster survey and baseline endpoints;
+namespaces, nodes, workload resources, service accounts, services, RBAC bindings
+and network policies, plus `get /version`, for discovery, configuration scans
+and image baselines;
 it cannot apply Kubernetes remediation or read Secrets. Use a kubectl version
 compatible with the target cluster (`--build-arg KUBECTL_VERSION=vX.Y.Z`).
 
@@ -91,6 +92,11 @@ local template descriptions remain the default. Local commands run inside the
 container and therefore describe the container, not its host.
 
 ## Troubleshooting
+
+If a configuration scan reports `Forbidden` while listing service accounts,
+services, RBAC bindings or network policies, upgrade to package `0.2.5` or apply
+the [RBAC-only correction](../../packages/cyberthunder/README.md#upgrade-existing-scan-permissions)
+from the updated checkout. The app keeps read-only access to scan inputs.
 
 ```sh
 kubectl -n cyberthunder get pods,pvc

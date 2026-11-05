@@ -324,7 +324,8 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
     if scan_id and ctx.store.load_scan_run(scan_id) is None:
         raise KeyError(f"unknown scan {scan_id!r}")
     sid = scan_id or ctx.store.latest_scan_id()
-    all_f = ctx.store.load_findings(sid) if sid else []
+    # The default view includes partial overlays; sid remains its baseline metadata anchor.
+    all_f = ctx.store.load_findings(scan_id) if scan_id else ctx.store.load_findings()
     # Filters and the summary count a verified fix as closed, so the open totals move when a fix lands.
     props = current_proposals(ctx) if all_f else {}
     scanned = {f.id: f for f in all_f}
@@ -333,7 +334,7 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
     sel.sort(key=lambda f: (-f.severity.rank, f.status != Status.OPEN, f.host, f.rule_version or f.rule_id))
     page = sel[offset: offset + limit]
     return {"findings": [finding_plus(ctx, scanned.get(f.id, f)) for f in page], "total": len(sel), "scan_id": sid,
-            "summary": summarize(now), "limit": limit, "offset": offset}
+            "view": "scan" if scan_id else "current", "summary": summarize(now), "limit": limit, "offset": offset}
 
 
 # -- link / outbox fallbacks ----------------------------------------------------------------------

@@ -38,6 +38,12 @@ class IngestService:
         self._link.on_reconnect = self._flush_on_reconnect
         self._content = None
 
+    def import_scanner(self, data: bytes, host_map: dict[str, str], *, actor: str,
+                       include_info: bool = False) -> dict:
+        """Import an offline Nessus/ACAS export without collecting or proposing changes."""
+        from cyberthunder.ingest.scanner_results import import_results
+        return import_results(self.ctx, data, host_map, actor=actor, include_info=include_info)
+
     # -- link / outbox -----------------------------------------------------------------------------
     @property
     def link(self) -> Link:

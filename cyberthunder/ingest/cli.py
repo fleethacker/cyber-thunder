@@ -73,6 +73,25 @@ def cmd_ingest(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scanner_import(a: argparse.Namespace) -> int:
+    from cyberthunder.control.killswitch import KillSwitchEngaged
+    from cyberthunder.ingest.scanner_results import (
+        MAX_MAPPING_BYTES, MAX_XML_BYTES, ScannerImportError, import_actor, parse_mapping, read_local_file,
+    )
+    try:
+        actor = import_actor(a.actor)
+        if not a.host_map:
+            return _fail("ingest scanner needs --host-map with a JSON mapping file")
+        mapping = parse_mapping(read_local_file(a.host_map, MAX_MAPPING_BYTES))
+        data = read_local_file(a.file, MAX_XML_BYTES)
+        _print(_service(a).import_scanner(data, mapping, actor=actor, include_info=a.include_info))
+    except (ScannerImportError, PermissionError, KillSwitchEngaged) as e:
+        return _fail(str(e))
+    except OSError:
+        return _fail("scanner import storage is unavailable")
+    return 0
+
+
 # -- content updates -----------------------------------------------------------------------------
 def _fmt_bytes(n) -> str:
     if not n:
@@ -211,7 +230,7 @@ def cmd_content(a: argparse.Namespace) -> int:
 
 
 CONTENT_SUBS = ("check", "updates", "pull", "content", "manifest", "fetch-manifest", "import-dir")
-NEEDS_FILE = ("stig", "bulletin", "rescan", "fetch-manifest", "import-dir")
+NEEDS_FILE = ("stig", "bulletin", "rescan", "fetch-manifest", "import-dir", "scanner")
 
 
 def _dispatch_ingest(a: argparse.Namespace) -> int:
@@ -219,6 +238,8 @@ def _dispatch_ingest(a: argparse.Namespace) -> int:
         return _fail(f"ingest {a.sub} needs a {'folder' if a.sub == 'import-dir' else 'file'}")
     if a.sub in CONTENT_SUBS:
         return cmd_content(a)
+    if a.sub == "scanner":
+        return cmd_scanner_import(a)
     return cmd_ingest(a)
 
 
@@ -256,10 +277,12 @@ def cmd_outbox(a: argparse.Namespace) -> int:
 
 def register_cli(subparsers) -> None:
     p = subparsers.add_parser("ingest", help="STIG release deltas and IAVM/CVE bulletins from the link")
-    p.add_argument("sub", choices=["stig", "bulletin", "rescan", "history", *CONTENT_SUBS])
+    p.add_argument("sub", choices=["stig", "bulletin", "rescan", "history", "scanner", *CONTENT_SUBS])
     p.add_argument("file", nargs="?", help="new STIG (.xml or DISA .zip), bulletin JSON, delta id for rescan, "
                                            "manifest for fetch-manifest, or folder for import-dir")
     p.add_argument("--old", help="previous release to diff against (default: the catalog copy)")
+    p.add_argument("--host-map", help="scanner: JSON mapping of each ReportHost name to an existing target id")
+    p.add_argument("--include-info", action="store_true", help="scanner: include severity-zero results")
     p.add_argument("--rescan", action="store_true", help="start a targeted rescan of added/changed rules")
     p.add_argument("--snapshot", action="store_true", help="check: use the bundled index snapshot, no network")
     p.add_argument("--all", dest="all_matching", action="store_true", help="pull: every update from the last check")
