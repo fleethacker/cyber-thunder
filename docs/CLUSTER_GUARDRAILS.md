@@ -13,6 +13,12 @@ uses `CT_BOOTSTRAP_CLUSTER_KUBECONFIG`, context `in-cluster`, and `kubectl`.
 This context matches the packaged kubeconfig. A different kubeconfig requires
 operator review of the inventory connection before authorization.
 
+The supplied Kubernetes manifests enable this registration and name the target
+`local-cluster` (Local Kubernetes cluster). It appears in Assets automatically,
+with `sudo: false`, but discovery and scans remain blocked until an operator
+authorizes it through the existing scope control. Existing operator targets keep
+their own connection, scope and privilege settings.
+
 Registration is audited as `inventory.bootstrap` under `CT_SCHEDULER_ACTOR`.
 The record explicitly says authorization is required. A scheduler actor may
 register this out-of-scope candidate; that registration grants no scan authority.

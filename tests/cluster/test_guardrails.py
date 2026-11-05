@@ -400,6 +400,7 @@ def test_bootstrap_registers_only_an_unauthorized_candidate(ctx, external_calls)
     bootstrap_cluster_target(ctx)
     proposed = Inventory.load(ctx.store.targets).get(ctx.settings.bootstrap_cluster_target_id)
     assert not proposed.in_scope
+    assert proposed.sudo is False
     assert proposed.asset_type == "kubernetes" and proposed.transport == "kubeconfig"
     assert proposed.options == {"kubeconfig": ctx.settings.bootstrap_cluster_kubeconfig,
                                 "context": "in-cluster", "kubectl": "kubectl"}

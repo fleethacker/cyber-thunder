@@ -8,8 +8,8 @@ serves it with the Python API on port 8000. It runs as UID/GID 10001.
 With a running Docker daemon, replace the example registry with yours:
 
 ```sh
-docker build -t registry.example.com/team/cyberthunder:0.2.3 .
-docker push registry.example.com/team/cyberthunder:0.2.3
+docker build -t registry.example.com/team/cyberthunder:0.2.4 .
+docker push registry.example.com/team/cyberthunder:0.2.4
 ```
 
 Change `image` in `deploy/kubernetes/cyberthunder.yaml` to that published image.
@@ -20,8 +20,8 @@ reference it in the pod specification. Build for the cluster node architecture
 For a local k3d cluster, you can instead use:
 
 ```sh
-docker build -t cyberthunder:0.2.3 .
-k3d image import cyberthunder:0.2.3 -c cyber-thunder
+docker build -t cyberthunder:0.2.4 .
+k3d image import cyberthunder:0.2.4 -c cyber-thunder
 ```
 
 ## Deploy and open
@@ -64,9 +64,16 @@ Network policy must allow access to the targets and any configured model server.
 The image supports the Python SSH and WinRM transports and includes kubectl
 v1.36.4 and Trivy v0.56.2. The deployment mounts a local-cluster kubeconfig and
 rotating service account token. Its RBAC permits only `get` and `list` of
-namespaces and workload resources for the cluster survey and baseline endpoints;
+namespaces, nodes and workload resources, plus `get /version`, for discovery
+and the cluster survey and baseline endpoints;
 it cannot apply Kubernetes remediation or read Secrets. Use a kubectl version
 compatible with the target cluster (`--build-arg KUBECTL_VERSION=vX.Y.Z`).
+
+On startup, **Local Kubernetes cluster** (`local-cluster`) appears automatically
+in **Assets**, with the mounted in-cluster kubeconfig and discovery enabled.
+Existing names, options and scope choices survive restarts. The deployment sets
+`CT_BOOTSTRAP_CLUSTER_TARGET=true`; set it to `false` to disable registration.
+Register external clusters manually with their separately mounted kubeconfigs.
 
 Before image baselines, stage a matching Trivy vulnerability database on the
 state PVC and allow access to the image registries, including credentials for

@@ -14,10 +14,10 @@ def test_scan_happy_path_persists_and_audits(ctx):
     run = ctx.scanner.start([HOST], requested_by="it2.smith", background=False)
     assert run.status == "done"
     d = ctx.store.scan_dir(run.id)
-    saved = json.loads((d / "run.json").read_text(encoding="utf-8"))
+    saved = ctx.store.load_scan_run(run.id)                       # a store document
     assert saved["status"] == "done" and saved["results"][HOST]["status"] == "done"
-    assert (d / "findings.json").exists()
-    collected = json.loads((d / "raw" / HOST / "collected.json").read_text(encoding="utf-8"))
+    assert ctx.store.read_json(d / "findings.json")["findings"]   # saved with the run
+    collected = json.loads((d / "raw" / HOST / "collected.json").read_text(encoding="utf-8"))   # a file
     assert collected["target_id"] == HOST and collected["facts"]["os_name"] == "Rocky Linux"
     findings = ctx.store.load_findings(run.id)
     assert {f.rule_id for f in findings} == {fakes.RULE_ROOT_LOGIN, fakes.RULE_PASS_MAX}

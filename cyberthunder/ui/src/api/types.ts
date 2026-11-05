@@ -511,3 +511,62 @@ export interface ImportDirResult {
   verified_by: string;
   deltas: PullDelta[];
 }
+
+/** A Target returned by POST /discover. `facts` is set on the system that was read. */
+export interface DiscoveredTarget extends Target {
+  facts?: AssetFacts | null;
+}
+
+export interface ReceivedCve {
+  id?: string;
+  title?: string;
+  severity?: string;
+  cves?: string[];
+  published?: string;
+  source?: string;
+  ingested_at?: string;
+  hosts_affected?: string[];
+  findings?: number;
+  scan_id?: string | null;
+}
+
+export interface ReceivedStig {
+  id?: string;
+  benchmark_id?: string;
+  old_release?: string | null;
+  new_release?: string | null;
+  counts?: Record<string, number>;
+  created_at?: string;
+  filename?: string;
+  sizes?: Record<string, number>;
+  transfer?: Record<string, number>;
+}
+
+export interface WorkflowSkip { id: string; reason: string }
+
+export interface WorkflowChange { proposal_id: string; state: string; version: string }
+
+/** Per-target outcome from /scan, /apply, and /rollback. */
+export interface TargetOutcome {
+  target: string;
+  ok: boolean;
+  errors: string[];
+  skipped: WorkflowSkip[];
+  scan_id?: string;
+  status?: string;
+  findings?: number;
+  open?: number;
+  applied?: WorkflowChange[];
+  rolled_back?: WorkflowChange[];
+}
+
+export interface TargetReport {
+  target: Target;
+  generated_at: string;
+  generated_by: string;
+  findings: number;
+  open: number;
+  summary: Partial<FindingsSummary>;
+  checklist: Record<string, unknown> | null;
+  checklist_error: string | null;
+}

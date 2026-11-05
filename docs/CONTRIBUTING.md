@@ -36,6 +36,8 @@ git config core.hooksPath .githooks
 - One logical change per commit. Message: one plain-English sentence saying what it adds or fixes and why.
 - Run the gate script in `scripts/` before pushing (as designed: tests plus an import check of every package).
   If it is not present on your branch, run the full suite and `python -c "import cyberthunder"` by hand.
+- Every test that takes a state directory runs twice, once per document backend (json files and SQLite, see
+  [STATE.md](STATE.md)); `CT_STATE_BACKENDS=json python -m pytest -q` runs one backend while iterating.
 - Fixture-first testing. No network and no live hosts in tests. Fake transports with `FixtureTransport` or a
   simulated transport; capture real sessions with `RecordingTransport` on the range and commit the fixture.
 - Standard library first. Runtime dependencies are exactly those in `requirements.txt`; do not add any.

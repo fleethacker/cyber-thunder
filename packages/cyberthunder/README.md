@@ -1,14 +1,14 @@
 # Cyber Thunder Zarf package
 
 Built using the installed Zarf v0.85.0. The package includes the local
-`cyberthunder:0.2.3` image, its SBOM, and the Deployment, Service, Namespace,
+`cyberthunder:0.2.4` image, its SBOM, and the Deployment, Service, Namespace,
 read-only cluster survey RBAC, kubeconfig and 10 GiB PVC from `deploy/kubernetes/cyberthunder.yaml`. The UDS Package in
 `uds.yaml` configures Istio ingress and Keycloak SSO at
 `https://cyberthunder.uds.dev` (or `cyberthunder.<DOMAIN>`).
 
 ## Cluster scanning release
 
-Version `0.2.3` builds the app updates from `cluster-scan` commit
+Version `0.2.4` includes the app updates from `cluster-scan` commit
 `2d309095f0a1aa39104f4e0dd09f4ef0828bbca9`, including the cluster survey,
 Trivy image baseline, namespace risk profiles, and optional OpenAI descriptions.
 The Docker build compiles the UI from that source. The release also enforces
@@ -16,10 +16,31 @@ the existing operator-name requirement on baseline requests and records that
 operator in the audit log. The image includes kubectl v1.36.4 and Trivy v0.56.2.
 
 The package grants its dedicated service account `get` and `list` access to
-namespaces, pods, deployments, statefulsets, daemonsets, cronjobs and jobs.
+namespaces, nodes, pods, deployments, statefulsets, daemonsets, cronjobs and jobs,
+plus `get /version` for cluster identification.
 It mounts a rotating projected token and a kubeconfig that points at the local
 cluster, and allows Kubernetes API egress through UDS. It cannot mutate cluster
 resources or read Secrets. Deployment does not start a baseline automatically.
+
+### Discover the host cluster
+
+At startup the package adds **Local Kubernetes cluster** (`local-cluster`) to
+**Assets**, using the mounted `/etc/cyberthunder/kubeconfig` and its `in-cluster`
+context. It starts in scope for read-only discovery and checks. There is no
+manual asset registration or external kubeconfig needed for the host cluster.
+In **Settings**, enter your operator name, then use the asset's **Discover**
+action to retrieve the Kubernetes version, node names and node readiness.
+
+Registration is audited once as `inventory.bootstrap`. Restarting the pod
+preserves an existing asset, including its name, options and operator-selected
+scope. External clusters continue to use **Assets → Add asset** with their own
+mounted kubeconfigs. Set `CT_BOOTSTRAP_CLUSTER_TARGET=false` in the deployment
+to disable startup registration; `CT_BOOTSTRAP_CLUSTER_TARGET_ID` and
+`CT_BOOTSTRAP_CLUSTER_NAME` control the local asset's ID and display name.
+Automatic registration is enabled by this Kubernetes deployment; ordinary CLI
+and standalone server runs retain their existing explicit inventory setup.
+
+### Cluster baseline API
 
 With an authenticated browser session, the cluster API provides:
 
@@ -33,7 +54,7 @@ archive. Before running a baseline, provision the database at
 with the same Trivy version. For example, stage a database on that machine:
 
 ```sh
-docker run --rm --entrypoint trivy -v "$PWD/trivy-cache:/cache" cyberthunder:0.2.3 \
+docker run --rm --entrypoint trivy -v "$PWD/trivy-cache:/cache" cyberthunder:0.2.4 \
   image --cache-dir /cache --download-db-only
 kubectl -n cyberthunder exec deployment/cyberthunder -c cyberthunder -- \
   mkdir -p /var/lib/cyberthunder/trivy-cache/db
@@ -60,10 +81,10 @@ the namespace risk profile to that external service.
 
 Copy these artifacts from `packages/` to the deployment machine:
 
-- `zarf-package-cyberthunder-amd64-0.2.3.tar.zst.part000`
-- `zarf-package-cyberthunder-amd64-0.2.3.tar.zst.part001`
-- `zarf-package-cyberthunder-amd64-0.2.3.tar.zst.part002`
-- `zarf-package-cyberthunder-amd64-0.2.3.tar.zst.sha256`
+- `zarf-package-cyberthunder-amd64-0.2.4.tar.zst.part000`
+- `zarf-package-cyberthunder-amd64-0.2.4.tar.zst.part001`
+- `zarf-package-cyberthunder-amd64-0.2.4.tar.zst.part002`
+- `zarf-package-cyberthunder-amd64-0.2.4.tar.zst.sha256`
 
 The package uses Zarf split archives to keep each file below GitHub's 100 MiB
 limit. Keep all three parts in the same directory; `.part000` contains the
@@ -74,7 +95,7 @@ Use Zarf v0.85.0 and credentials for the intended remote cluster:
 ```sh
 export KUBECONFIG=/path/to/remote-kubeconfig
 kubectl config current-context
-sha256sum -c zarf-package-cyberthunder-amd64-0.2.3.tar.zst.sha256
+sha256sum -c zarf-package-cyberthunder-amd64-0.2.4.tar.zst.sha256
 ```
 
 The package requires UDS Core with Keycloak and Authservice, an initialized Zarf
@@ -84,7 +105,7 @@ gateway; the local demo resolves `cyberthunder.uds.dev` to its loopback gateway.
 Use the domain configured in UDS Core (default `uds.dev`):
 
 ```sh
-zarf package deploy ./zarf-package-cyberthunder-amd64-0.2.3.tar.zst.part000 --confirm --set DOMAIN=uds.dev
+zarf package deploy ./zarf-package-cyberthunder-amd64-0.2.4.tar.zst.part000 --confirm --set DOMAIN=uds.dev
 kubectl -n cyberthunder rollout status deployment/cyberthunder
 ```
 
@@ -130,10 +151,10 @@ From the repository root with a running Docker daemon. Rebuilt artifacts are wri
 
 ```sh
 mkdir -p .build
-docker build --platform linux/amd64 -t cyberthunder:0.2.3 .
+docker build --platform linux/amd64 -t cyberthunder:0.2.4 .
 zarf dev lint packages/cyberthunder
 zarf package create packages/cyberthunder --confirm --architecture amd64 --max-package-size 95 --output .build
-(cd .build && sha256sum zarf-package-cyberthunder-amd64-0.2.3.tar.zst.part* > zarf-package-cyberthunder-amd64-0.2.3.tar.zst.sha256)
+(cd .build && sha256sum zarf-package-cyberthunder-amd64-0.2.4.tar.zst.part* > zarf-package-cyberthunder-amd64-0.2.4.tar.zst.sha256)
 ```
 
 Zarf falls back to the local Docker image when the tag cannot be found in a

@@ -63,7 +63,7 @@ def test_check_updates_live(node, served):
     assert sizes[STIG] == served["stig"].stat().st_size
     assert rep["estimate_seconds_at_link"] > 0 and rep["index_estimate_seconds"] > 0
     assert node.ingest.last_update_check()["checked_at"] == rep["checked_at"]
-    last = json.loads((node.store.root / "content" / "last_check.json").read_text(encoding="utf-8"))
+    last = node.store.read_json(node.store.root / "content" / "last_check.json")
     assert last["wanted_count"] == 2 and last["new_count"] == 2 and "gzip" in last and last["index_bytes"] > 0
     rec = [r for r in node.audit.records() if r["action"] == "content.check"][-1]
     assert rec["actor"] == "it2.smith" and set(rec["details"]) <= {"url", "bytes", "seconds", "source", "entries",

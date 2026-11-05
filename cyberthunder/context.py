@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 class AppContext:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings.from_env()
-        self.store = StateStore(self.settings.state_dir)
+        self.store = StateStore(self.settings.state_dir, backend=self.settings.state_backend)
         self.audit = AuditLog(self.store.audit_log, node=self.settings.node)
         self.killswitch = KillSwitch(self.store.root, self.audit)
         self.gate = ApprovalGate(self.store.proposals, self.audit, self.killswitch, policy_path=self.store.policy)

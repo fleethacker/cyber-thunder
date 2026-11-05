@@ -1,13 +1,13 @@
 """Runtime helpers for the packaged service.
 
-The CLI stays explicit and quiet by default. The Kubernetes deployment can opt in to a tiny background loop
-that checks content updates and periodically scans already in-scope inventory targets.
+The Kubernetes deployment registers its own cluster out of scope using its mounted service account kubeconfig.
+The CLI stays explicit by default. Optional background tasks check content updates and periodically
+scan already in-scope inventory targets.
 """
 from __future__ import annotations
 
 import logging
 import threading
-from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from cyberthunder.control.identity import MAX_ACTOR_LEN, normalize_actor
@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 
 def bootstrap_cluster_target(ctx: "AppContext") -> None:
+    """Register the configured host cluster once; retain operator edits and scope across restarts."""
     settings = ctx.settings
     if not settings.bootstrap_cluster_target:
         return
@@ -40,16 +41,18 @@ def bootstrap_cluster_target(ctx: "AppContext") -> None:
     except KillSwitchEngaged:
         # Keep the API available so an operator can inspect state and release the switch.
         return
-    kubeconfig = Path(settings.bootstrap_cluster_kubeconfig)
+    kubeconfig = str(settings.bootstrap_cluster_kubeconfig)
     target = Target(
         id=target_id,
         name=settings.bootstrap_cluster_name,
         asset_type="kubernetes",
         transport="kubeconfig",
+        sudo=False,
         tags=["bootstrap", "discovery-source", "cluster"],
         in_scope=False,
-        options={"kubeconfig": str(kubeconfig), "context": "in-cluster", "kubectl": "kubectl"},
-        notes="Registered by the packaged service; an operator must review and authorize scope before scanning.",
+        options={"kubeconfig": kubeconfig, "context": "in-cluster", "kubectl": "kubectl"},
+        notes="Registered by the packaged service from its own in-cluster Kubernetes context; "
+              "an operator must review and authorize scope before scanning.",
     )
     try:
         ctx.killswitch.guard("inventory.bootstrap", actor)
