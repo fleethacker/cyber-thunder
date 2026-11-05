@@ -35,6 +35,7 @@ DEFAULT_BACKEND = "json"
 # before the backends existed. A new document area is added here on purpose.
 DOCUMENT_FILES = frozenset({
     "link.json", "demo.json",
+    "cluster/known_good.json",
     "content/index.json", "content/last_check.json", "content/source.json", "content/catalog.json",
 })
 DOCUMENT_AREAS = ("explanations/", "ingest/deltas/", "ingest/bulletins/", "discovery/", "content/jobs/")

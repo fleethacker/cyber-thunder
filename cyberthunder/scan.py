@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Iterable
 
 from cyberthunder.adapters.base import MODULES
+from cyberthunder.adapters.kubernetes.known_good import KubernetesKnownGoodState
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.findings.schema import Finding, summarize, utcnow
 from cyberthunder.inventory.targets import ScopeViolation
@@ -304,6 +305,7 @@ class Scanner:
                 collected.facts = facts
             findings = adapter.run_detection(target, collected)
             findings = self._filter(findings, run.rule_filter)
+            self._apply_known_good(target, findings, actor)
             for f in findings:
                 f.scan_id = run.id
                 f.asset_type = f.asset_type or target.asset_type
@@ -325,6 +327,18 @@ class Scanner:
                 transport.close()
             except Exception:  # noqa: BLE001
                 log.warning("transport close failed for %s", tid)
+
+    def _apply_known_good(self, target, findings: list[Finding], actor: str) -> list[str]:
+        """Mark Kubernetes findings covered by persistent site exceptions before summaries/proposals."""
+        if target.asset_type != "kubernetes" or not findings:
+            return []
+        matched = KubernetesKnownGoodState(self.ctx.store).apply(findings)
+        if matched:
+            ids = sorted(set(matched))
+            self.ctx.audit.append("known_good.apply", actor, {"target": target.id, "exceptions": ids,
+                                                              "findings": len(matched)},
+                                  subject=target.id, outcome="ok")
+        return matched
 
     @staticmethod
     def _filter(findings: list[Finding], rule_filter: list[str] | None) -> list[Finding]:
