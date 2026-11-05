@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from cyberthunder.api.errors import MappedRoute, requires
-from cyberthunder.api.util import CtxDep, to_plain
+from cyberthunder.api.util import ActorDep, CtxDep, to_plain
 
 router = APIRouter(prefix="/cluster", tags=["cluster"], route_class=MappedRoute)
 
@@ -24,8 +24,8 @@ def survey(ctx=CtxDep) -> dict:
 
 
 @router.post("/baseline")
-def baseline(body: BaselineBody | None = None, ctx=CtxDep) -> dict:
-    return to_plain(_svc(ctx).scan(use_openai=bool((body or BaselineBody()).use_openai)))
+def baseline(body: BaselineBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    return to_plain(_svc(ctx).scan(use_openai=bool((body or BaselineBody()).use_openai), actor=actor))
 
 
 @router.get("/risk")
