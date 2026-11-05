@@ -34,8 +34,11 @@ HEREDOC_RE = re.compile(r"<<-?\s*'?(?P<tag>[A-Za-z_][A-Za-z0-9_]*)'?\s*$")
 # DNS-1123 subdomain (object names, namespaces) and label (container names).
 RE_K8S_NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")
 RE_K8S_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
-# cluster-scoped RBAC objects may carry ':' (system:monitoring); still no spaces or shell characters
+# RBAC objects (cluster- and namespace-scoped) may carry ':' (system:controller:bootstrap-signer, a
+# built-in RoleBinding in kube-system on every real cluster); still no spaces or shell characters.
 RE_RBAC_NAME = re.compile(r"^[a-z0-9]([-a-z0-9.:]{0,251}[a-z0-9])?$")
+# Namespaced RBAC kinds whose names may contain ':' (cluster-scoped ones are handled below).
+RBAC_NAME_KINDS = {"roles", "rolebindings"}
 
 # kind aliases -> canonical plural resource
 KIND_ALIASES = {
@@ -100,7 +103,8 @@ class ObjRef:
         else:
             if not self.namespace or not RE_K8S_NAME.match(self.namespace):
                 raise ValueError(f"invalid namespace {self.namespace!r}")
-            if not RE_K8S_NAME.match(self.name or ""):
+            name_re = RE_RBAC_NAME if plural in RBAC_NAME_KINDS else RE_K8S_NAME
+            if not name_re.match(self.name or ""):
                 raise ValueError(f"invalid object name {self.name!r}")
         if self.container is not None and not RE_K8S_LABEL.match(self.container):
             raise ValueError(f"invalid container name {self.container!r}")

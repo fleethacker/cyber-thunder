@@ -1,5 +1,6 @@
 {
-  "target": "sim-k8s-01",
+  "target": "acd-k3s",
+  "sim_target": "sim-k8s-01",
   "seeded_by": "cyberthunder/adapters/kubernetes/simulated.py (simulated) and range/k8s/seed.sh (k3s on the range VM)",
   "purpose": "Score detection rate (measure of success #1). Do not show to the model.",
   "match": "a finding on the target whose rule_version equals 'rule' and whose k8s-object tag equals 'object'",

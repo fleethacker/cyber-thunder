@@ -58,5 +58,11 @@ done
 
 # 3. Workloads, RBAC and the seeded objects.
 $KUBECTL apply -f "$HERE/manifests/00-baseline.yaml"
+# Kubernetes recreates each namespace's "default" ServiceAccount asynchronously (and more slowly right
+# after the k3s restart above). 10-seeded.yaml has pods that bind it, so wait before applying, or the
+# apply fails with 'error looking up service account <ns>/default'.
+for ns in apps monitoring; do
+  for _ in $(seq 1 30); do $KUBECTL -n "$ns" get sa default >/dev/null 2>&1 && break; sleep 1; done
+done
 $KUBECTL apply -f "$HERE/manifests/10-seeded.yaml"
 echo "seeded: $(grep -c '"id"' "$HERE/../answer_key/kubernetes.json") answer-key items"
