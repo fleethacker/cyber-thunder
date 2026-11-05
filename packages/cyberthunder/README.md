@@ -92,28 +92,24 @@ With an authenticated browser session, the cluster API provides:
 - `GET /api/v1/cluster/risk`: the latest saved profiles.
 
 Trivy's vulnerability database and target images are not included in this app
-archive. Before running a baseline, provision the database at
-`/var/lib/cyberthunder/trivy-cache/db/` on the state PVC using a connected machine
-with the same Trivy version. For example, stage a database on that machine:
+archive. Newly built images use Trivy 0.71.1 and the managed **Vulnerability data**
+page. Update there when connected, or import an exported database ZIP from a
+connected node. The main database, optional Java index, versions, freshness and
+update errors are visible separately from the STIG Library. Schedules are opt-in.
+See [VULNERABILITY_DATA.md](../../docs/VULNERABILITY_DATA.md) for CLI commands and
+transfer controls. Existing published 0.2.6 package archives are not rebuilt by
+editing source; rebuild the package to deploy these changes.
 
-```sh
-docker run --rm --entrypoint trivy -v "$PWD/trivy-cache:/cache" cyberthunder:0.2.6 \
-  image --cache-dir /cache --download-db-only
-kubectl -n cyberthunder exec deployment/cyberthunder -c cyberthunder -- \
-  mkdir -p /var/lib/cyberthunder/trivy-cache/db
-kubectl -n cyberthunder cp trivy-cache/db/. \
-  cyberthunder/POD_NAME:/var/lib/cyberthunder/trivy-cache/db -c cyberthunder
-```
+Managed files live under `/var/lib/cyberthunder/vulnerabilities/` on the writable
+state PVC. Copying a bare legacy `trivy-cache/db` directory does not activate a
+managed generation. Cluster baselines pin a validated generation and never
+refresh databases during a scan. Normalized image CVEs appear in Findings;
+per-image errors preserve earlier findings and never establish a clean baseline.
 
-Replace `POD_NAME` with the app pod's name. The deployment retains the branch's
-`CT_TRIVY_SKIP_DB_UPDATE=true` default and stores caches on the writable PVC.
-Keep the database current through the same transfer process. Allow network
-access to the registries that host the surveyed images in `uds.yaml`, then
-rebuild for your environment. Private registries also need credentials and any
-private CA configured for Trivy. A baseline reports per-image scan errors;
-missing image access or database content does not establish a clean baseline.
-Java analysis may additionally need a staged Java database; configure Trivy's
-offline settings for fully disconnected operation.
+Disconnected scans also need the actual image content. Allow only the intended
+image and official database registry access in `uds.yaml`, then rebuild for your
+environment. Private image registries still need their own credentials and CA
+configuration. A database bundle does not include those credentials or images.
 
 OpenAI summaries remain opt-in, with template text available offline. Enabling
 them requires a key provided through a Kubernetes Secret and explicit egress to

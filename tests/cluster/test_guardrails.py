@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -36,6 +38,14 @@ def ctx(state_dir):
                               bootstrap_cluster_kubeconfig=str(state_dir / "unapproved-config"),
                               scheduler_actor="system:scheduler", scan_interval_s=0,
                               content_check_interval_s=0, trivy_binary="trivy", trivy_skip_db_update=True))
+    @contextmanager
+    def scan_context():
+        yield {"cache_dir": state_dir / "managed-cache", "generation": "fixture-generation",
+               "state": "ready", "provenance": "offline_import", "integrity_verified": True,
+               "engine": {"available": True, "version": "0.71.1", "supported": True},
+               "databases": [{"kind": "main", "present": True, "stale": False}]}
+
+    ctx.vulnerabilities = SimpleNamespace(scan_context=scan_context)
     yield ctx
     assert ctx.audit.verify().ok
 
@@ -58,7 +68,8 @@ def completed(argv, doc):
 def fake_tools(argv, **kwargs):
     if argv[0] == "trivy":
         severe = argv[-1] == APP_IMAGE
-        return completed(argv, {"Results": [{"Target": "fixture-image", "Vulnerabilities": [{
+        return completed(argv, {"Results": [{"Target": "fixture-image", "Class": "os-pkgs", "Type": "debian",
+                                            "Vulnerabilities": [{
             "VulnerabilityID": "CVE-2026-12345" if severe else "CVE-2026-54321",
             "PkgName": "fixture-package", "InstalledVersion": "1", "FixedVersion": "2" if severe else "",
             "Severity": "CRITICAL" if severe else "LOW", "CVSS": {"fixture": {"V3Score": 9.8 if severe else 2}},

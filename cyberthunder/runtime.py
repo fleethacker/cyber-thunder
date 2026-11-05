@@ -73,6 +73,9 @@ class RuntimeTasks:
         bootstrap_cluster_target(self.ctx)
         self._start_interval("content-updates", self.ctx.settings.content_check_interval_s, self._check_content)
         self._start_interval("scan", self.ctx.settings.scan_interval_s, self._scan_inventory)
+        if getattr(self.ctx, "vulnerabilities", None) is not None:
+            self._start_interval("vulnerability-updates", getattr(self.ctx.settings, "vulnerability_poll_s", 60),
+                                 self._check_vulnerabilities)
 
     def stop(self) -> None:
         self._stop.set()
@@ -107,3 +110,8 @@ class RuntimeTasks:
             return
         self.ctx.scanner.start(targets, trigger="scheduled", requested_by=self.ctx.settings.scheduler_actor,
                                background=True)
+
+    def _check_vulnerabilities(self) -> None:
+        service = getattr(self.ctx, "vulnerabilities", None)
+        if service is not None and service.due_update():
+            service.update_scheduled()

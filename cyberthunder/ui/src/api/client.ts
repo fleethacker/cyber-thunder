@@ -7,6 +7,7 @@ import type {
   Outbox, PolicyDecision, ProposalDiff, ProposalPlan, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
   ReportHistory, SavedReportContent, TargetOutcome, TargetReport, UpdateCheck,
   ContentUploadResult, LibraryPreferences, LibraryPreferencesInput, StigLibrary, FindingReviewHistory, FindingReviewInput,
+  VulnerabilityJob, VulnerabilitySettings, VulnerabilitySettingsInput, VulnerabilityStatus,
 } from './types';
 
 export const API_BASE = '/api/v1';
@@ -103,8 +104,31 @@ const del = <T>(p: string) => request<T>('DELETE', p);
 
 const enc = encodeURIComponent;
 
+async function vulnerabilityZip(path: 'import' | 'export', file?: File): Promise<Response> {
+  const headers: Record<string, string> = { Accept: path === 'export' ? 'application/zip' : 'application/json' };
+  const actor = getActor();
+  if (actor) headers['X-Actor'] = actor;
+  if (file) headers['Content-Type'] = 'application/zip';
+  let res: Response;
+  try {
+    res = await fetch(url(`/vulnerabilities/${path}`), { method: 'POST', headers, body: file });
+  } catch (e) {
+    throw new ApiError(0, `API unreachable: ${(e as Error).message}`);
+  }
+  if (!res.ok) throw await parseError(res);
+  return res;
+}
+
 export const api = {
   status: () => get<Status>('/status'),
+
+  vulnerabilities: () => get<VulnerabilityStatus>('/vulnerabilities'),
+  saveVulnerabilitySettings: (body: VulnerabilitySettingsInput) => put<VulnerabilitySettings>('/vulnerabilities/settings', body),
+  updateVulnerabilityDatabases: (include_java: boolean) => post<VulnerabilityJob>('/vulnerabilities/update', { include_java }),
+  vulnerabilityJobs: () => get<{ jobs: VulnerabilityJob[] }>('/vulnerabilities/jobs'),
+  vulnerabilityJob: (id: string) => get<VulnerabilityJob>(`/vulnerabilities/jobs/${enc(id)}`),
+  importVulnerabilityBundle: async (file: File): Promise<VulnerabilityStatus> => (await vulnerabilityZip('import', file)).json(),
+  exportVulnerabilityBundle: async (): Promise<Blob> => (await vulnerabilityZip('export')).blob(),
 
   targets: () => get<{ targets: Target[] }>('/targets'),
   addTarget: (t: Partial<Target>) => post<Target>('/targets', t),

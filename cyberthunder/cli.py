@@ -34,6 +34,7 @@ CLI_MODULES = (
     "cyberthunder.demo",
     "cyberthunder.discovery.cli",
     "cyberthunder.state.cli",
+    "cyberthunder.vulnerability_cli",
 )
 
 

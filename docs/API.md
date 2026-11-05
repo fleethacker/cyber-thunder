@@ -229,6 +229,25 @@ sequential requests. Legacy STIG import, check, pull, job, manifest and folder-i
 The `/discovery/*` routes (scopes, sweeps, discovered assets, discovery findings, applicable benchmarks) are
 documented in [DISCOVERY.md](DISCOVERY.md). They follow the same actor and error rules as above.
 
+## Vulnerability data
+
+All paths have the `/api/v1` prefix. See [VULNERABILITY_DATA.md](VULNERABILITY_DATA.md)
+for source, freshness, offline transfer and deployment limits. GET requests do not
+download databases. Writes require the existing named-actor check and kill switch.
+
+| Method | Path | Body or result |
+|---|---|---|
+| GET | `/vulnerabilities` | Database status, Trivy version, provenance/freshness, preferences and active job |
+| PUT | `/vulnerabilities/settings` | `{expected_revision, auto_update?, interval_hours?, include_java?}`; stale revision returns 409 |
+| POST | `/vulnerabilities/update` | `{include_java?: true}` -> 202 persisted job; polls controls during download |
+| GET | `/vulnerabilities/jobs` | `{jobs: [...]}` newest first, bounded history |
+| GET | `/vulnerabilities/jobs/{id}` | Saved update job; 404 for an unknown ID |
+| POST | `/vulnerabilities/import` | Raw ZIP request body with `Content-Type: application/zip`; validated import -> status; 413 over size limit |
+| POST | `/vulnerabilities/export` | ZIP attachment containing the active generation and integrity manifest |
+
+Missing/unsupported engine or unavailable data returns 409; invalid bundle/input
+returns 400. Import and export do not grant permission to change target systems.
+
 ## Workflow
 One pass over an isolated enclave: receive what came across the link, discover the system, scan a target,
 explain and propose from those results, apply approved checklist items, report, and roll back.

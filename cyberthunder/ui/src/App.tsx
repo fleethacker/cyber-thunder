@@ -11,6 +11,7 @@ import Mission from './pages/Mission';
 import Reports from './pages/Reports';
 import Scans from './pages/Scans';
 import Settings from './pages/Settings';
+import Vulnerabilities from './pages/Vulnerabilities';
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/assets" element={<Assets />} />
         <Route path="/scans" element={<Scans />} />
         <Route path="/content" element={<Content />} />
+        <Route path="/vulnerabilities" element={<Vulnerabilities />} />
         <Route path="/audit" element={<Audit />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/settings" element={<Settings />} />
