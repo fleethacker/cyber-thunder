@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 
 import pytest
 
@@ -84,7 +83,7 @@ def test_ingest_bulletin_persists_scan_run(ctx):
     assert run["trigger"] == "bulletin" and run["targets"] == ["web01"] and run["findings_count"] == 2
     saved = ctx.store.load_findings(res["scan_id"])
     assert {f.scan_id for f in saved} == {res["scan_id"]}
-    stored = json.loads((ctx.store.ingest_dir / "bulletins" / "2026-A-0123.json").read_text(encoding="utf-8"))
+    stored = ctx.store.read_json(ctx.store.ingest_dir / "bulletins" / "2026-A-0123.json")
     assert stored["hosts_affected"] == ["web01"]
     assert ctx.ingest.history()["bulletins"][0]["id"] == "2026-A-0123"
     rec = [r for r in ctx.audit.records() if r["action"] == "ingest.bulletin"][-1]

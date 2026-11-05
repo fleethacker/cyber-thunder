@@ -81,8 +81,8 @@ def test_verify_fail_flag_round_trips(ctx):
     assert demo.consume_simulate_verify_fail(ctx) is False
     demo.set_simulate_verify_fail_next(ctx, True, "sailor1")
     assert demo.status(ctx)["simulate_verify_fail_next"] is True
-    on_disk = json.loads((ctx.store.root / "demo.json").read_text(encoding="utf-8"))
-    assert on_disk["simulate_verify_fail_next"] is True
+    saved = ctx.store.read_json(ctx.store.root / "demo.json")
+    assert saved["simulate_verify_fail_next"] is True
     assert demo.consume_simulate_verify_fail(ctx) is True     # read and clear
     assert demo.consume_simulate_verify_fail(ctx) is False
     assert demo.status(ctx)["simulate_verify_fail_next"] is False
