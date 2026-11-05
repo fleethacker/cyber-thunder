@@ -33,12 +33,16 @@ def attack_ids(f: Finding) -> list[str]:
 
 
 def resolve_scan(ctx: "AppContext", scan_id: str | None) -> tuple[str, dict, list[Finding]]:
-    """Return (scan_id, run dict, findings). Raises ReportError with an instruction when nothing was scanned."""
+    """Return (anchor scan_id, run dict, findings), or a no-scan instruction.
+
+    An omitted scan_id reads the current picture, including partial overlays. The id and run still
+    describe its baseline (also used for raw-artifact lookup); an explicit id selects only that run.
+    """
     sid = scan_id or ctx.store.latest_scan_id()
     if not sid:
         raise ReportError("no scan runs on this node; run a scan first (cyberthunder scan)")
     run = ctx.store.load_scan_run(sid) or {}
-    findings = ctx.store.load_findings(sid)
+    findings = ctx.store.load_findings(scan_id) if scan_id else ctx.store.load_findings()
     if not run and not findings:
         raise ReportError(f"scan {sid!r} not found under {ctx.store.scans_dir}")
     return sid, run, findings
@@ -225,7 +229,7 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     nxt.append("Rescan after approved changes to confirm closure, then regenerate this report.")
 
     cmd = " ".join(["python -m cyberthunder", "--state-dir", _quote(str(ctx.store.root)),
-                    "report commander", "--scan-id", sid, "--format", fmt])
+                    "report commander", *(["--scan-id", _quote(scan_id)] if scan_id else []), "--format", fmt])
     return {
         "node": ctx.settings.node, "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "scan_id": sid, "trigger": run.get("trigger", "unknown"),

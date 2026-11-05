@@ -36,6 +36,34 @@ from cyberthunder.findings.schema import Finding
 router = APIRouter(tags=["ingest"], route_class=MappedRoute)
 
 
+@router.post("/ingest/scanner")
+async def import_scanner(request: Request, ctx=CtxDep, actor: str = ActorDep) -> dict:
+    """Upload a Nessus export and explicit host_map; no server-path input is accepted."""
+    from cyberthunder.ingest.scanner_results import MAX_UPLOAD_BYTES, import_actor, parse_upload
+    from starlette.concurrency import run_in_threadpool
+
+    actor = import_actor(actor)
+    ctx.killswitch.guard("ingest.scanner", actor)
+    length = request.headers.get("content-length")
+    if length is not None:
+        if not length.isascii() or not length.isdigit() or len(length) > 12:
+            raise HTTPException(400, "invalid upload content length")
+        if int(length) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "scanner upload exceeds the size limit")
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "scanner upload exceeds the size limit")
+        body.extend(chunk)
+    data, mapping, include_info = await run_in_threadpool(parse_upload, bytes(body),
+                                                        request.headers.get("content-type", ""))
+    svc = _svc(ctx, "scanner import")
+    try:
+        return await run_in_threadpool(svc.import_scanner, data, mapping, actor=actor, include_info=include_info)
+    except OSError:
+        raise HTTPException(503, "scanner import storage is unavailable") from None
+
+
 def _svc(ctx, what: str = "ingest"):
     return requires(getattr(ctx, "ingest", None), what)
 

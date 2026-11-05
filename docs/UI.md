@@ -43,8 +43,11 @@ discover a system, scan one target, explain and propose from those results, appl
 roll a version back, and read or write the per-target report. Each step shows the API detail on failure.
 
 ### Findings (`/findings`)
-Table (virtualized if > 200 rows): CAT, status, host, asset type, source, rule id/STIG id, title, fix available?,
-explanation ready? Filters and search. Click → **drawer**: description, check text, evidence, fix text, citations
+Table paginated in groups of 200: severity, scanner result, machine/type, category/source, rule/title,
+benchmark/release, observation time and fix/explanation/proposal availability. Searchable multi-select filters,
+quick views and explicit ascending/descending sorts run before pagination; preferences survive refresh.
+See [FINDINGS](FINDINGS.md) for category definitions and missing metadata behavior.
+Click → **drawer**: description, check text, evidence, fix text, citations
 with links (public.cyber.mil search for STIG ids, nvd.nist.gov for CVEs, attack.mitre.org for techniques — links
 are plain anchors; offline they simply do not resolve), explanation panel (with Regenerate), fix entry panel,
 "Propose fix" button, proposal history.
