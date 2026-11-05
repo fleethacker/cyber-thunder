@@ -63,6 +63,16 @@ revoked or changed target stops the run. Guard failures propagate instead of
 becoming ordinary per-resource errors. Tool failures without a guard violation
 retain the existing partial-baseline behavior.
 
+Every check rereads the persisted inventory authorization source using its
+existing parser, even if the inventory's cached file signature has not changed.
+Missing, unreadable or malformed inventory stops access; cached targets cannot
+authorize continued work. Both the current target and its persisted connection
+must be explicitly in scope and agree. Save inventory changes before scanning.
+Unexpected authorization or kill-check exceptions are fatal, including transient
+IO failures; they cannot become recoverable scanner errors. Their audit/API
+messages include the exception type, without copying raw parser diagnostics or
+inventory contents. The prior cached baseline remains readable after these stops.
+
 The audit records `cluster.survey.start` / `cluster.baseline.start` and a terminal
 `cluster.survey` / `cluster.baseline` event. Events include the requesting actor,
 run ID, target ID, kubeconfig path, named context and executable when resolved.
@@ -77,7 +87,8 @@ last-completed cache, not a fresh survey or a cache per cluster. Older cached
 results may lack provenance.
 
 HTTP responses follow the existing API mapping: 400 for missing/reserved actor,
-403 for missing/out-of-scope/wrong-kind targets or connection changes, and 423
+403 for missing/out-of-scope/wrong-kind targets, connection changes or an
+authorization check that cannot be completed, and 423
 for an engaged kill switch.
 
 ## Limits and integration

@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Iterator
 from cyberthunder.control.identity import normalize_actor, require_human
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.findings.schema import utcnow
-from cyberthunder.inventory.targets import ScopeViolation
+from cyberthunder.inventory.targets import Inventory, ScopeViolation, Target
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -117,6 +117,10 @@ def _image_vulns(report: dict) -> list[dict]:
     return out
 
 
+class ClusterGuardError(ScopeViolation):
+    """Authorization could not be checked; never recover this as a tool failure."""
+
+
 @dataclass(frozen=True)
 class _ClusterBinding:
     target_id: str
@@ -135,7 +139,26 @@ class ClusterBaselineService:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _binding(self, target_id: str) -> _ClusterBinding:
+        inventory_path = self.ctx.inventory.path
+        if inventory_path is None:
+            raise ClusterGuardError("cluster access requires a persisted inventory authorization source")
+        # Reuse the inventory parser but read every time: a cached target or unchanged stat is not authority.
+        persisted = Inventory._read(inventory_path).get(target_id)
+        if persisted is None:
+            raise ScopeViolation(f"target {target_id!r} is not in the persisted inventory")
+        if persisted.get("in_scope") is not True:
+            raise ScopeViolation(f"target {target_id!r} is not authorized in the persisted inventory")
         target = self.ctx.inventory.assert_in_scope(target_id)
+        binding = self._target_binding(target)
+        if binding != self._target_binding(Target.from_dict(persisted)):
+            raise ScopeViolation(f"target {target_id!r} connection does not match its persisted authorization")
+        return binding
+
+    @staticmethod
+    def _target_binding(target: Target) -> _ClusterBinding:
+        target_id = target.id
+        if target.in_scope is not True:
+            raise ScopeViolation(f"target {target_id!r} is not explicitly in scope")
         if target.asset_type != "kubernetes" or target.transport != "kubeconfig" or target.simulated:
             raise ScopeViolation(f"target {target_id!r} must be a Kubernetes kubeconfig target")
         options = target.options
@@ -145,9 +168,19 @@ class ClusterBaselineService:
         kubeconfig, context, kubectl = (v.strip() for v in values)
         return _ClusterBinding(target_id, str(Path(kubeconfig).expanduser().resolve()), context, kubectl)
 
+    def _authorize(self, target_id: str, actor: str, action: str) -> _ClusterBinding:
+        try:
+            self.ctx.killswitch.guard(action, actor)
+            return self._binding(target_id)
+        except (ScopeViolation, KillSwitchEngaged):
+            raise
+        except Exception as exc:  # noqa: BLE001 - fail closed, including transient guard and parser failures
+            # Parser/IO exceptions can carry inventory contents; only expose the failure type to audit/API.
+            raise ClusterGuardError(f"cannot verify cluster authorization for target {target_id!r} "
+                                    f"({type(exc).__name__}); refusing cluster access") from exc
+
     def _guard(self, binding: _ClusterBinding, actor: str) -> None:
-        self.ctx.killswitch.guard(f"cluster.access:{binding.target_id}", actor)
-        if self._binding(binding.target_id) != binding:
+        if self._authorize(binding.target_id, actor, f"cluster.access:{binding.target_id}") != binding:
             raise ScopeViolation(f"target {binding.target_id!r} connection changed during the cluster run; retry")
 
     @contextmanager
@@ -158,8 +191,7 @@ class ClusterBaselineService:
         try:
             actor = require_human(actor)
             details["requested_by"] = actor
-            self.ctx.killswitch.guard(action, actor)
-            binding = self._binding(details["target_id"])
+            binding = self._authorize(details["target_id"], actor, action)
             details.update(asdict(binding))
             self.ctx.audit.append(f"{action}.start", actor, details, subject=details["run_id"])
             started = True
@@ -210,7 +242,7 @@ class ClusterBaselineService:
         for _api, kind, resource in WORKLOAD_KINDS:
             try:
                 doc = self._kubectl_json(binding, actor, "get", resource, "-A")
-            except (PermissionError, KillSwitchEngaged):
+            except (ScopeViolation, KillSwitchEngaged):
                 raise
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{resource}: {e}")

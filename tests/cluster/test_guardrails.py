@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -225,6 +226,91 @@ def test_run_stops_after_external_call_when_authorization_changes(ctx, target, e
     assert event["details"]["context"] == "isolated-range"
 
 
+@pytest.mark.parametrize("failure", ["missing", "malformed", "invalid_structure", "unreadable"])
+@pytest.mark.parametrize("operation,call_number", [("scan", 0), ("survey", 2), ("scan", 2), ("scan", 8)])
+def test_inventory_source_failure_stops_access_and_preserves_cache(
+        ctx, target, external_calls, monkeypatch, failure, operation, call_number):
+    process, network = external_calls
+    cached = {"id": "prior-authorized-baseline", "namespaces": []}
+    ctx.store.write_json(ctx.cluster.root / "latest.json", cached)
+    writes = Mock(wraps=ctx.store.write_json)
+    monkeypatch.setattr(ctx.store, "write_json", writes)
+    read_text = Path.read_text
+
+    def fail_source():
+        if failure == "missing":
+            ctx.store.targets.unlink()
+        elif failure == "malformed":
+            ctx.store.targets.write_text("targets: [\nprivate-inventory-fixture", encoding="utf-8")
+        elif failure == "invalid_structure":
+            ctx.store.targets.write_text("targets: [null]\n", encoding="utf-8")
+        else:
+            def unreadable(path, *args, **kwargs):
+                if path == ctx.store.targets:
+                    raise OSError("private-inventory-fixture")
+                return read_text(path, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "read_text", unreadable)
+
+    def run(argv, **kwargs):
+        if process.call_count == call_number:
+            fail_source()
+        return fake_tools(argv, **kwargs)
+
+    process.side_effect = run
+    if call_number == 0:
+        fail_source()
+    with pytest.raises(ScopeViolation):
+        getattr(ctx.cluster, operation)(actor=ACTOR)
+    assert process.call_count == call_number
+    writes.assert_not_called()
+    network.assert_not_called()
+    assert ctx.cluster.latest() == cached
+    terminal = list(ctx.audit.records())[-1]
+    assert terminal["actor"] == ACTOR
+    assert terminal["action"] == ("cluster.survey" if operation == "survey" else "cluster.baseline")
+    assert terminal["outcome"] == ("rejected" if call_number == 0 else "blocked")
+    assert terminal["details"]["target_id"] == target.id
+    assert "private-inventory-fixture" not in json.dumps(terminal)
+
+
+@pytest.mark.parametrize("guard", ["inventory", "kill"])
+@pytest.mark.parametrize("error_type", [OSError, FileNotFoundError, ValueError])
+@pytest.mark.parametrize("call_number", [2, 8])
+def test_transient_guard_error_is_fatal_even_if_next_check_would_recover(
+        ctx, target, external_calls, monkeypatch, guard, error_type, call_number):
+    process, network = external_calls
+    cached = {"id": "prior-authorized-baseline", "namespaces": []}
+    ctx.store.write_json(ctx.cluster.root / "latest.json", cached)
+    writes = Mock(wraps=ctx.store.write_json)
+    monkeypatch.setattr(ctx.store, "write_json", writes)
+    owner, method = ((ctx.inventory, "assert_in_scope") if guard == "inventory" else (ctx.killswitch, "guard"))
+    original = getattr(owner, method)
+    failed = False
+
+    def transient_failure(*args, **kwargs):
+        nonlocal failed
+        if process.call_count == call_number and not failed:
+            failed = True
+            raise error_type("private-guard-diagnostic")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(owner, method, transient_failure)
+    process.side_effect = fake_tools
+    with pytest.raises(service.ClusterGuardError):
+        ctx.cluster.scan(actor=ACTOR)
+    assert failed
+    assert process.call_count == call_number
+    writes.assert_not_called()
+    network.assert_not_called()
+    assert ctx.cluster.latest() == cached
+    terminal = list(ctx.audit.records())[-1]
+    assert (terminal["action"], terminal["actor"], terminal["outcome"]) == ("cluster.baseline", ACTOR, "blocked")
+    assert terminal["details"]["target_id"] == target.id
+    assert terminal["details"]["context"] == "isolated-range"
+    assert "private-guard-diagnostic" not in json.dumps(terminal)
+
+
 @pytest.mark.parametrize("operation,call_number", [("survey", 2), ("scan", 8)])
 @pytest.mark.parametrize("change", ["kill", "scope"])
 def test_interruption_wins_over_tool_failure(ctx, target, external_calls, operation, call_number, change):
@@ -274,9 +360,12 @@ def test_guard_blocks_publication_after_profile_generation(ctx, target, external
     assert ctx.cluster.latest() is None
 
 
-def test_ordinary_tool_errors_still_produce_audited_partial_baseline(ctx, target, external_calls):
+@pytest.mark.parametrize("collection_error", [None, OSError, PermissionError])
+def test_ordinary_tool_errors_still_produce_audited_partial_baseline(ctx, target, external_calls, collection_error):
     def run(argv, **kwargs):
         if "deployments" in argv:
+            if collection_error is not None:
+                raise collection_error("fixture RBAC denial")
             return subprocess.CompletedProcess(argv, 1, stdout="", stderr="fixture RBAC denial")
         if argv[0] == "trivy":
             raise FileNotFoundError("fixture binary missing")

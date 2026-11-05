@@ -131,6 +131,44 @@ def test_cached_risk_read_needs_no_actor_or_current_authorization(client, ctx, c
     cluster_isolation[1].assert_not_called()
 
 
+@pytest.mark.parametrize("operation", ["baseline", "survey"])
+@pytest.mark.parametrize("failure", ["missing_inventory", "malformed_inventory", "guard_error"])
+def test_guard_source_failures_return_safe_denial_and_keep_prior_risk(
+        client, ctx, cluster_target, cluster_isolation, monkeypatch, operation, failure):
+    process = cluster_isolation[0]
+    cached = {"id": "prior-run", "namespaces": []}
+    ctx.store.write_json(ctx.cluster.root / "latest.json", cached)
+    original = ctx.inventory.assert_in_scope
+    failed = False
+
+    def assert_scope(*args, **kwargs):
+        nonlocal failed
+        if failure == "guard_error" and process.call_count == 2 and not failed:
+            failed = True
+            raise OSError("private-authorization-diagnostic")
+        return original(*args, **kwargs)
+
+    def run(argv, **kwargs):
+        if process.call_count == 2:
+            if failure == "missing_inventory":
+                ctx.store.targets.unlink()
+            elif failure == "malformed_inventory":
+                ctx.store.targets.write_text("targets: [\nprivate-authorization-diagnostic", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"items": []}), stderr="")
+
+    monkeypatch.setattr(ctx.inventory, "assert_in_scope", assert_scope)
+    process.side_effect = run
+    response = active_request(client, operation, headers=ACTOR)
+    assert response.status_code == 403, response.text
+    assert "private-authorization-diagnostic" not in response.text
+    assert process.call_count == 2
+    assert ctx.cluster.latest() == cached
+    terminal = list(ctx.audit.records())[-1]
+    assert (terminal["actor"], terminal["outcome"]) == (ACTOR["X-Actor"], "blocked")
+    assert "private-authorization-diagnostic" not in json.dumps(terminal)
+    cluster_isolation[1].assert_not_called()
+
+
 def test_bootstrap_candidate_can_only_be_scanned_after_existing_scope_workflow(
         client, ctx, cluster_isolation):
     from cyberthunder.runtime import bootstrap_cluster_target
