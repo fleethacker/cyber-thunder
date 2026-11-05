@@ -1,68 +1,22 @@
-// DISA content updates: what the node holds, what the inventory needs, pulls with per-file progress, and
-// the manifest / import-folder path for when the link is down. Pulls are read-only downloads; see docs/CONTENT.md.
-import { Alert, Badge, Button, Checkbox, Group, Paper, Progress, Stack, Switch, Table, Text, TextInput, Tooltip } from '@mantine/core';
+import { Accordion, Alert, Badge, Button, Checkbox, FileInput, Group, Paper, Progress, Stack, Switch, Table, Text, TextInput } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconCloudDownload } from '@tabler/icons-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, errorText } from '../api/client';
-import type { ContentRow, HeldContent, ImportDirResult, PullDelta, PullJob, UpdateCheck } from '../api/types';
-import { fmtAgo, fmtBytes, fmtSeconds } from '../lib/format';
-import { useAsync } from '../lib/hooks';
+import type { ContentUploadResult, ImportDirResult, PullDelta, PullJob, StigLibrary } from '../api/types';
+import { fmtBytes, fmtSeconds, fmtZonedTime } from '../lib/format';
 import { useAppState } from '../state/AppState';
-import { ErrorBox, Loading } from './common';
+import { actorProblem } from './ActorChip';
+import { DisplayedSelection, FileProvenance, LibraryTable, kindLabel } from './LibraryTables';
+import { ErrorBox } from './common';
 
-const FINISHED: PullJob['state'][] = ['done', 'partial', 'failed', 'stopped'];
 const STATE_COLOR: Record<string, string> = {
   done: 'teal', failed: 'red', quarantined: 'red', stopped: 'orange', pending: 'gray', downloading: 'blue',
   verifying: 'blue', retrying: 'yellow', partial: 'orange', running: 'blue', queued: 'gray',
 };
-
-function HeldTable({ held }: { held: HeldContent }) {
-  if (!held.files.length) return <Text size="sm" c="dimmed">No DISA content held yet. Check for updates, or import a folder.</Text>;
-  return (
-    <Table striped withTableBorder fz="sm">
-      <Table.Thead>
-        <Table.Tr><Table.Th>Product</Table.Th><Table.Th>Kind</Table.Th><Table.Th>Version</Table.Th><Table.Th>DISA date</Table.Th><Table.Th>Source</Table.Th></Table.Tr>
-      </Table.Thead>
-      <Table.Tbody>
-        {held.products.flatMap((g) => g.files.map((f) => (
-          <Table.Tr key={f.filename}>
-            <Table.Td><Tooltip label={f.filename}><Text size="sm" ff="monospace">{g.product_key}</Text></Tooltip></Table.Td>
-            <Table.Td>{f.kind.replace('_', ' ')}</Table.Td>
-            <Table.Td>{f.version_label ?? '-'}</Table.Td>
-            <Table.Td>{f.upload_date ?? '-'}</Table.Td>
-            <Table.Td>{f.source} {fmtAgo(f.fetched_at)}</Table.Td>
-          </Table.Tr>
-        )))}
-      </Table.Tbody>
-    </Table>
-  );
-}
-
-function UpdatesTable({ rows, selected, toggle }: { rows: ContentRow[]; selected: Set<string>; toggle: (f: string) => void }) {
-  if (!rows.length) return <Text size="sm" c="teal">Everything the inventory needs is held and current.</Text>;
-  return (
-    <Table withTableBorder fz="sm">
-      <Table.Thead>
-        <Table.Tr><Table.Th /><Table.Th>File</Table.Th><Table.Th>Version</Table.Th><Table.Th>Held</Table.Th><Table.Th>Size</Table.Th><Table.Th>For</Table.Th></Table.Tr>
-      </Table.Thead>
-      <Table.Tbody>
-        {rows.map((r) => (
-          <Table.Tr key={r.filename}>
-            <Table.Td><Checkbox aria-label={`select ${r.filename}`} checked={selected.has(r.filename)} onChange={() => toggle(r.filename)} /></Table.Td>
-            <Table.Td><Text size="sm" ff="monospace">{r.filename}</Text></Table.Td>
-            <Table.Td>{r.version_label ?? '-'} <Text span size="xs" c="dimmed">{r.upload_date}</Text></Table.Td>
-            <Table.Td>{r.held_version ? r.held_version.join('.') : 'none'}</Table.Td>
-            <Table.Td>{fmtBytes(r.expected_bytes)}</Table.Td>
-            <Table.Td>{(r.targets ?? []).join(', ')}</Table.Td>
-          </Table.Tr>
-        ))}
-      </Table.Tbody>
-    </Table>
-  );
-}
+export const jobRunning = (job: PullJob) => job.state === 'running' || job.state === 'queued';
 
 function DeltaRow({ d }: { d: PullDelta }) {
+  const { status, actor } = useAppState();
   const [busy, setBusy] = useState(false);
   const rescan = async () => {
     setBusy(true);
@@ -71,43 +25,40 @@ function DeltaRow({ d }: { d: PullDelta }) {
       notifications.show({ message: `Rescan started: ${run.id}` });
     } catch (e) {
       notifications.show({ color: 'red', message: errorText(e) });
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   };
   const c = d.counts ?? {};
-  return (
-    <Group gap="sm">
-      <Text size="sm">{d.filename}: {d.old_release ?? '(none)'} → {d.new_release}, {c.added ?? 0} added, {c.changed ?? 0} changed, {c.removed ?? 0} removed</Text>
-      <Button size="xs" variant="light" loading={busy} disabled={!d.rescan_rules} onClick={() => void rescan()}>Rescan changed rules</Button>
+  return <Paper withBorder p="sm" radius="md">
+    <Group gap="sm" justify="space-between">
+      <Stack gap={2} style={{ minWidth: 0 }}>
+        <Text size="sm" style={{ overflowWrap: 'anywhere' }}>{d.filename}</Text>
+        <Text size="xs" c="dimmed">{d.old_release ?? '(none)'} → {d.new_release ?? 'Unknown release'} · {c.added ?? 0} added, {c.changed ?? 0} changed, {c.removed ?? 0} removed</Text>
+      </Stack>
+      <Button size="xs" variant="light" loading={busy} disabled={!d.rescan_rules || !status || status.kill.engaged || !!actorProblem(actor)} onClick={() => void rescan()}>Rescan changed rules</Button>
     </Group>
-  );
+  </Paper>;
 }
 
 function JobProgress({ job }: { job: PullJob }) {
-  return (
-    <Stack gap={6}>
-      <Group gap="xs"><Text size="sm" fw={600}>Pull {job.id}</Text><Badge color={STATE_COLOR[job.state]} variant="light">{job.state}</Badge></Group>
-      {job.files.map((f) => {
+  return <Stack gap="sm">
+    <Text size="xs" c="dimmed">Started {fmtZonedTime(job.created_at)} by {job.created_by}{job.finished_at ? ` · Finished ${fmtZonedTime(job.finished_at)}` : ''}</Text>
+    {job.error && <ErrorBox error={job.error} />}
+    <LibraryTable rows={job.files} label="transfer files" searchText={(f) => `${f.filename} ${f.state}`} empty="This transfer has no files."
+      headings={<><Table.Th>File</Table.Th><Table.Th>Progress</Table.Th><Table.Th>State</Table.Th></>}
+      render={(f) => {
         const pct = f.total ? Math.min(100, (f.bytes / f.total) * 100) : f.state === 'done' ? 100 : 0;
-        return (
-          <Stack key={f.filename} gap={2}>
-            <Group justify="space-between" gap="xs">
-              <Text size="xs" ff="monospace">{f.filename}</Text>
-              <Group gap={6}>
-                <Text size="xs" c="dimmed">{fmtBytes(f.bytes)} / {fmtBytes(f.total)}{f.estimate_seconds ? `, about ${fmtSeconds(f.estimate_seconds)} at the link rate` : ''}</Text>
-                <Badge size="xs" color={STATE_COLOR[f.state]} variant="light">{f.state}</Badge>
-              </Group>
-            </Group>
-            <Progress value={pct} size="sm" color={STATE_COLOR[f.state]} animated={f.state === 'downloading'} />
+        return <Table.Tr key={f.filename}>
+          <Table.Td><Text size="xs" style={{ overflowWrap: 'anywhere' }}>{f.filename}</Text>
             {f.error && <Text size="xs" c="red">{f.error}</Text>}
-            {f.datastream_path && <Text size="xs" c="dimmed" ff="monospace">datastream: {f.datastream_path}</Text>}
-          </Stack>
-        );
-      })}
-      {job.deltas.map((d) => <DeltaRow key={d.id} d={d} />)}
-    </Stack>
-  );
+            {f.datastream_path && <Text size="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>Datastream: {f.datastream_path}</Text>}</Table.Td>
+          <Table.Td miw={160}><Progress value={pct} size="sm" color={STATE_COLOR[f.state]} animated={f.state === 'downloading'} aria-label={`${f.filename} transfer progress`} />
+            <Text size="xs" mt={4}>{fmtBytes(f.bytes)} / {fmtBytes(f.total)}</Text>
+            {!!f.estimate_seconds && <Text size="xs" c="dimmed">About {fmtSeconds(f.estimate_seconds)} at the link rate</Text>}</Table.Td>
+          <Table.Td><Badge size="xs" color={STATE_COLOR[f.state]} variant="light">{f.state}</Badge></Table.Td>
+        </Table.Tr>;
+      }} />
+    {job.deltas.map((d) => <DeltaRow key={d.id} d={d} />)}
+  </Stack>;
 }
 
 function downloadJson(name: string, doc: unknown) {
@@ -118,149 +69,169 @@ function downloadJson(name: string, doc: unknown) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(a.href);
+  window.setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-export function ContentUpdates() {
+interface UploadItem { file: File; state: 'queued' | 'uploading' | 'done' | 'failed'; result?: ContentUploadResult; error?: string }
+
+export function ContentUpdates({ library, dirty, disabled, onRefresh }: {
+  library: StigLibrary; dirty: boolean; disabled: boolean; onRefresh: () => Promise<void>;
+}) {
   const { status } = useAppState();
-  const check = useAsync(() => api.updates(), []);
-  const held = useAsync(() => api.content(), []);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [job, setJob] = useState<PullJob | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
   const [pace, setPace] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [folder, setFolder] = useState('');
   const [imported, setImported] = useState<ImportDirResult | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const [newJob, setNewJob] = useState<PullJob | null>(null);
+  const [openJobs, setOpenJobs] = useState<string[]>([]);
+  const updates = library.selection.updates;
+  const updateKey = JSON.stringify(updates.map((r) => r.filename).sort());
+  const jobs = newJob && !library.jobs.some((j) => j.id === newJob.id) ? [newJob, ...library.jobs].slice(0, 20) : library.jobs;
+  const running = jobs.some(jobRunning);
+  const runningIds = JSON.stringify(jobs.filter(jobRunning).map((job) => job.id));
+  const connected = status?.link.connected ?? library.connected;
+  const blocked = disabled || !!busy;
+  const selectionBlocked = blocked || dirty || running;
+  const uploadBlocked = useRef(disabled);
+  uploadBlocked.current = disabled;
+  const importNotices = imported ? [
+    ...imported.refused.map((r) => ({ ...r, state: 'Refused' })),
+    ...imported.skipped.map((r) => ({ ...r, state: 'Skipped' })),
+    ...imported.missing.map((filename) => ({ filename, reason: 'Missing from the folder', state: 'Missing' })),
+  ] : [];
 
-  const report: UpdateCheck | undefined = check.data;
-  const connected = status?.link?.connected ?? report?.connected ?? true;
-
-  useEffect(() => { setSelected(new Set((report?.updates ?? []).map((u) => u.filename))); }, [report?.checked_at]);
-
-  // follow a running pull until it finishes
+  useEffect(() => { setSelected([]); }, [updateKey]);
+  useEffect(() => { setOpenJobs((current) => [...new Set([...current, ...JSON.parse(runningIds) as string[]])]); }, [runningIds]);
+  // Resume newly started jobs even if the first library refresh failed.
   useEffect(() => {
-    if (!job || FINISHED.includes(job.state)) return;
-    const t = window.setTimeout(async () => {
-      try {
-        const next = await api.pullJob(job.id);
-        setJob(next);
-        if (FINISHED.includes(next.state)) {
-          void held.reload();
-          void check.reload();
-          notifications.show({ message: `Pull ${next.state}: ${next.files.filter((f) => f.state === 'done').length} of ${next.files.length} files` });
-        }
-      } catch (e) {
-        setError(errorText(e));
-      }
-    }, 1000);
-    return () => window.clearTimeout(t);
-  }, [job]);
+    if (!newJob || !jobRunning(newJob) || library.jobs.some((j) => j.id === newJob.id)) return;
+    const timer = window.setTimeout(async () => {
+      try { setNewJob(await api.pullJob(newJob.id)); await onRefresh(); }
+      catch (e) { setError(errorText(e)); setNewJob({ ...newJob }); }
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [newJob, library.jobs, onRefresh]);
 
   const act = async (what: string, fn: () => Promise<void>) => {
     setBusy(what);
     setError(null);
-    try {
-      await fn();
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(null);
+    try { await fn(); }
+    catch (e) { setError(errorText(e)); }
+    finally { setBusy(null); }
+  };
+  const upload = async () => {
+    const batch: UploadItem[] = files.map((file) => ({ file, state: 'queued' }));
+    setUploads(batch);
+    for (let i = 0; i < batch.length; i++) {
+      const item = batch[i];
+      try {
+        if (uploadBlocked.current) throw new Error('Upload stopped: check the kill switch and acting name before retrying.');
+        if (!/\.(xml|zip)$/i.test(item.file.name)) throw new Error('Choose an XML or ZIP file.');
+        if (item.file.size > 32 * 1024 * 1024) throw new Error('File exceeds the 32 MiB upload limit.');
+        batch[i] = { ...item, state: 'uploading' };
+        setUploads([...batch]);
+        const result = await api.uploadContent(item.file);
+        batch[i] = { ...item, state: 'done', result };
+        setUploads([...batch]);
+        await onRefresh().catch((e) => setError(`File imported, but the library could not refresh: ${errorText(e)}`));
+      } catch (e) {
+        batch[i] = { ...item, state: 'failed', error: errorText(e) };
+        setUploads([...batch]);
+      }
     }
+    setFiles(batch.filter((item) => item.state === 'failed').map((item) => item.file));
   };
 
-  const toggle = (f: string) => setSelected((s) => {
-    const n = new Set(s);
-    if (n.has(f)) n.delete(f); else n.add(f);
-    return n;
-  });
-
-  const est = report?.index_estimate;
-  const running = !!job && !FINISHED.includes(job.state);
-  return (
+  return <Stack gap="lg">
+    {dirty && <Alert color="yellow" title="Save your update selections">Save or discard changes in Update selections before checking, downloading, or writing a manifest.</Alert>}
+    {error && <ErrorBox error={error} />}
     <Paper withBorder p="md" radius="md">
       <Stack gap="sm">
-        <Group gap="xs"><IconCloudDownload size={18} /><Text fw={700}>Content updates</Text></Group>
-        <Text size="sm" c="dimmed">
-          DISA STIGs and SCAP benchmarks for the assets in the inventory. Downloads come only from www.cyber.mil and
-          dl.dod.cyber.mil, are verified before use, and never change a host.
-        </Text>
-
-        <Text fw={600} size="sm">Held on this node</Text>
-        {held.data ? <HeldTable held={held.data} /> : held.error ? <ErrorBox error={held.error} onRetry={() => void held.reload()} /> : <Loading what="Reading content" />}
-        {held.data && held.data.quarantine.length > 0 && (
-          <Alert color="red" variant="light" title="Quarantined">
-            {held.data.quarantine.map((q) => <Text key={q.filename + q.quarantined_at} size="xs">{q.filename}: {q.reason}</Text>)}
-          </Alert>
-        )}
-
-        <Group gap="sm" align="center">
-          <Tooltip label={connected ? `Index check: about ${fmtBytes(est?.bytes)}, ${fmtSeconds(est?.seconds)} at the current link` : 'The link is down: use the manifest below'}>
-            <span>
-              <Button loading={busy === 'check'} disabled={!connected || running}
-                onClick={() => void act('check', async () => { await api.checkUpdates('live'); await check.reload(); })}>
-                Check for updates
-              </Button>
-            </span>
-          </Tooltip>
-          {!connected && <Text size="sm" c="orange">Link down: check is disabled. Write a manifest for a connected machine instead.</Text>}
-          {connected && est && <Text size="xs" c="dimmed">about {fmtSeconds(est.seconds)} at {est.link.kbps} kbps</Text>}
-          {report?.checked_at && <Text size="xs" c="dimmed">last check {fmtAgo(report.checked_at)} ({report.source}, {report.index_entries} entries{report.gzip ? ', gzip' : ''})</Text>}
+        <Group justify="space-between"><Text fw={700}>Matching updates ({updates.length})</Text><Badge variant="light" color={connected ? 'teal' : 'orange'}>{connected ? 'Link connected' : 'Link disconnected'}</Badge></Group>
+        <Text size="sm" c="dimmed">Based on saved products and types in the {library.catalog.source === 'snapshot' ? 'snapshot' : 'last live index'}. Select files explicitly to download.</Text>
+        <LibraryTable rows={updates} label="matching updates" empty={library.selection.wanted.length ? 'No newer releases are listed for your saved selections. This does not establish freshness beyond the index shown above.' : 'No files match your saved selections. Choose products and content types in Update selections.'}
+          searchText={(r) => `${r.filename} ${r.product_key} ${r.version_label} ${kindLabel(r.kind)}`}
+          toolbar={(displayed) => <DisplayedSelection displayed={displayed} selected={selected} keyOf={(r) => r.filename} onChange={setSelected} disabled={blocked || dirty} />}
+          headings={<><Table.Th>Download</Table.Th><Table.Th>File</Table.Th><Table.Th>Available / held</Table.Th><Table.Th>Publisher date</Table.Th><Table.Th>Size</Table.Th></>}
+          render={(r) => <Table.Tr key={r.filename}>
+            <Table.Td><Checkbox aria-label={`Download ${r.filename}`} checked={selected.includes(r.filename)} disabled={blocked || dirty} onChange={(e) => setSelected(e.currentTarget.checked ? [...selected, r.filename] : selected.filter((name) => name !== r.filename))} /></Table.Td>
+            <Table.Td><Text size="xs" style={{ overflowWrap: 'anywhere' }}>{r.filename}</Text><Text size="xs" c="dimmed">{kindLabel(r.kind)}{r.targets?.length ? ` · ${r.targets.join(', ')}` : ''}</Text></Table.Td>
+            <Table.Td>{r.version_label ?? 'Not provided'}<Text size="xs" c="dimmed">Held: {r.held_version?.join('.') ?? 'none'}</Text></Table.Td>
+            <Table.Td>{fmtZonedTime(r.upload_date, 'Not provided')}</Table.Td><Table.Td>{fmtBytes(r.expected_bytes)}</Table.Td>
+          </Table.Tr>} />
+        <Group>
+          <Button loading={busy === 'pull'} disabled={selectionBlocked || !connected || !selected.length} onClick={() => void act('pull', async () => {
+            setNewJob(await api.pullUpdates({ filenames: selected.filter((name) => updates.some((r) => r.filename === name)), pace }));
+            await onRefresh();
+          })}>Download selected ({selected.length})</Button>
+          <Switch label="Pace downloads to the link rate" checked={pace} disabled={blocked} onChange={(e) => setPace(e.currentTarget.checked)} />
         </Group>
-
-        {report?.checked_at && (
-          <>
-            <UpdatesTable rows={report.updates} selected={selected} toggle={toggle} />
-            {report.updates.length > 0 && (
-              <Group gap="sm">
-                <Button loading={busy === 'pull'} disabled={!connected || running || selected.size === 0}
-                  onClick={() => void act('pull', async () => { setJob(await api.pullUpdates({ filenames: [...selected], pace })); })}>
-                  Pull selected ({selected.size})
-                </Button>
-                <Switch label="Pace to the link rate" checked={pace} onChange={(e) => setPace(e.currentTarget.checked)} />
-                {report.estimate_seconds_at_link ? <Text size="xs" c="dimmed">all updates: about {fmtSeconds(report.estimate_seconds_at_link)} at the link rate</Text> : null}
-              </Group>
-            )}
-            {report.skipped.filter((s) => s.target_id).map((s) => (
-              <Text key={s.target_id} size="xs" c="dimmed">{s.target_id}: {s.reason}</Text>
-            ))}
-          </>
-        )}
-
-        {job && <JobProgress job={job} />}
-
-        <Text fw={600} size="sm" mt="xs">Disconnected path</Text>
-        <Group gap="sm" align="flex-end">
-          <Button variant="light" loading={busy === 'manifest'}
-            onClick={() => void act('manifest', async () => {
-              const m = await api.writeManifest();
-              downloadJson('manifest.json', m);
-              notifications.show({ message: `Manifest written (${m.items.length} items): ${m.path}` });
-            })}>
-            Download manifest
-          </Button>
-          <TextInput label="Import folder on this node" placeholder="E:\stig-content" value={folder}
-            onChange={(e) => setFolder(e.currentTarget.value)} w={280} />
-          <Button variant="light" loading={busy === 'import'} disabled={!folder.trim()}
-            onClick={() => void act('import', async () => {
-              const r = await api.importDir(folder.trim());
-              setImported(r);
-              void held.reload();
-              void check.reload();
-            })}>
-            Import folder
-          </Button>
-        </Group>
-        {imported && (
-          <Stack gap={4}>
-            <Text size="sm">Imported {imported.imported.length} file(s), verified by {imported.verified_by}.</Text>
-            {imported.refused.map((r) => <Text key={r.filename} size="xs" c="red">refused {r.filename}: {r.reason}</Text>)}
-            {imported.missing.map((m) => <Text key={m} size="xs" c="orange">missing from the folder: {m}</Text>)}
-            {imported.deltas.map((d) => <DeltaRow key={d.id} d={d} />)}
-          </Stack>
-        )}
-        {error && <ErrorBox error={error} />}
+        {!connected && <Text size="sm" c="orange">Use a manifest and local import while disconnected.</Text>}
+        {library.selection.skipped.length > 0 && <Accordion variant="contained"><Accordion.Item value="skipped"><Accordion.Control>Unmatched or skipped ({library.selection.skipped.length})</Accordion.Control><Accordion.Panel>
+          <LibraryTable rows={library.selection.skipped} label="skipped entries" empty="No skipped entries." searchText={(s) => `${s.target_id} ${s.filename} ${s.product_key} ${s.reason}`}
+            headings={<><Table.Th>Item</Table.Th><Table.Th>Reason</Table.Th></>}
+            render={(s, i) => <Table.Tr key={i}><Table.Td>{s.target_id ?? s.product_key ?? s.filename ?? 'Selection'}</Table.Td><Table.Td>{s.reason}</Table.Td></Table.Tr>} />
+        </Accordion.Panel></Accordion.Item></Accordion>}
       </Stack>
     </Paper>
-  );
+
+    <Paper withBorder p="md" radius="md">
+      <Stack gap="sm">
+        <Text fw={700}>Upload from this computer</Text>
+        <Text size="sm" c="dimmed">XML or ZIP, up to 32 MiB per file. Files are validated and indexed one at a time. Uploads work offline; publisher authenticity is not verified.</Text>
+        <FileInput label="Choose content files" placeholder="Select XML or ZIP files" multiple clearable accept=".xml,.zip" value={files} onChange={setFiles} disabled={blocked} />
+        <Button loading={busy === 'upload'} disabled={blocked || !files.length} onClick={() => void act('upload', upload)} style={{ alignSelf: 'flex-start' }}>Upload {files.length || ''} file{files.length === 1 ? '' : 's'}</Button>
+        {uploads.length > 0 && <LibraryTable rows={uploads} label="upload results" empty="No uploads." searchText={(u) => `${u.file.name} ${u.state}`}
+          headings={<><Table.Th>File</Table.Th><Table.Th>Result</Table.Th></>}
+          render={(u, i) => <Table.Tr key={i}><Table.Td><Text size="sm" style={{ overflowWrap: 'anywhere' }}>{u.file.name}</Text></Table.Td><Table.Td>
+            <Badge color={u.state === 'done' ? 'teal' : u.state === 'failed' ? 'red' : 'blue'} variant="light">{u.state === 'done' ? 'Accepted' : u.state}</Badge>
+            {u.error && <Text size="xs" c="red">{u.error}</Text>}
+            {u.result && <Stack gap={4} mt={4}>
+              <Text size="xs" style={{ overflowWrap: 'anywhere' }}>{u.result.record.benchmark_id ?? u.result.record.product_key ?? 'Unmapped product'} · {u.result.record.version_label ?? u.result.record.benchmark_release ?? 'Version not provided'}</Text>
+              {u.result.record.version_label && u.result.record.benchmark_release && <Text size="xs" c="dimmed">{u.result.record.benchmark_release}</Text>}
+              <FileProvenance file={u.result.record} />
+            </Stack>}
+            {u.result?.delta && <DeltaRow d={u.result.delta} />}
+          </Table.Td></Table.Tr>} />}
+      </Stack>
+    </Paper>
+
+    <Paper withBorder p="md" radius="md">
+      <Stack gap="sm">
+        <Text fw={700}>Offline transfer</Text>
+        <Text size="sm" c="dimmed">Export a manifest for your saved selections. Retrieve its files on a connected machine, then import the folder available to this server.</Text>
+        <Group align="flex-end">
+          <Button variant="light" loading={busy === 'manifest'} disabled={selectionBlocked || !library.selection.wanted.length} onClick={() => void act('manifest', async () => {
+            const manifest = await api.writeManifest(); downloadJson('manifest.json', manifest);
+            notifications.show({ message: `Manifest exported: ${manifest.items.length} items` });
+          })}>Download manifest</Button>
+          <TextInput label="Import folder on the server" placeholder="E:\stig-content" value={folder} disabled={blocked} style={{ flex: 1, minWidth: 220 }} onChange={(e) => setFolder(e.currentTarget.value)} />
+          <Button variant="light" loading={busy === 'import'} disabled={blocked || !folder.trim()} onClick={() => void act('import', async () => {
+            setImported(await api.importDir(folder.trim())); await onRefresh();
+          })}>Import folder</Button>
+        </Group>
+        {imported && <Stack gap="sm">
+          <Text size="sm">Imported {imported.imported.length} file(s), verified by {imported.verified_by}.</Text>
+          {importNotices.length > 0 && <LibraryTable rows={importNotices} label="import notices" searchText={(r) => `${r.filename} ${r.reason}`} empty="No notices."
+            headings={<><Table.Th>File</Table.Th><Table.Th>State</Table.Th><Table.Th>Reason</Table.Th></>}
+            render={(r, i) => <Table.Tr key={i}><Table.Td>{r.filename}</Table.Td><Table.Td>{r.state}</Table.Td><Table.Td>{r.reason}</Table.Td></Table.Tr>} />}
+          {imported.deltas.map((d) => <DeltaRow key={d.id} d={d} />)}
+        </Stack>}
+      </Stack>
+    </Paper>
+
+    <Stack gap="sm">
+      <Group justify="space-between"><Text fw={700}>Transfer history</Text><Text size="xs" c="dimmed">Latest 20 jobs · active jobs refresh automatically</Text></Group>
+      {!jobs.length ? <Text size="sm" c="dimmed">No download jobs recorded.</Text> : <Accordion multiple variant="contained" value={openJobs} onChange={setOpenJobs}>
+        {jobs.map((job) => <Accordion.Item key={job.id} value={job.id}>
+          <Accordion.Control><Group gap="sm"><Badge variant="light" color={STATE_COLOR[job.state]}>{job.state}</Badge><Text size="sm">{job.files.filter((f) => f.state === 'done').length} / {job.files.length} files · {fmtZonedTime(job.created_at)}</Text><Text size="xs" c="dimmed">{job.id}</Text></Group></Accordion.Control>
+          <Accordion.Panel><JobProgress job={job} /></Accordion.Panel>
+        </Accordion.Item>)}
+      </Accordion>}
+    </Stack>
+  </Stack>;
 }

@@ -15,7 +15,7 @@ one-pager. Not a dashboard of charts. A queue of decisions with everything neede
 - Every screen has loading, empty and error states. Errors show the API `detail` verbatim.
 
 ## Shell (every page)
-- Left nav: Decisions, Mission, Findings, Assets, Scans, Audit, Reports, Settings. Commander view linked at the bottom.
+- Left nav: Decisions, Mission, Findings, Assets, Scans, STIG Library, Audit, Reports, Settings. Commander view linked at the bottom.
 - Header: product name; **kill switch** button (red, always visible; engaged state turns the whole header
   red with the reason and who engaged it; release needs a reason); **audit chain badge** (green
   "Chain verified · N records · <head8>" or red "TAMPERED at #seq"); **link indicator** (connected /
@@ -59,9 +59,45 @@ last scan, open findings by CAT. Add/edit modal with per-type fields. "Discover"
 
 ### Scans (`/scans`)
 Start scan (targets multi-select, modules check/hunt/cve). Run list with progress bars and per-target status and
-errors. **Ingest panel**: drop a STIG release (XCCDF/zip) → delta summary (added/removed/changed rules, sizes
-full vs delta vs compressed, transfer time at the current link speed) → "Rescan changed rules" button.
-Drop a bulletin (IAVM JSON) → affected hosts and new findings. Link controls (kbps, latency, connected toggle).
+errors. The ingest panel links STIG uploads and versions to the **STIG Library**. Drop a bulletin (IAVM JSON)
+→ affected hosts and new findings. Link controls (kbps, latency, connected toggle).
+
+### STIG Library (`/content`)
+
+One page for uploads, downloads, catalog versions and sync times, with searchable, paginated tables:
+
+- **Library**: local files with product/type/version and provenance; rule catalogs from earlier imports
+  and bundled reference XMLs. Bundled references are labelled separately and do not represent synchronized or
+  installed downloads. Open a product in Update selections to compare held and available releases and dates.
+- **Update selections**: defaults to matching in-scope inventory, not all STIGs. Manual mode offers persistent
+  product checkboxes, including products with no inventory target; type checkboxes select manual STIG, SRG and
+  SCAP benchmark. **Select displayed / Clear displayed** affect only the visible page. **Use inventory
+  recommendations** copies recommendations into a manual list. **Save selections** persists the draft;
+  concurrent edits require loading the latest revision. Empty products/types do not mean everything is current.
+- **Transfers / import**: separate file checkboxes and **Download selected**, optional link pacing, per-file
+  progress, the latest 20 download jobs, deltas and **Rescan changed rules**. Upload XML/ZIP files from the
+  browser computer offline, up to 32 MiB each, sequentially with individual errors and refresh after success.
+  **Download manifest** and **Import folder** support the disconnected round trip; the folder must exist on
+  the server. Unrecognized raw XML without a lock-file entry uses the 32 MiB upload validation path and shows
+  **Uploaded locally** metadata; known/lock-file content retains folder-import provenance. Folder imports require
+  a named actor and check the kill switch before starting and between files. Quarantine, per-file refusals and
+  catalog-read errors remain visible. See [CONTENT](CONTENT.md).
+
+Save or discard selection edits before a live check, download or manifest export. Opening the page,
+**Refresh local view**, selecting checkboxes and saving never download files. The reconnect switches
+`check_on_reconnect` and `auto_pull` affect reconnect only; auto-pull checks first. The server-configured periodic
+check interval is displayed separately and periodic checks never auto-download.
+
+The header distinguishes cached **Last live index** from **Snapshot index**, index save time, last successful
+live check, last download and last local import; pull-created deltas do not advance the local-import time.
+Local event times include full date/time and timezone offset;
+publisher dates remain distinct. Failed checks do not replace the last successful check. **Matches index**
+is relative to that cached index, not a claim of live freshness or executable scan coverage. Guidance catalogs
+and rule counts do not establish that a scanner can execute every rule.
+Unverified local uploads remain visible but do not suppress official updates when product/version metadata matches.
+
+Browser check reported 5 Nov 2026: a Windows 11 manual STIG uploaded offline and saved selections persisted.
+This validates the library workflow, not Windows scan coverage.
 
 ### Audit (`/audit`)
 Live timeline (newest first, auto-follow toggle). Each row: seq, time, actor, action, outcome, subject; expand for
@@ -89,10 +125,7 @@ The **detection score** card compares seeded issues with findings when the range
 
 ### Settings (`/settings`)
 
-Content updates card: held DISA content per product with version and date; **Check** (disabled, with the reason,
-while the link is down; shows the index transfer time at the link rate); the updates table with checkboxes and **Pull
-selected** with per-file progress; **Rescan changed rules** once a pull produced a delta; **Download manifest** and
-**Import folder** for the disconnected round trip (`docs/CONTENT.md`).
+**Open STIG Library** links to `/content` for subscriptions, updates and imports.
 Actor name. Model status and backend. Standing approval policy editor: enable requires signer (= actor) and
 reason; rules with asset types, max disruption, allow reboot / patch / service restart, allowlists, time window;
 "Evaluate against current queue" preview. Link emulation. Demo controls: load simulated range, reset, "force
@@ -113,7 +146,7 @@ decisions, audit head hash, link state. Refreshes every 10 s.
 cyberthunder/ui/
   package.json  vite.config.ts  tsconfig.json  index.html
   src/main.tsx  src/App.tsx  src/api/client.ts (typed fetch, X-Actor, SSE)  src/api/types.ts
-  src/pages/{Decisions,Mission,Findings,Assets,Scans,Audit,Reports,Settings,Commander}.tsx
+  src/pages/{Decisions,Mission,Findings,Assets,Scans,Content,Audit,Reports,Settings,Commander}.tsx
   src/components/{Shell,KillSwitch,ChainBadge,LinkBadge,ActorChip,ProposalCard,FindingDrawer,SeverityBadge,ApplyTimeline,...}.tsx
   dist/   built output, committed (regenerate with `npm run build`; never hand-edit)
 ```

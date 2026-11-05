@@ -140,7 +140,7 @@ export default function Scans() {
         </AsyncView>
       </Stack>
 
-      <IngestPanel onScan={added} />
+      <IngestPanel />
       <LinkControls />
     </Stack>
   );

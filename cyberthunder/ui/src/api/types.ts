@@ -440,6 +440,7 @@ export interface ContentRow {
   upload_date: string | null;
   title?: string;
   sunset?: boolean;
+  allowed?: boolean;
   targets?: string[];
   held_version?: number[] | null;
   expected_bytes?: number | null;
@@ -516,10 +517,17 @@ export interface HeldFile {
   upload_date: string | null;
   sha256: string;
   bytes: number;
-  fetched_at: string;
-  fetched_by: string;
-  source: 'pulled' | 'imported' | 'bundled';
-  ingest: { delta_id?: string; catalog_path?: string; datastream_path?: string };
+  fetched_at: string | null;
+  fetched_by: string | null;
+  source: 'pulled' | 'imported' | 'uploaded' | 'bundled';
+  benchmark_id?: string | null;
+  benchmark_release?: string | null;
+  ingest: {
+    delta_id?: string;
+    catalog_path?: string;
+    datastream_path?: string;
+    upload?: { filename: string; imported_at: string; imported_by: string; authenticity_verified: boolean };
+  };
 }
 
 export interface HeldContent {
@@ -546,6 +554,67 @@ export interface ImportDirResult {
   verified_by: string;
   deltas: PullDelta[];
 }
+
+export type LibraryKind = 'manual_stig' | 'srg' | 'scap_benchmark';
+
+export interface LibraryPreferences {
+  mode: 'inventory' | 'selected';
+  products: string[];
+  kinds: LibraryKind[];
+  check_on_reconnect: boolean;
+  auto_pull: boolean;
+  revision: number;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+export type LibraryPreferencesInput = Omit<LibraryPreferences, 'updated_at' | 'updated_by'>;
+
+export interface LibraryProduct {
+  product_key: string;
+  title: string;
+  kinds: string[];
+  recommended: boolean;
+  selected: boolean;
+  targets: string[];
+  available: ContentRow[];
+  held: HeldFile[];
+  status: 'update_available' | 'current' | 'not_downloaded' | 'unavailable';
+}
+
+export interface LibraryCatalog {
+  benchmark_id: string;
+  title: string;
+  release: string;
+  rules: number;
+  imported_at: string | null;
+  filename: string;
+  origin: 'imported_catalog' | 'bundled_reference';
+  path: string;
+}
+
+export interface StigLibrary {
+  catalog: { source: 'live' | 'snapshot'; saved_at: string | null; total_entries: number };
+  sync: {
+    last_attempt_at: string | null;
+    last_attempt_status: string | null;
+    last_error: string | null;
+    last_successful_check_at: string | null;
+    last_download_at: string | null;
+    last_import_at: string | null;
+  };
+  preferences: LibraryPreferences;
+  products: LibraryProduct[];
+  selection: { wanted: ContentRow[]; updates: ContentRow[]; current: ContentRow[]; skipped: ContentSkip[] };
+  held: HeldContent;
+  catalogs: LibraryCatalog[];
+  catalog_errors?: { filename: string; reason: string }[];
+  jobs: PullJob[];
+  connected: boolean;
+  check_interval_s: number;
+}
+
+export interface ContentUploadResult { record: HeldFile; delta: PullDelta | null }
 
 /** A Target returned by POST /discover. `facts` is set on the system that was read. */
 export interface DiscoveredTarget extends Target {

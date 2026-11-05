@@ -10,8 +10,8 @@ blank header, a bare or prefixed machine identity (`agent`, `llm`, `system`, `ag
 that actor. Request validation errors return `400` with a string `detail`, not the framework default `422`.
 
 **Errors.** `{"detail": "..."}`. `404` unknown id · `409` illegal proposal transition or duplicate live
-proposal · `403` scope violation or machine actor on a human edge · `423` kill switch engaged ·
-`400` validation · `503` adapter/transport failure (detail carries the message).
+proposal or stale preference revision · `403` scope violation or machine actor on a human edge · `423` kill-switch guard ·
+`400` invalid body/validation · `413` upload size limit · `503` adapter/transport failure (detail carries the message).
 
 **Shapes.** `Finding` = `Finding.to_dict()`. `Finding+` adds `cat` ("CAT I"), `explanation` (Explanation or null),
 `fix` (FixEntry.to_dict() or null), `proposal` ({id, state} or null), and `categories` (overlapping
@@ -134,13 +134,65 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/ingest/history` | → `{deltas: [DeltaReport], bulletins: [...]}` |
 | GET | `/outbox` | → `{connected, pending: [{name, kind, bytes, created_at}], synced: [{name, kind, bytes, synced_at, seconds}]}` |
 | POST | `/outbox/sync` | → `{sent, bytes, seconds}`; `409` if disconnected |
-| GET | `/ingest/updates` | → the last DISA content check `{checked_at, source, index_entries, index_wire_bytes, gzip, wanted, updates: [{filename, url, product_key, kind, version_label, upload_date, expected_bytes?, targets}], current, skipped: [{target_id|filename|product_key, reason}], estimate_seconds_at_link}` plus `index_estimate: {bytes, seconds, link}` and `connected`; `checked_at: null` before the first check. See [CONTENT.md](CONTENT.md) |
+| GET | `/ingest/updates` | → last-check metadata `{checked_at, source, index_entries, index_wire_bytes, gzip, estimate_seconds_at_link}` plus `wanted`, `updates`, `current`, `skipped`, `index_estimate: {bytes, seconds, link}` and `connected`. Selection is always recomputed from saved subscriptions and eligible held files, including before the first check; `checked_at` remains null until a check runs. `selection_source` identifies the local cached/snapshot index used. See [CONTENT.md](CONTENT.md) |
 | POST | `/ingest/updates/check` | `{source?: "live"|"snapshot"}` → the check report. `409` (naming the manifest path) when the link is down and source is live. Audit `content.check` |
-| POST | `/ingest/updates/pull` | `{filenames?: [..]}` or `{all_matching: true}`, `pace?` → `202` job `{id, state, files: [{filename, state, bytes, total, error, delta?, datastream_path?}], deltas}`. `409` when the link is down, `400` while the kill switch is engaged. Audit `content.fetch`, `content.fetch_failed`, `content.quarantine`, and `ingest.stig` per manual STIG |
+| POST | `/ingest/updates/pull` | `{filenames?: [..]}` or `{all_matching: true}`, `pace?` → `202` job `{id, state, files: [{filename, state, bytes, total, error, delta?, datastream_path?}], deltas}`. `409` when the link is down; pulls are blocked while the kill switch is engaged. Audit `content.fetch`, `content.fetch_failed`, `content.quarantine`, and `ingest.stig` per manual STIG |
 | GET | `/ingest/updates/jobs/{id}` | → the pull job with per-file progress; `404` if unknown |
-| GET | `/ingest/content` | → `{files: [{filename, product_key, kind, version, sha256, etag, bytes, url, fetched_at, fetched_by, source, ingest: {delta_id?, catalog_path?, datastream_path?}}], products, scap: [{product_key, filename, datastream_path}], quarantine, dir}` |
-| POST | `/ingest/manifest` | → `{generated_at, node, items: [{filename, url, product_key, kind, version, expected_bytes?, expected_etag?}], path, sha256}` written to `<state>/content/manifest.json`. Audit `content.manifest` |
-| POST | `/ingest/import-dir` | `{path}` (a folder on this node) → `{imported, refused: [{filename, reason}], skipped, missing, verified_by, deltas}`; verified against `manifest.lock.json` when present. Audit `content.import`, `content.quarantine` |
+| GET | `/ingest/content` | → `HeldContent` `{files: [HeldRecord], products, scap: [{product_key, filename, datastream_path}], quarantine, dir}`. HeldRecord includes `filename`, `product_key`, `kind`, `version`, `version_label`, `upload_date`, `sha256`, `etag`, `bytes`, `url`, `fetched_at`, `fetched_by`, `source`, and `ingest: {delta_id?, catalog_path?, datastream_path?, upload?}`. New upload records use `ingest.upload.imported_at/imported_by` with null fetch fields; duplicate bytes return the existing record without changing its provenance |
+| POST | `/ingest/manifest` | → `{generated_at, node, items: [{filename, url, product_key, kind, version, expected_bytes?, expected_etag?}], path, sha256}` for missing updates matching saved subscriptions, written to `<state>/content/manifest.json`. Audit `content.manifest` |
+| POST | `/ingest/import-dir` | `{path}` (a folder on this node) → `{imported, refused: [{filename, reason}], skipped, missing, verified_by, deltas}`; named actor required, kill-switch guard before starting and between files (`423`); invalid body `400`. Lock-file entries are verified against `manifest.lock.json`. Audit `content.import`, `content.quarantine` |
+
+Folder imports route raw XML with no lock-file entry and unrecognized content kind through the validated
+upload helper (32 MiB per file). New records use `source: "uploaded"` and `ingest.upload` import metadata;
+invalid/oversized XML is reported per file in `refused`. Lock-file and known-content imports retain their
+existing checks and `source: "imported"`. Previously accepted files remain if the kill switch stops the batch.
+
+### STIG Library and subscriptions
+
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | `/ingest/library` | → library view below; local reads only, no network requests or writes |
+| PUT | `/ingest/library/preferences` | complete preference body below → saved preferences with new `revision`, `updated_at`, `updated_by`; named actor required, audit `content.preferences`. `400` invalid body, `423` kill-switch guard, `409` stale revision; saves only, never downloads |
+| POST | `/ingest/content/upload` | multipart `file`, exactly one supported XML or ZIP benchmark package, at most 32 MiB → `201 {record: HeldRecord, delta: PullDelta\|null}`. Named actor required, kill-switch guarded; works offline. `400` invalid content, `413` size limit, `423` kill switch |
+
+The library response contains:
+
+- `catalog: {source: "live"|"snapshot", saved_at, total_entries}`: cached public index or bundled snapshot.
+  `live` means the cache came from a live check, not that this GET contacted the publisher.
+- `sync: {last_attempt_at, last_attempt_status, last_error, last_successful_check_at, last_download_at,
+  last_import_at}`: nullable timestamps/status; successful live checks, downloads and local imports are distinct.
+  Snapshot checks do not advance `last_successful_check_at`; deltas created by pulls do not advance `last_import_at`.
+- `preferences: {mode, products, kinds, check_on_reconnect, auto_pull, revision, updated_at, updated_by}`.
+- `products: [{product_key, title, kinds, recommended, selected, targets, available, held, status}]`:
+  one row per indexed product, including unavailable retired/external-only entries. `available` rows include
+  `filename`, `kind`, `version_label`, `upload_date`, `sunset`, `allowed`, `url`; `held` contains HeldRecords.
+  `status` is `update_available`, `current`, `not_downloaded` or `unavailable`, relative to the local index.
+- `selection: {products, wanted, updates, current, skipped}`: recalculated from saved preferences and held files,
+  even before a first live check. Content rows include product, type, version, publisher date and target IDs;
+  skipped rows explain why content did not match. Unverified local uploads do not satisfy official update
+  comparisons, even with matching product/version metadata; downloaded files and legacy imports retain their
+  existing comparison behavior.
+- `held: HeldContent`; `catalogs: [{benchmark_id, title, release, rules, imported_at, filename, origin, path}]`,
+  where `origin` is `imported_catalog` or `bundled_reference`; `catalog_errors: [{filename, reason}]`.
+  Legacy catalog imports remain visible. Bundled references are not synchronized/installed downloads, and
+  catalog rule counts do not imply executable scan coverage.
+- `jobs`: latest 20 PullJobs; `connected`: link state; `check_interval_s`: server-configured periodic interval.
+
+Send all six writable fields to save preferences, using the revision returned by GET; omit timestamps/actor:
+
+```json
+{"mode":"selected","products":["RHEL_9"],"kinds":["manual_stig","srg","scap_benchmark"],"check_on_reconnect":true,"auto_pull":false,"revision":0}
+```
+
+Defaults are `mode: "inventory"`, all three kinds and an empty manual product list. Inventory mode follows
+in-scope asset matches, not all STIGs; `selected` uses product keys without requiring targets. Empty selected
+products or kinds yield no matching files. Reconnect defaults inherit server settings (normally true/false).
+`auto_pull` checks then pulls matching updates on reconnect only, even if `check_on_reconnect` is false.
+Manual/periodic checks never auto-pull; `CT_CONTENT_CHECK_INTERVAL_SECONDS` sets the periodic interval (0 = off).
+
+Save before check/pull/manifest calls: all-matching pulls and manifests use persisted subscriptions. Uploads
+validate/index content without running it or verifying publisher authenticity; multiple browser files require
+sequential requests. Legacy STIG import, check, pull, job, manifest and folder-import endpoints remain available.
 
 ## Reports
 | GET | `/reports/history` | `?q&kind&target&from_date&to_date&offset&limit` → `{reports, total, offset, limit}`; keyword search covers saved contents and metadata; kind is `commander`, `poam`, `checklist` or `target`; dates are inclusive UTC `YYYY-MM-DD`; limit defaults to 20 (max 100) |

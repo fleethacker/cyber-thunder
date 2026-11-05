@@ -6,6 +6,7 @@ import type {
   DiscoveryStatus, Explanation, FindingPlus, FindingsPage, FindingsQuery, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
   Outbox, PolicyDecision, ProposalDiff, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
   ReportHistory, SavedReportContent, TargetOutcome, TargetReport, UpdateCheck,
+  ContentUploadResult, LibraryPreferences, LibraryPreferencesInput, StigLibrary,
 } from './types';
 
 export const API_BASE = '/api/v1';
@@ -176,6 +177,13 @@ export const api = {
   pullUpdates: (body: { filenames?: string[]; all_matching?: boolean; pace?: boolean }) => post<PullJob>('/ingest/updates/pull', body),
   pullJob: (id: string) => get<PullJob>(`/ingest/updates/jobs/${enc(id)}`),
   content: () => get<HeldContent>('/ingest/content'),
+  stigLibrary: () => get<StigLibrary>('/ingest/library'),
+  saveLibraryPreferences: (body: LibraryPreferencesInput) => put<LibraryPreferences>('/ingest/library/preferences', body),
+  uploadContent: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<ContentUploadResult>('POST', '/ingest/content/upload', { form });
+  },
   writeManifest: () => post<ContentManifest>('/ingest/manifest'),
   importDir: (path: string) => post<ImportDirResult>('/ingest/import-dir', { path }),
   outbox: () => get<Outbox>('/outbox'),
