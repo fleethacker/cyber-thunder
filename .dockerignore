@@ -1,0 +1,11 @@
+**
+!Dockerfile
+!pyproject.toml
+!requirements.txt
+!cyberthunder/
+!cyberthunder/**
+cyberthunder/**/__pycache__
+cyberthunder/**/*.pyc
+cyberthunder/ui/node_modules
+cyberthunder/ui/dist
+cyberthunder/ui/*.tsbuildinfo
