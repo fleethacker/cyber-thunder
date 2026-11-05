@@ -217,17 +217,17 @@ intact (hash-linked, checkpoint matches).
   `containers.json` named only `sim-k8s-01` / `sim-docker-01`, so real-range findings scored as
   `not_scanned`. They now carry `target: acd-k3s` / `acd-containers` with the simulated id moved to
   `sim_target`, mirroring `linux.json`. The simulated demo still scores through `sim_target`.
-- **Five real detections were not credited by the scoreboard (fixed in this PR).** k8s M2/M3/M5 (apiserver
-  `anonymous-auth`, kubelet `read-only-port`, missing audit log) are detected on the node as
-  `CNTR-K8-000360/000330/000610` against `-/node/acd-target-01`, but the key's `object` named the simulated
-  apiserver/kubelet pod; on k3s the control plane runs in-process, not as a pod (see
-  [k8s/README.md](k8s/README.md)). These rules fire once, so the redundant `object` was dropped and the
-  `rule` id now credits both the real node finding and the simulated pod. Linux M5/M6 (ctrl-alt-del,
-  world-writable dir) are detected by OpenSCAP as `xccdf_org.ssgproject.content_rule_*`, while the simulator
-  emits the native `linux:` id; both carry the same `fix_ref` (`ssg:disable_ctrlaltdel_reboot`,
-  `ssg:dir_perms_world_writable_system_owned`), so those two items are now matched by `fix_ref` (the key's
-  existing detector/fix_ref fallback) instead of a simulator-only `check_id`. The simulated range still
-  scores 100% (`tests/report`), so the scoreboard now reads 28/28 on both ranges.
+- **Five real detections were not credited by the scoreboard (fixed in this PR, in the scorer; the answer keys
+  and their fields are unchanged).** k8s M2/M3/M5 (apiserver `anonymous-auth`, kubelet `read-only-port`,
+  missing audit log) are detected on the node as `CNTR-K8-000360/000330/000610` against `-/node/acd-target-01`,
+  while the key's `object` names the simulated apiserver/kubelet pod under `kube-system/pod/`; on k3s the control
+  plane runs in-process, not as a pod (see [k8s/README.md](k8s/README.md)). `cyberthunder/report/score.py` now
+  credits a node-scoped control-plane finding (rule id ending in `:-/node/<node>`) against a `kube-system/pod/*`
+  object. Linux M5/M6 (ctrl-alt-del, world-writable dir) are detected by OpenSCAP as
+  `xccdf_org.ssgproject.content_rule_*`, while the simulator emits the native `linux:` id; both carry the same
+  `fix_ref` (`ssg:disable_ctrlaltdel_reboot`, `ssg:dir_perms_world_writable_system_owned`), so the scorer falls
+  back to an item's `fix_ref` when the finding carries that exact vetted fix. The simulated range still scores
+  100% (`tests/report`), so the scoreboard now reads 28/28 on both ranges.
 
 Reproduce: build with `range/vmware/new-range-vm.ps1`, seed per [vmware/README.md](vmware/README.md), then
 run the commands above with `CT_STATE_DIR` pointed at a scratch directory.
