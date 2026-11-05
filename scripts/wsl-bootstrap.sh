@@ -91,4 +91,6 @@ Ready. In a new shell:
   cd $CLONE_DIR && ./deploy.sh dev
 The first deployment downloads the UDS Core packages (several GB). When it finishes, verify.sh runs and the
 script prints the Podinfo, Keycloak and Grafana addresses, which also open from a Windows browser.
+Keep one wsl.exe session open while the cluster is in use (WSL stops the instance a minute after the last
+session closes); docs/DEPLOYMENT.md shows a hidden keep-alive session and the .wslconfig idle timeout.
 EOF

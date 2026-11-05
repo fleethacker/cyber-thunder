@@ -34,11 +34,9 @@ HEREDOC_RE = re.compile(r"<<-?\s*'?(?P<tag>[A-Za-z_][A-Za-z0-9_]*)'?\s*$")
 # DNS-1123 subdomain (object names, namespaces) and label (container names).
 RE_K8S_NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")
 RE_K8S_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
-# RBAC objects (cluster- and namespace-scoped) may carry ':' (system:controller:bootstrap-signer, a
-# built-in RoleBinding in kube-system on every real cluster); still no spaces or shell characters.
+# RBAC objects (roles, bindings, cluster or namespaced) are path-segment names and carry ':'
+# (system:controller:bootstrap-signer in kube-system); still no spaces or shell characters
 RE_RBAC_NAME = re.compile(r"^[a-z0-9]([-a-z0-9.:]{0,251}[a-z0-9])?$")
-# Namespaced RBAC kinds whose names may contain ':' (cluster-scoped ones are handled below).
-RBAC_NAME_KINDS = {"roles", "rolebindings"}
 
 # kind aliases -> canonical plural resource
 KIND_ALIASES = {
@@ -57,6 +55,7 @@ KIND_ALIASES = {
     "svc": "services", "service": "services", "services": "services",
 }
 CLUSTER_SCOPED = {"namespaces", "nodes", "clusterroles", "clusterrolebindings"}
+RBAC_KINDS = {"roles", "rolebindings", "clusterroles", "clusterrolebindings"}
 # canonical plural -> (singular used in commands, API kind, apiVersion)
 KIND_INFO = {
     "pods": ("pod", "Pod", "v1"),
@@ -96,14 +95,14 @@ class ObjRef:
         if plural is None:
             raise ValueError(f"unsupported kind {self.kind!r}")
         object.__setattr__(self, "kind", KIND_INFO[plural][0])
+        name_re = RE_RBAC_NAME if plural in RBAC_KINDS else RE_K8S_NAME
         if plural in CLUSTER_SCOPED:
             object.__setattr__(self, "namespace", None)
-            if not RE_RBAC_NAME.match(self.name or ""):
+            if not name_re.match(self.name or ""):
                 raise ValueError(f"invalid object name {self.name!r}")
         else:
             if not self.namespace or not RE_K8S_NAME.match(self.namespace):
                 raise ValueError(f"invalid namespace {self.namespace!r}")
-            name_re = RE_RBAC_NAME if plural in RBAC_NAME_KINDS else RE_K8S_NAME
             if not name_re.match(self.name or ""):
                 raise ValueError(f"invalid object name {self.name!r}")
         if self.container is not None and not RE_K8S_LABEL.match(self.container):

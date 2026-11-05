@@ -91,7 +91,7 @@ if [ ! -s "$bundle_file" ]; then
   exit 1
 fi
 
-deploy_packages=uds-k3d-dev,init,core,podinfo
+deploy_packages=uds-k3d-dev,init,core,podinfo,nginx-bad
 if [ "$development_mode" = true ]; then
   mkdir -p .build/identity
   python3 - <<'PY'
@@ -111,9 +111,9 @@ PY
     "$UDS_CONFIG" > "$generated_config"
   mv "$generated_config" .build/identity/uds-config.yaml
   export UDS_CONFIG="$repository_dir/.build/identity/uds-config.yaml"
-  deploy_packages=uds-k3d-dev,init,core,identity-bootstrap,podinfo
+  deploy_packages=uds-k3d-dev,init,core,identity-bootstrap,podinfo,nginx-bad
   if [ "$reuse_cluster" = true ]; then
-    deploy_packages=identity-bootstrap,podinfo
+    deploy_packages=identity-bootstrap,podinfo,nginx-bad
   fi
 fi
 

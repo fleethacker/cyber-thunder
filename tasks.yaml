@@ -16,7 +16,11 @@ tasks:
         cmd: uds zarf dev lint packages/identity-bootstrap
       - description: Build the development identity package.
         cmd: uds zarf package create packages/identity-bootstrap --architecture ${UDS_ARCH} --output .build --confirm
-      - description: Build the k3d, init, Core, and Podinfo bundle.
+      - description: Validate the nginx-bad demo target package.
+        cmd: uds zarf dev lint packages/nginx-bad
+      - description: Build the nginx-bad demo target package.
+        cmd: uds zarf package create packages/nginx-bad --architecture ${UDS_ARCH} --output .build --confirm
+      - description: Build the k3d, init, Core, Podinfo, and nginx-bad bundle.
         cmd: uds create bundles/k3d-demo --architecture ${UDS_ARCH} --output .build --confirm
 
   - name: build-existing

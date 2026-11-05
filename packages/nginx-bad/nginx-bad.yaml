@@ -1,0 +1,88 @@
+# nginx-bad: the Cyber Thunder demo target.
+#
+# A deliberately sloppy nginx on a stale RHEL 9.6 UBI image, so Cyber Thunder has
+# real Kubernetes STIG, RHEL 9 STIG and CVE findings to surface. Every misconfig
+# below survives UDS Pepr's restricted-profile enforcement.
+#
+# What the Kubernetes checks should find:
+#   - CNTR-K8-000290         : workload runs in the default namespace
+#   - CNTR-K8-001160         : env var sources its value from a Secret
+#   - k8s:ct:resource-limits : no CPU or memory limits
+#   - CIS-K8s-5.1.5          : default service account token automounted
+#   - CIS-K8s-5.3.2          : namespace has no NetworkPolicy
+#
+# The stale tag is the CVE story. This package ships only the stale image, so
+# getting a patched one is left to Cyber Thunder. Because the tag is pinned,
+# k8s:ct:image-latest does not fire here.
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nginx-bad-secret
+  namespace: default
+type: Opaque
+stringData:
+  api-token: "demo-only-not-a-real-secret"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-bad
+  namespace: default
+  labels:
+    app: nginx-bad
+    demo.cyberthunder.io/target: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-bad
+  template:
+    metadata:
+      labels:
+        app: nginx-bad
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          # Stale RHEL 9.6 image with known CVEs.
+          image: registry.access.redhat.com/ubi9/nginx-124:1-1756913337
+          imagePullPolicy: IfNotPresent
+          # The image's default command only prints usage text, so start nginx here.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo '<h1>nginx-bad: Cyber Thunder demo target</h1>' > /opt/app-root/src/index.html
+              exec nginx -g 'daemon off;'
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: nginx-bad-secret
+                  key: api-token
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-bad
+  namespace: default
+spec:
+  selector:
+    app: nginx-bad
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

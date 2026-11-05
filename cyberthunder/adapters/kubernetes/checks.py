@@ -11,6 +11,8 @@ because the STIG has no rule for that exact pod field; the description says so.
 """
 from __future__ import annotations
 
+import logging
+
 import json
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -437,6 +439,8 @@ def check_service_accounts(target, data: KubeData) -> list[Finding]:
     return out
 
 
+log = logging.getLogger(__name__)
+
 ANON_SUBJECTS = {"system:anonymous", "system:unauthenticated"}
 
 
@@ -445,10 +449,17 @@ def is_default_sa(subj: dict) -> bool:
 
 
 def bindings(data: KubeData) -> Iterator[tuple[ObjRef, dict]]:
+    """Every binding as an addressable reference; one unaddressable object is skipped, not fatal."""
     for b in data.items("clusterrolebindings"):
-        yield ObjRef(None, "clusterrolebinding", b["metadata"]["name"]), b
+        try:
+            yield ObjRef(None, "clusterrolebinding", b["metadata"]["name"]), b
+        except (ValueError, KeyError) as e:
+            log.warning("skipping clusterrolebinding: %s", e)
     for b in data.items("rolebindings"):
-        yield ObjRef(b["metadata"]["namespace"], "rolebinding", b["metadata"]["name"]), b
+        try:
+            yield ObjRef(b["metadata"]["namespace"], "rolebinding", b["metadata"]["name"]), b
+        except (ValueError, KeyError) as e:
+            log.warning("skipping rolebinding: %s", e)
 
 
 def check_rbac(target, data: KubeData) -> list[Finding]:
