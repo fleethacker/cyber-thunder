@@ -219,5 +219,5 @@ def load_delta(store: "StateStore", delta_id: str) -> DeltaReport:
 
 
 def list_deltas(store: "StateStore") -> list[dict]:
-    out = [store.read_json(p) for p in deltas_dir(store).glob("*.json")]
+    out = [store.read_json(p) for p in store.list_json(deltas_dir(store))]
     return sorted((d for d in out if d), key=lambda d: d.get("created_at", ""), reverse=True)

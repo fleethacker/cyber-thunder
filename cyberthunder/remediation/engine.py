@@ -48,6 +48,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Iterable
 
 from cyberthunder.control import policy as policy_mod
+from cyberthunder.control.approvals import TERMINAL as approvals_terminal
 from cyberthunder.control.approvals import TRANSITIONS, IllegalTransition, Proposal, ProposalState
 from cyberthunder.control.identity import require_human
 from cyberthunder.control.killswitch import KillSwitchEngaged
@@ -62,7 +63,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = logging.getLogger(__name__)
 
-TERMINAL = {"denied", "cancelled", "verified", "rolled_back"}
+TERMINAL = approvals_terminal
 NOTE_CHARS = 300
 RUNBOOK_NOTE = "runbook issued to operator; verify after the steps are done"
 FIX_HEADER = "# cyberthunder-fix: "          # the Linux adapter refuses a payload whose header names another fix
@@ -240,22 +241,18 @@ class RemediationEngine:
             risk = f"{exp.risk} {getattr(exp, 'impact', '') or ''}".strip()
         else:
             risk = self._template_risk(finding)
+        meta = {"risk_tags": entry.risk_tags(), "severity": finding.severity.value,
+                "asset_type": entry.asset_type or finding.asset_type, "fix_sha256": fix_digest(entry)}
+        # meta goes in with the proposal, under the gate's lock; the gate also answers with the live proposal
+        # another worker created for this finding a moment ago instead of a second one
         p = self.ctx.gate.propose(actor=actor, finding_id=finding.id, host=finding.host, title=finding.title,
                                   fix_ref=entry.fix_ref, fix_preview=entry.preview_text(),
                                   rollback_plan=entry.rollback_plan_text(), risk=risk,
-                                  citations=list(finding.citations[:8]))
-        if p.history:
-            p.history[0]["meta"] = {"risk_tags": entry.risk_tags(), "severity": finding.severity.value,
-                                    "asset_type": entry.asset_type or finding.asset_type,
-                                    "fix_sha256": fix_digest(entry)}
-            self._persist_gate()
-        snapshot.save_result(self.ctx.store.snapshot_dir(p.id), "fix", entry)
+                                  citations=list(finding.citations[:8]), meta=meta, one_live_per_finding=True)
+        snap = self.ctx.store.snapshot_dir(p.id)
+        if p.fix_ref == entry.fix_ref and not (snap / "fix.json").exists():
+            snapshot.save_result(snap, "fix", entry)
         return p
-
-    def _persist_gate(self) -> None:
-        save = getattr(self.ctx.gate, "_save", None)
-        if callable(save):
-            save()
 
     def auto_propose(self, findings: Iterable[Finding], *, actor: str = "agent") -> list[Proposal]:
         """Propose fixes for open findings. Returns only the proposals created by this call.
@@ -275,7 +272,11 @@ class RemediationEngine:
             if p is None or (prior is not None and prior.id == p.id):
                 continue
             created.append(p)
-            self._apply_policy(p, f)
+            if p.state is ProposalState.PROPOSED:      # another worker may have proposed and auto-approved it already
+                try:
+                    self._apply_policy(p, f)
+                except IllegalTransition:
+                    continue
         return created
 
     def _apply_policy(self, p: Proposal, finding: Finding) -> None:

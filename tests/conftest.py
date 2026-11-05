@@ -18,10 +18,17 @@ def fixtures_dir() -> Path:
     return FIXTURES
 
 
-@pytest.fixture
-def state_dir(tmp_path, monkeypatch) -> Path:
-    """Isolated state directory; also clears the kill-switch env override."""
+# Every test that takes a state directory runs once per document backend (json files, sqlite); the backend
+# reaches AppContext, StateStore and CLI subprocesses through CT_STATE_BACKEND. CT_STATE_BACKENDS=json narrows
+# a local run to one backend; the gate runs both.
+STATE_BACKENDS = tuple(b.strip() for b in os.environ.get("CT_STATE_BACKENDS", "json,sqlite").split(",") if b.strip())
+
+
+@pytest.fixture(params=STATE_BACKENDS)
+def state_dir(tmp_path, monkeypatch, request) -> Path:
+    """Isolated state directory on the parametrized backend; also clears the kill-switch env override."""
     monkeypatch.delenv("CT_KILL", raising=False)
+    monkeypatch.setenv("CT_STATE_BACKEND", request.param)
     d = tmp_path / "state"
     d.mkdir()
     return d

@@ -373,7 +373,7 @@ def save_bulletin(store: "StateStore", bulletin: Bulletin, extra: dict | None = 
 
 
 def list_bulletins(store: "StateStore") -> list[dict]:
-    out = [store.read_json(p) for p in bulletins_dir(store).glob("*.json")]
+    out = [store.read_json(p) for p in store.list_json(bulletins_dir(store))]
     return sorted((d for d in out if d), key=lambda d: d.get("ingested_at", ""), reverse=True)
 
 
