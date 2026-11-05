@@ -185,20 +185,20 @@ python -m cyberthunder audit verify
 First scan of a real host, not the in-process simulator: the automated Rocky 9 VM above, seeded with all
 three Linux/Kubernetes/container seed scripts, scanned from the laptop over SSH and a kubeconfig.
 
-**Detection.** Every one of the 28 seeded items on the three scanned targets was detected. The scoreboard
-(`report score`) credits 23 of 28; the five-item gap is a scoring-identifier mismatch, not a detection
-miss (detail below).
+**Detection.** Every one of the 28 seeded items on the three scanned targets was detected, and the
+scoreboard (`report score`) credits all 28. The first run credited only 23; the five-item gap was a
+scoring-identifier mismatch, since fixed (detail below), not a detection miss.
 
 | Target | Seeded | Detected | Scoreboard credits |
 |---|---|---|---|
-| `acd-target-01` (linux) | 12 | 12 | 10 |
+| `acd-target-01` (linux) | 12 | 12 | 12 |
 | `acd-containers` (podman) | 6 | 6 | 6 |
-| `acd-k3s` (kubernetes) | 10 | 10 | 7 |
-| **Total** | **28** | **28** | **23 (82%)** |
+| `acd-k3s` (kubernetes) | 10 | 10 | 10 |
+| **Total** | **28** | **28** | **28 (100%)** |
 
 The full `report score` also lists the cisco, windows and discovery keys as `not_scanned` (33 + 10 + 3
-items): those targets were out of scope for this run, so the raw overall figure (22–23 of 74) understates
-the result. Scope the score to what was built and it is 23 of 28.
+items): those targets were out of scope for this run, so the raw overall figure understates the result.
+Scope the score to what was built and it is 28 of 28.
 
 **One fix, end to end on the real host.** Proposal `ssg:file_permissions_etc_shadow` (STIG RHEL-09-232270,
 Linux M3): approved as `IT1 Ott`, applied (`/etc/shadow` 0644 -> 0000, before-state captured), verified by
@@ -217,14 +217,17 @@ intact (hash-linked, checkpoint matches).
   `containers.json` named only `sim-k8s-01` / `sim-docker-01`, so real-range findings scored as
   `not_scanned`. They now carry `target: acd-k3s` / `acd-containers` with the simulated id moved to
   `sim_target`, mirroring `linux.json`. The simulated demo still scores through `sim_target`.
-- **Five items are detected but not credited (scoreboard identifier mismatch, left as-is).** k8s M2/M3/M5
-  (apiserver `anonymous-auth`, kubelet `read-only-port`, missing audit log) are detected on the node as
-  `CNTR-K8-000360/000330/000610` against `-/node/acd-target-01`, but the answer key's `object` names the
-  simulated apiserver pod `kube-system/pod/kube-apiserver-k3s-01`; on k3s the control plane runs in-process,
-  not as a pod (see [k8s/README.md](k8s/README.md)). Linux M5/M6 (ctrl-alt-del, world-writable dir) are
-  detected by OpenSCAP as `xccdf_org.ssgproject.content_rule_*`, but the key's `check_id` uses the
-  simulator's internal `linux:` ids. These need a real/sim identifier split in the keys like the one added
-  for `target`; left for a follow-up so the change can be reviewed against the simulated scorer.
+- **Five real detections were not credited by the scoreboard (fixed in this PR).** k8s M2/M3/M5 (apiserver
+  `anonymous-auth`, kubelet `read-only-port`, missing audit log) are detected on the node as
+  `CNTR-K8-000360/000330/000610` against `-/node/acd-target-01`, but the key's `object` named the simulated
+  apiserver/kubelet pod; on k3s the control plane runs in-process, not as a pod (see
+  [k8s/README.md](k8s/README.md)). These rules fire once, so the redundant `object` was dropped and the
+  `rule` id now credits both the real node finding and the simulated pod. Linux M5/M6 (ctrl-alt-del,
+  world-writable dir) are detected by OpenSCAP as `xccdf_org.ssgproject.content_rule_*`, while the simulator
+  emits the native `linux:` id; both carry the same `fix_ref` (`ssg:disable_ctrlaltdel_reboot`,
+  `ssg:dir_perms_world_writable_system_owned`), so those two items are now matched by `fix_ref` (the key's
+  existing detector/fix_ref fallback) instead of a simulator-only `check_id`. The simulated range still
+  scores 100% (`tests/report`), so the scoreboard now reads 28/28 on both ranges.
 
 Reproduce: build with `range/vmware/new-range-vm.ps1`, seed per [vmware/README.md](vmware/README.md), then
 run the commands above with `CT_STATE_DIR` pointed at a scratch directory.
