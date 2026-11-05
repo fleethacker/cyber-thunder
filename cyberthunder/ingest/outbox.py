@@ -1,13 +1,13 @@
 """Sync-on-reconnect outbox.
 
 Reports, POA&Ms, audit extracts and scan summaries for shore are queued here while the link is down and
-sent when it comes back. Each entry is two files in <state_dir>/outbox/:
+staged locally when attempts are permitted. Each entry is two files in <state_dir>/outbox/:
 
   <stamp>-<rand>-<name>      the payload, exactly as it will be sent
   <stamp>-<rand>-<name>.meta.json   kind, name, size, sha256, when and by whom it was queued, caller metadata
 
-sync() moves both files to <state_dir>/synced/ and records the transfer time the emulated link implies.
-Nothing is deleted: synced/ is the record of what left the ship.
+sync() moves both files to <state_dir>/synced/. This is local staging, not network
+delivery. Optional test estimates never become network observations.
 """
 from __future__ import annotations
 
@@ -91,8 +91,9 @@ class Outbox:
         return {"pending": self._entries(self.pending_dir), "synced": self._entries(self.synced_dir)}
 
     def sync(self, force: bool = False, *, actor: str = "operator") -> dict[str, Any]:
-        """Send everything pending. force=True sends even when the link is marked down (manual courier)."""
+        """Stage pending files locally. force=True permits manual courier staging while offline."""
         state = self.link.state()
+        self.link.kill.guard("outbox.sync", actor)
         if not state.connected and not force:
             if self.audit is not None:
                 self.audit.append("outbox.sync", actor, {"pending": len(self._entries(self.pending_dir))},
@@ -101,15 +102,18 @@ class Outbox:
         sent: list[dict] = []
         total = 0
         seconds = 0.0
+        started = time.monotonic()
         with self._lock:
             self.synced_dir.mkdir(parents=True, exist_ok=True)
             for entry in self._entries(self.pending_dir):
+                self.link.kill.guard("outbox.sync", actor)
                 src = self.pending_dir / entry["id"]
                 if not src.exists():
                     continue
                 n = src.stat().st_size
                 secs = transfer_seconds(n, state)
-                entry.update(status="synced", synced_at=utcnow(), synced_by=actor, transfer_seconds=secs,
+                entry.update(status="synced", synced_at=utcnow(), synced_by=actor, transfer_seconds=None,
+                             transfer_kind="local_move", test_estimate_seconds=secs,
                              forced=bool(force and not state.connected),
                              link={"kbps": state.kbps, "latency_ms": state.latency_ms})
                 os.replace(src, self.synced_dir / entry["id"])
@@ -117,8 +121,10 @@ class Outbox:
                 (self.pending_dir / (entry["id"] + META_SUFFIX)).unlink(missing_ok=True)
                 sent.append(entry)
                 total += n
-                seconds += secs
-        result = {"sent": len(sent), "bytes": total, "seconds": round(seconds, 3), "forced": bool(force),
+                seconds += secs or 0
+        result = {"sent": len(sent), "bytes": total, "seconds": round(time.monotonic() - started, 6),
+                  "transfer_kind": "local_move", "test_estimate_seconds": round(seconds, 3) if state.mode == "test" else None,
+                  "forced": bool(force),
                   "entries": [e["id"] for e in sent]}
         if self.audit is not None:
             self.audit.append("outbox.sync", actor, result)

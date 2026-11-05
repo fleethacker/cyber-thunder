@@ -108,22 +108,23 @@ def test_delta_payload_and_ratio(bench_pair):
 
 
 def test_transfer_seconds_at_56k():
-    st = LinkState(kbps=56, latency_ms=500, connected=True)
+    st = LinkState(mode="test", kbps=56, latency_ms=500, connected=True)
     assert transfer_seconds(7000, st) == pytest.approx(7000 * 8 / 56000 + 0.5)
     assert transfer_seconds(0, st) == 0.5
     with pytest.raises(ValueError):
-        transfer_seconds(1, LinkState(kbps=0))
+        transfer_seconds(1, LinkState(mode="test", kbps=0))
 
 
 def test_link_defaults_persist_and_audit(ctx):
     link = Link(ctx.store, ctx.settings, ctx.audit)
-    assert link.state().kbps == 56.0 and link.connected
-    st = link.set(actor="it2.smith", kbps=9.6, latency_ms=600, connected="false")
+    assert link.state().kbps is None and link.connected
+    st = link.set(actor="it2.smith", mode="test", kbps=9.6, latency_ms=600, connected="false")
     assert (st.kbps, st.latency_ms, st.connected) == (9.6, 600, False)
     assert Link(ctx.store, ctx.settings).state().kbps == 9.6
     rec = list(ctx.audit.records())[-1]
     assert rec["action"] == "link.change" and rec["actor"] == "it2.smith"
-    assert rec["details"]["changed"]["connected"] == {"from": True, "to": False}
+    assert rec["details"]["controls"]["mode"] == "test"
+    assert rec["details"]["controls"]["test_connected"] is False
     with pytest.raises(ValueError):
         link.set(actor="x", kbps=-1)
     with pytest.raises(ValueError):

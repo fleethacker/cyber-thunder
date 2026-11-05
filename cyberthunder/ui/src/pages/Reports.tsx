@@ -3,6 +3,7 @@ import { Badge, Button, Card, Group, Paper, Progress, Select, SimpleGrid, Stack,
 import { notifications } from '@mantine/notifications';
 import { IconCloudUpload, IconDownload, IconSend } from '@tabler/icons-react';
 import { useState, useEffect } from 'react';
+import { linkLabel } from '../lib/linkPresentation';
 import { api, ApiError, errorText, url, request } from '../api/client';
 import { ErrorBox, Loading, Mono, PageTitle } from '../components/common';
 import { fmtBytes, fmtSeconds, fmtTime } from '../lib/format';
@@ -66,7 +67,7 @@ function OutboxCard() {
     setError(null);
     try {
       const r = await api.sync();
-      notifications.show({ message: `Synced ${r.sent} items, ${fmtBytes(r.bytes)} in ${fmtSeconds(r.seconds)}` });
+      notifications.show({ message: `Locally staged ${r.sent} items, ${fmtBytes(r.bytes)} in ${fmtSeconds(r.seconds)}` });
       await Promise.all([st.reload(), refresh()]);
     } catch (e) {
       setError(errorText(e));
@@ -78,8 +79,8 @@ function OutboxCard() {
     <Card withBorder radius="md">
       <Stack gap="xs">
         <Group justify="space-between">
-          <Group gap="xs"><Text fw={700}>Sync outbox</Text>{st.data && <Badge color={st.data.connected ? 'teal' : 'orange'} variant="light">{st.data.connected ? 'link up' : 'link down'}</Badge>}</Group>
-          <Button size="xs" leftSection={<IconCloudUpload size={14} />} loading={busy} disabled={!st.data?.connected || !st.data?.pending.length} onClick={() => void sync()}>Sync now</Button>
+          <Group gap="xs"><Text fw={700}>Local outbox staging</Text>{st.data && <Badge color={st.data.connected ? 'teal' : 'orange'} variant="light">{linkLabel(st.data.link)}</Badge>}</Group>
+          <Button size="xs" leftSection={<IconCloudUpload size={14} />} loading={busy} disabled={!st.data?.connected || !st.data?.pending.length} onClick={() => void sync()}>Stage locally</Button>
         </Group>
         {error && <ErrorBox error={error} />}
         {st.data === undefined ? (st.error ? <ErrorBox error={st.error} onRetry={() => void st.reload()} /> : <Loading />) : (
@@ -96,10 +97,10 @@ function OutboxCard() {
             )}
             {st.data.synced.length > 0 && (
               <Table withTableBorder striped>
-                <Table.Thead><Table.Tr><Table.Th>Synced</Table.Th><Table.Th>Kind</Table.Th><Table.Th>Size</Table.Th><Table.Th>Took</Table.Th></Table.Tr></Table.Thead>
+                <Table.Thead><Table.Tr><Table.Th>Staged locally</Table.Th><Table.Th>Kind</Table.Th><Table.Th>Size</Table.Th><Table.Th>Timing basis</Table.Th></Table.Tr></Table.Thead>
                 <Table.Tbody>
                   {st.data.synced.slice(-10).reverse().map((o) => (
-                    <Table.Tr key={o.id ?? `${o.name}-${o.synced_at}`}><Table.Td><Mono>{o.name}</Mono></Table.Td><Table.Td>{o.kind}</Table.Td><Table.Td>{fmtBytes(o.bytes)}</Table.Td><Table.Td>{fmtSeconds(o.seconds)}</Table.Td></Table.Tr>
+                    <Table.Tr key={o.id ?? `${o.name}-${o.synced_at}`}><Table.Td><Mono>{o.name}</Mono></Table.Td><Table.Td>{o.kind}</Table.Td><Table.Td>{fmtBytes(o.bytes)}</Table.Td><Table.Td>{o.test_estimate_seconds != null ? 'Test estimate: ' + fmtSeconds(o.test_estimate_seconds) : 'Local move; no network timing'}</Table.Td></Table.Tr>
                   ))}
                 </Table.Tbody>
               </Table>

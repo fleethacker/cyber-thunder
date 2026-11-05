@@ -34,7 +34,7 @@ DEFAULT_BACKEND = "json"
 # Routing is a positive list: a JSON path that is not named here is a file, which is what every path was
 # before the backends existed. A new document area is added here on purpose.
 DOCUMENT_FILES = frozenset({
-    "link.json", "demo.json",
+    "link.json", "link-observations.json", "link-probe-schedule.json", "demo.json",
     "cluster/known_good.json",
     "content/index.json", "content/last_check.json", "content/source.json", "content/catalog.json",
     "content/preferences.json", "content/sync.json",

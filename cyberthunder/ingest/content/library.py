@@ -46,7 +46,7 @@ class ContentLibrary:
         saved = self.state.read_json(self.root / "preferences.json", {}) or {}
         settings = self.service.settings
         return {"mode": "inventory", "products": [], "kinds": list(CONTENT_KINDS),
-                "check_on_reconnect": bool(getattr(settings, "content_check_on_reconnect", True)),
+                "check_on_reconnect": bool(getattr(settings, "content_check_on_reconnect", False)),
                 "auto_pull": bool(getattr(settings, "content_auto_pull", False)), "revision": 0,
                 "updated_at": None, "updated_by": None, **saved}
 

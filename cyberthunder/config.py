@@ -66,12 +66,13 @@ class Settings:
     openai_api_key: str | None = field(default_factory=lambda: _env("CT_OPENAI_API_KEY") or _env("OPENAI_API_KEY"))
     openai_model: str = field(default_factory=lambda: _env("CT_OPENAI_MODEL", "gpt-4o-mini"))
     openai_timeout_s: int = field(default_factory=lambda: _env_num("CT_OPENAI_TIMEOUT", 60, int))
-    # constrained link emulation (used by ingest/outbox; real shaping is done on the range with tc/netem)
+    # Legacy numbers cannot enable emulation; test mode requires an audited link control.
     link_kbps: float = field(default_factory=lambda: _env_num("CT_LINK_KBPS", 56.0))
     link_latency_ms: int = field(default_factory=lambda: _env_num("CT_LINK_LATENCY_MS", 500, int))
     link_connected: bool = field(default_factory=lambda: _env_bool("CT_LINK_CONNECTED", True))
+    link_offline: bool = field(default_factory=lambda: _env_bool("CT_LINK_OFFLINE", False))
     # DISA content pulls (ingest/content): check the public index when the link comes back, pull only on request
-    content_check_on_reconnect: bool = field(default_factory=lambda: _env_bool("CT_CONTENT_CHECK_ON_RECONNECT", True))
+    content_check_on_reconnect: bool = field(default_factory=lambda: _env_bool("CT_CONTENT_CHECK_ON_RECONNECT", False))
     content_auto_pull: bool = field(default_factory=lambda: _env_bool("CT_CONTENT_AUTO_PULL", False))
     content_max_bytes: int = field(default_factory=lambda: _env_num("CT_CONTENT_MAX_BYTES", 512 * 1024 * 1024, int))
     content_timeout_s: int = field(default_factory=lambda: _env_num("CT_CONTENT_TIMEOUT", 30, int))

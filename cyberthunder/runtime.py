@@ -76,6 +76,15 @@ class RuntimeTasks:
         if getattr(self.ctx, "vulnerabilities", None) is not None:
             self._start_interval("vulnerability-updates", getattr(self.ctx.settings, "vulnerability_poll_s", 60),
                                  self._check_vulnerabilities)
+        self._start_interval("link-probe", 5, self._probe_link)
+
+    def _probe_link(self) -> None:
+        ingest = getattr(self.ctx, "ingest", None)
+        if ingest is not None:
+            state = ingest.link.state()
+            if (state.probe_enabled and not self.ctx.killswitch.is_engaged() and not state.offline_override
+                    and not (state.mode == "test" and not state.test_connected)):
+                ingest.link.probe(actor=self.ctx.settings.scheduler_actor, background=True)
 
     def stop(self) -> None:
         self._stop.set()

@@ -2,6 +2,7 @@ import { Accordion, Alert, Badge, Button, Group, Paper, SimpleGrid, Stack, Table
 import { IconBooks, IconCloudDownload, IconRefresh, IconSettings } from '@tabler/icons-react';
 import { useCallback, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { linkLabel } from '../lib/linkPresentation';
 import { api, errorText } from '../api/client';
 import { actorProblem } from '../components/ActorChip';
 import { ContentUpdates, jobRunning } from '../components/ContentUpdates';
@@ -68,7 +69,7 @@ export default function Content() {
         <Stack gap="sm">
           <Group justify="space-between">
             <Group gap="xs"><Badge variant="light" color={library.catalog.source === 'live' ? 'blue' : 'orange'}>{library.catalog.source === 'live' ? 'Last live index' : 'Snapshot index'}</Badge><Text size="sm">{library.catalog.total_entries.toLocaleString()} index entries · {library.products.length.toLocaleString()} products</Text></Group>
-            <Badge variant="light" color={connected ? 'teal' : 'orange'}>{connected ? 'Connected' : 'Offline'}</Badge>
+            <Badge variant="light" color={connected ? 'teal' : 'orange'}>{linkLabel(status?.link)}</Badge>
           </Group>
           <Text size="xs" c="dimmed">Index saved: {fmtZonedTime(library.catalog.saved_at)}. Publisher dates are shown as supplied; local event times include the timezone offset.</Text>
           <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">

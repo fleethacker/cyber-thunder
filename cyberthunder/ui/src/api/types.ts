@@ -366,7 +366,14 @@ export interface AuditVerify { ok: boolean; count: number; head: string; bad_seq
 
 export interface KillStatus { engaged: boolean; by: string | null; reason: string | null; at: string | null; via: string | null }
 
-export interface LinkState { kbps: number; latency_ms: number; connected: boolean }
+export interface LinkObservation { at: string; endpoint: string; method: string; application_bytes: number; elapsed_seconds: number; success: boolean; status: number | null; observed_kbps: number | null; test_mode: boolean; error?: string | null }
+export interface LinkState {
+  kbps: number | null; latency_ms: number | null; connected: boolean;
+  mode: "production" | "test"; offline_override: boolean; test_connected: boolean;
+  reachability: string; observed_kbps: number | null; last_observation: LinkObservation | null;
+  rate_observation?: LinkObservation | null;
+  observations: LinkObservation[]; probe_enabled: boolean; probe_until: number | null; probe_endpoint: string;
+}
 
 export interface LlmStatus { backend: string; model: string | null; available: boolean; detail?: string; queue?: number }
 
@@ -429,8 +436,8 @@ export interface BulletinResult { bulletin_id: string; hosts_affected: string[];
 
 export interface IngestHistory { deltas: DeltaReport[]; bulletins: Record<string, unknown>[] }
 
-export interface OutboxEntry { id?: string; name: string; kind: string; bytes: number; created_at?: string; synced_at?: string; seconds?: number }
-export interface Outbox { connected: boolean; pending: OutboxEntry[]; synced: OutboxEntry[] }
+export interface OutboxEntry { id?: string; name: string; kind: string; bytes: number; created_at?: string; synced_at?: string; seconds?: number | null; transfer_kind?: string; test_estimate_seconds?: number | null }
+export interface Outbox { link?: LinkState; connected: boolean; pending: OutboxEntry[]; synced: OutboxEntry[] }
 export interface SyncResult { sent: number; bytes: number; seconds: number }
 
 export interface ScoreItem { id: string; kind: string; what: string; found: boolean; finding_ids: string[] }

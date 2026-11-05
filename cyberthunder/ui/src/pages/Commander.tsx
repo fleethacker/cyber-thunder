@@ -1,6 +1,7 @@
 // Commander view: read-only, large type, refreshes every 10 s.
 import { Badge, Group, Paper, SimpleGrid, Stack, Text } from '@mantine/core';
 import dayjs from 'dayjs';
+import { linkLabel, rateLabel } from '../lib/linkPresentation';
 import { api } from '../api/client';
 import { ErrorBox, HashText, Loading } from '../components/common';
 import { fmtTime } from '../lib/format';
@@ -82,8 +83,8 @@ export default function Commander() {
           <Text size="lg" c="dimmed" fw={700} tt="uppercase">Link</Text>
           {status ? (
             <>
-              <Badge size="xl" mt="xs" color={status.link.connected ? 'teal' : 'orange'}>{status.link.connected ? 'connected' : 'disconnected'}</Badge>
-              <Text fz={24} fw={700} mt="xs">{status.link.kbps} kbps · {status.link.latency_ms} ms</Text>
+              <Badge size="xl" mt="xs" color={status.link.connected ? 'teal' : 'orange'}>{linkLabel(status.link)}</Badge>
+              <Text fz={24} fw={700} mt="xs">{rateLabel(status.link)}</Text>
               <Text fz={18} c="dimmed">{status.outbox.pending} reports queued for sync</Text>
               {status.kill.engaged && <Badge size="xl" color="red" mt="sm">Kill switch engaged</Badge>}
             </>

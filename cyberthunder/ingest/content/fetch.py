@@ -28,7 +28,7 @@ from typing import Any, Callable
 from xml.etree import ElementTree as ET
 
 from cyberthunder.findings.schema import utcnow
-from cyberthunder.ingest.content.http import ContentClient, ContentNetworkError, HostNotAllowed, as_client
+from cyberthunder.ingest.content.http import ContentClient, ContentNetworkError, HostNotAllowed, ObservedResponse, as_client
 from cyberthunder.ingest.content.index import Entry, parse_filename
 from cyberthunder.ingest.delta import BenchmarkError, _pick_member
 from cyberthunder.ingest.link import LinkState, transfer_seconds
@@ -255,6 +255,8 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
     """Fetch entry.url into dest_dir and verify it. See the module docstring for the steps.
 
     `stop` is polled between chunks; a non-empty answer ends the download with Stopped and keeps the .part."""
+    if pace and (link is None or link.mode != "test"):
+        raise ContentError("pacing requires explicit link test mode")
     client = as_client(opener)
     if isinstance(entry, dict):
         entry = Entry.from_dict(entry) if "host" in entry else _entry_from_item(entry)
@@ -408,7 +410,19 @@ def _get(client: ContentClient, url: str, part: Path, headers: dict, *, have: in
         slept = 0.0
         t0 = time.monotonic()
         last_report = 0.0
-        rate = (link.kbps * 1000 / 8) if (pace and link is not None and link.kbps > 0) else None
+        rate = (link.kbps * 1000 / 8) if (pace and link is not None and link.mode == "test" and link.kbps and link.kbps > 0) else None
+        def paced_wait(seconds):
+            while seconds > 0:
+                if client.before_request:
+                    client.before_request()
+                why = stop() if stop else None
+                if why:
+                    raise Stopped(why)
+                interval = min(seconds, 0.1)
+                sleep(interval)
+                seconds -= interval
+        if rate and link.latency_ms:
+            paced_wait(link.latency_ms / 1000)
         with open(part, mode) as fh:
             while True:
                 try:
@@ -435,7 +449,7 @@ def _get(client: ContentClient, url: str, part: Path, headers: dict, *, have: in
                     spent = max(time.monotonic() - t0, slept)
                     ahead = session / rate - spent
                     if ahead > 0:
-                        sleep(ahead)
+                        paced_wait(ahead)
                         slept = spent + ahead
                 now = time.monotonic()
                 if now - last_report >= 0.25:
@@ -444,6 +458,10 @@ def _get(client: ContentClient, url: str, part: Path, headers: dict, *, have: in
         if expect_total is not None and done < expect_total:
             raise ContentError(f"{url}: connection closed after {done} of {expect_total} bytes", resumable=True)
         return info
+    except Exception as exc:
+        if isinstance(resp, ObservedResponse):
+            resp.error = type(exc).__name__
+        raise
     finally:
         try:
             resp.close()

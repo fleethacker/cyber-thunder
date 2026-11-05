@@ -139,15 +139,16 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/policy/evaluate` | `{proposal_id}` → PolicyDecision |
 
 ## Ingest and the constrained link
-| GET | `/ingest/link` | → `{kbps, latency_ms, connected}` |
+| GET | `/ingest/link` | → production/test mode, offline override, endpoint reachability, bounded observations and optional observed application rate. Configured kbps/latency are null in production. `connected` is attempt permission, including unknown. See [LINK.md](LINK.md) |
 |---|---|---|
-| PUT | `/ingest/link` | partial → link state. Audit `link.change`. `connected` false→true flushes the outbox |
+| PUT | `/ingest/link` | `{mode?, offline_override?, kbps?, latency_ms?, connected?, probe_enabled?, probe_endpoint?}`. Numeric inputs require test mode; probes default off and expire after 15 minutes. Audit `link.change`. Kill-switch guarded. |
+| POST | `/ingest/link/probe` | One fixed-source HEAD probe, five-second deadline, no redirects or body; audits `link.probe`. No arbitrary URLs. |
 | POST | `/ingest/stig` | multipart `file` (XCCDF/datastream xml or DISA zip) or `{path}` → DeltaReport `{id, benchmark_id, old_release, new_release, rules_added: [RuleRef], rules_removed: [RuleRef], rules_changed: [RuleRef+{change}], counts, sizes: {full_bytes, delta_bytes, compressed_bytes, ratio}, transfer: {full_s, delta_s, kbps}, rescan_rule_ids: [..]}` where RuleRef = `{rule_id, stig_id, title, severity}` |
 | POST | `/ingest/stig/{delta_id}/rescan` | → ScanRun with `trigger: "stig_delta"` and `rule_filter` = changed rules, `202` |
 | POST | `/ingest/bulletin` | multipart `file` (JSON) or Bulletin JSON `{id, title, severity, cves: [..], affected: [{product?, package?, versions_below?, cpe?}], source}` → `{bulletin_id, hosts_affected: [..], findings: [Finding+], scan_id}` (matches against the latest package inventory per host; findings source `iavm`) |
 | GET | `/ingest/history` | → `{deltas: [DeltaReport], bulletins: [...]}` |
 | GET | `/outbox` | → `{connected, pending: [{name, kind, bytes, created_at}], synced: [{name, kind, bytes, synced_at, seconds}]}` |
-| POST | `/outbox/sync` | → `{sent, bytes, seconds}`; `409` if disconnected |
+| POST | `/outbox/sync` | → `{sent, bytes, seconds, transfer_kind: "local_move", test_estimate_seconds}`; seconds is local elapsed time, never network throughput or shore delivery. `409` if attempts are blocked. |
 | GET | `/ingest/updates` | → last-check metadata `{checked_at, source, index_entries, index_wire_bytes, gzip, estimate_seconds_at_link}` plus `wanted`, `updates`, `current`, `skipped`, `index_estimate: {bytes, seconds, link}` and `connected`. Selection is always recomputed from saved subscriptions and eligible held files, including before the first check; `checked_at` remains null until a check runs. `selection_source` identifies the local cached/snapshot index used. See [CONTENT.md](CONTENT.md) |
 | POST | `/ingest/updates/check` | `{source?: "live"|"snapshot"}` → the check report. `409` (naming the manifest path) when the link is down and source is live. Audit `content.check` |
 | POST | `/ingest/updates/pull` | `{filenames?: [..]}` or `{all_matching: true}`, `pace?` → `202` job `{id, state, files: [{filename, state, bytes, total, error, delta?, datastream_path?}], deltas}`. `409` when the link is down; pulls are blocked while the kill switch is engaged. Audit `content.fetch`, `content.fetch_failed`, `content.quarantine`, and `ingest.stig` per manual STIG |
