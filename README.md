@@ -162,7 +162,13 @@ See [content and subscriptions](docs/CONTENT.md).
 Force a failure and watch the rollback: in Settings turn on "force verification failure on next apply", then
 apply another approved fix. Verification fails, the engine rolls back automatically, and **Diff** shows
 before and after. From the CLI the same flow is `proposals approve <id>`, `apply <id> [--simulate-verify-fail]`, `diff <id>`, `rollback <id>`; `apply` refuses a proposal that has not been approved.
-Before approving, **Preview change** or `apply <id> --plan` shows the stored change plan and declared
+Before approving, **Assess impact** collects bounded dependency evidence and asks the configured model
+to explain disruption, management-access risks, unknowns, checks and rollback limits. The decision records
+the reviewed receipt; stale or changed receipts must be reviewed again before applying. Model failures
+are labelled as deterministic fallback, and proceeding without assessment is explicit. See
+[change impact](docs/CHANGE_IMPACT.md) for coverage and limitations.
+
+**Preview change** or `apply <id> --plan` shows the stored change plan and declared
 capture, verification and rollback instructions. The preview is audited and makes no target connection;
 it does not establish host readiness or approve the change.
 
@@ -197,6 +203,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |
 | [docs/CONTENT.md](docs/CONTENT.md) | STIG Library, saved subscriptions, versions and sync times, uploads/downloads and offline transfers |
 | [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |
+| [docs/CHANGE_IMPACT.md](docs/CHANGE_IMPACT.md) | dependency evidence, model assessment, unknowns and review before applying a fix |
 | [docs/API.md](docs/API.md) | HTTP API v1 |
 | [docs/STATE.md](docs/STATE.md) | the state directory: documents (json files or SQLite) and files, `state migrate` and `state info`, WAL on a local volume only, backups |
 | [docs/UI.md](docs/UI.md) | screens and behaviour |

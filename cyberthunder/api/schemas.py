@@ -13,6 +13,20 @@ class NoteBody(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
 
 
+class ApprovalBody(NoteBody):
+    assessment_id: str | None = Field(default=None, max_length=36)
+    assessment_note: str | None = Field(default=None, max_length=2000)
+
+
+class ImpactBody(BaseModel):
+    live: bool = True
+
+
+class AssessmentReviewBody(BaseModel):
+    assessment_id: str = Field(min_length=36, max_length=36)
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class ReasonBody(BaseModel):
     reason: str | None = Field(default=None, max_length=2000)
 

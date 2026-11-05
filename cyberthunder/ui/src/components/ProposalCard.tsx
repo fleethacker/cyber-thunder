@@ -16,6 +16,7 @@ import { AssetIcon, CodeBlock, Collapsible, Mono, SeverityBadge, SimulatedBadge,
 
 export interface ProposalActions {
   approve: (p: ProposalPlus) => void;
+  impact?: (p: ProposalPlus, inspectOnly: boolean) => void;
   deny: (p: ProposalPlus) => void;
   apply: (p: ProposalPlus) => void;
   rollback: (p: ProposalPlus) => void;
@@ -61,6 +62,7 @@ export function ProposalCard({
   const ruleIds = [f?.rule_version, f?.rule_id].filter(Boolean) as string[];
   const auto = (p.decided_by ?? '').startsWith('policy:');
   const suppressed = isSuppressed(f?.review);
+  const historical = !['proposed', 'approved'].includes(p.state);
 
   return (
     <Card
@@ -122,6 +124,17 @@ export function ProposalCard({
 
         <Q n={4} title="Could it break something">
           <RiskTags p={p} />
+          <Text size="sm" c="dimmed">{p.assessment?.status === 'reviewed'
+            ? historical ? 'A dependency assessment was reviewed for this earlier decision. Its receipt records the evidence used at the time.'
+              : 'A dependency assessment was reviewed for this decision. Check its evidence and review window before applying.'
+            : p.assessment?.status === 'not_assessed' ? 'This decision was recorded without a dependency assessment.'
+              : 'No dependency assessment is attached to this proposal.'}</Text>
+          {actions.impact && <Group>
+            <Button variant="light" disabled={busy || (!historical && actionsDisabled)}
+              onClick={() => actions.impact?.(p, p.state !== 'approved')}>
+              {historical ? 'View impact receipt' : p.state === 'approved' ? 'Review impact before apply' : 'Assess impact'}
+            </Button>
+          </Group>}
         </Q>
 
         <Q n={5} title="How to undo">

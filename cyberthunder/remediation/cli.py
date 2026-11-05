@@ -123,7 +123,30 @@ def cmd_diff(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_assess(a: argparse.Namespace) -> int:
+    try:
+        ctx = _ctx(a)
+        if ctx.impact is None:
+            raise EngineError("dependency assessment service unavailable")
+        if a.latest:
+            result = ctx.impact.latest(a.proposal_id)
+        else:
+            result = ctx.impact.assess(a.proposal_id, actor=a.actor, live=not a.stored_only)
+        print(json.dumps(result, indent=2))
+        return 0
+    except (*REFUSALS, ValueError) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+
+
 def register_cli(subparsers) -> None:
+    p = subparsers.add_parser("assess", help="assess dependencies and disruption before a human decision")
+    p.add_argument("proposal_id")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--stored-only", action="store_true", help="use declared facts without contacting the target")
+    mode.add_argument("--latest", action="store_true", help="read the saved assessment; no target or model call")
+    p.set_defaults(fn=cmd_assess)
+
     p = subparsers.add_parser("propose", help="propose the vetted library fix for a finding")
     p.add_argument("finding_id")
     p.set_defaults(fn=cmd_propose)

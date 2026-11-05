@@ -12,6 +12,7 @@ import { ASSET_TYPES } from '../api/types';
 import { ConfirmReasonModal } from '../components/ConfirmReasonModal';
 import { Empty, ErrorBox, Loading, PageTitle } from '../components/common';
 import { FindingDrawer } from '../components/FindingDrawer';
+import { ImpactReview } from '../components/ImpactReview';
 import { ProposalCard, type ProposalActions } from '../components/ProposalCard';
 import { RollbackConfirmation } from '../components/RollbackConfirmation';
 import { actorProblem } from '../components/ActorChip';
@@ -24,6 +25,7 @@ import { canRequestRollback, HISTORY_STATES, matchesProposalDates, matchesPropos
 const SHOWN_AFTER_ACTION = ['applied', 'verified', 'failed', 'rolled_back', 'denied', 'cancelled'];
 
 type Sort = 'severity' | 'host' | 'age';
+type ImpactSession = { proposal: ProposalPlus; inspectOnly: boolean; batch: boolean; saved?: boolean };
 
 export default function Decisions() {
   const nav = useNavigate();
@@ -42,6 +44,9 @@ export default function Decisions() {
   const [startingScan, setStartingScan] = useState(false);
   const [rollbackFor, setRollbackFor] = useState<ProposalPlus | null>(null);
   const [rollbackError, setRollbackError] = useState<string | null>(null);
+  const [impact, setImpact] = useState<ImpactSession | null>(null);
+  const impactRef = useRef<ImpactSession | null>(null);
+  const [reviewBatch, setReviewBatch] = useState<{ ids: string[]; completed: number } | null>(null);
   const [watchingRollback, setWatchingRollback] = useState<Set<string>>(new Set());
   const rollbackRequests = useRef(new Set<string>());
   const [pollErrors, setPollErrors] = useState<Record<string, string>>({});
@@ -110,6 +115,7 @@ export default function Decisions() {
   const all = list.data ?? [];
   const requested = all.find((p) => p.id === requestedId);
   const currentRollback = rollbackFor ? all.find((p) => p.id === rollbackFor.id) ?? rollbackFor : null;
+  const currentImpact = impact ? all.find((p) => p.id === impact.proposal.id) ?? impact.proposal : null;
   useEffect(() => {
     if (requested?.id) document.getElementById(`proposal-${requested.id}`)?.scrollIntoView({ block: 'start' });
   }, [requested?.id]);
@@ -145,6 +151,7 @@ export default function Decisions() {
   }, [visible.length, focus]);
 
   const run = useCallback(async (p: ProposalPlus, fn: () => Promise<unknown>, ok: string) => {
+    if (impactRef.current) return false;
     if (actionBlockRef.current || inFlight.current.has(p.id)) {
       setActionError(actionBlockRef.current ?? 'An action is already in progress for this proposal.');
       return false;
@@ -169,9 +176,34 @@ export default function Decisions() {
     }
   }, []);
 
+  const openImpact = useCallback((p: ProposalPlus, inspectOnly = false, batch = false) => {
+    if (impactRef.current || inFlight.current.has(p.id) || rollbackFor || denyFor || drawer) return;
+    const historical = !['proposed', 'approved'].includes(p.state);
+    if (!historical && actionBlockRef.current) { setActionError(actionBlockRef.current); return; }
+    const session = { proposal: p, inspectOnly: historical || inspectOnly, batch };
+    impactRef.current = session;
+    setImpact(session);
+    setActionError(null);
+  }, [rollbackFor, denyFor, drawer]);
+
+  const closeImpact = () => { impactRef.current = null; setImpact(null); };
+  const recordImpact = (p: ProposalPlus) => {
+    const session = impactRef.current;
+    if (!session || session.saved || p.id !== session.proposal.id) return;
+    session.saved = true;
+    upsert(p);
+    setTouched((current) => new Set(current).add(p.id));
+    if (!session.inspectOnly && session.proposal.state === 'proposed' && p.state === 'approved') {
+      setSelected((current) => { const next = new Set(current); next.delete(p.id); return next; });
+      if (session.batch) setReviewBatch((current) => current && current.ids[current.completed] === p.id
+        ? { ...current, completed: current.completed + 1 } : current);
+    }
+  };
+
   const actions: ProposalActions = useMemo(() => ({
-    approve: (p) => void run(p, () => api.approve(p.id), `Approved: ${p.title}`),
-    deny: (p) => { setDenyError(null); setDenyFor([p]); },
+    approve: (p) => { if (p.state === 'proposed') openImpact(p); },
+    impact: (p, inspectOnly) => openImpact(p, inspectOnly),
+    deny: (p) => { if (impactRef.current || actionBlockRef.current || inFlight.current.has(p.id)) return; setDenyError(null); setDenyFor([p]); },
     apply: (p) => {
       if (isSuppressed(p.finding?.review)) {
         setActionError(`Apply blocked by human review: ${p.finding?.review?.current?.reason || 'Review the current finding before applying.'}`);
@@ -180,13 +212,13 @@ export default function Decisions() {
       void run(p, () => api.apply(p.id), `Applying: ${p.title}`);
     },
     rollback: (p) => {
-      if (actionBlock || watchingRollback.has(p.id) || !canRequestRollback(p)) return;
+      if (impactRef.current || actionBlock || watchingRollback.has(p.id) || !canRequestRollback(p)) return;
       setRollbackError(null);
       setRollbackFor(p);
     },
     verify: (p) => void run(p, () => api.verify(p.id), `Verification recorded: ${p.title}`),
-    openFinding: (id) => setDrawer(id),
-  }), [run, actionBlock, watchingRollback]);
+    openFinding: (id) => { if (!impactRef.current) setDrawer(id); },
+  }), [run, actionBlock, watchingRollback, openImpact]);
 
   const confirmRollback = async () => {
     if (!currentRollback || actionBlockRef.current || !canRequestRollback(currentRollback) || inFlight.current.has(currentRollback.id) || watchingRollback.has(currentRollback.id)) return;
@@ -217,7 +249,7 @@ export default function Decisions() {
   };
 
   const confirmDeny = async (note: string) => {
-    if (!denyFor) return;
+    if (!denyFor || impactRef.current) return;
     if (actionBlockRef.current) { setDenyError(actionBlockRef.current); return; }
     setDenyError(null);
     try {
@@ -238,19 +270,23 @@ export default function Decisions() {
     }
   };
 
-  const bulkApprove = async () => {
+  const bulkApprove = () => {
+    if (impactRef.current || reviewBatch) return;
     if (actionBlockRef.current) { setActionError(actionBlockRef.current); return; }
-    const ids = visible.filter((p) => selected.has(p.id) && p.state === 'proposed').map((p) => p.id);
-    if (!ids.length) return;
-    try {
-      const res = await api.bulk('approve', ids);
-      reportBulk(res.results);
-      setTouched((t) => { const n = new Set(t); ids.forEach((i) => n.add(i)); return n; });
-      setSelected(new Set());
-      await list.reload();
-    } catch (e) {
-      setActionError(errorText(e));
+    const proposals = visible.filter((p) => selected.has(p.id) && p.state === 'proposed');
+    if (!proposals.length || proposals.some((p) => inFlight.current.has(p.id))) return;
+    setReviewBatch({ ids: proposals.map((p) => p.id), completed: 0 });
+    openImpact(proposals[0], false, true);
+  };
+  const continueReviews = () => {
+    if (!reviewBatch || impactRef.current) return;
+    const id = reviewBatch.ids[reviewBatch.completed];
+    const p = all.find((row) => row.id === id);
+    if (!p || p.state !== 'proposed') {
+      setActionError(`Proposal ${id} is no longer waiting for approval. End this review sequence and check the current selection.`);
+      return;
     }
+    openImpact(p, false, true);
   };
 
   const focused = visible[focus];
@@ -259,17 +295,19 @@ export default function Decisions() {
     if (p) document.getElementById(`proposal-${p.id}`)?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
   };
   useHotkeys([
-    ['j', () => setFocus((i) => { const n = Math.min(visible.length - 1, i + 1); scrollTo(n); return n; })],
-    ['k', () => setFocus((i) => { const n = Math.max(0, i - 1); scrollTo(n); return n; })],
-    // approve/deny keys are ignored while the deny modal or finding drawer is open, so a stray key
-    // press there never acts on the card behind it
-    ['a', () => { if (!actionBlock && !rollbackFor && !drawer && !denyFor && focused?.state === 'proposed') actions.approve(focused); }],
-    ['d', () => { if (!actionBlock && !rollbackFor && !drawer && !denyFor && focused?.state === 'proposed') actions.deny(focused); }],
-    ['Enter', () => { if (focused && !rollbackFor && !drawer && !denyFor) actions.openFinding(focused.finding_id); }],
-    ['x', () => { if (focused?.state === 'proposed' && !rollbackFor && !drawer && !denyFor) toggleSel(focused.id, !selected.has(focused.id)); }],
+    ['j', () => { if (!impactRef.current) setFocus((i) => { const n = Math.min(visible.length - 1, i + 1); scrollTo(n); return n; }); }],
+    ['k', () => { if (!impactRef.current) setFocus((i) => { const n = Math.max(0, i - 1); scrollTo(n); return n; }); }],
+    // Review and confirmation dialogs must not forward actions to the queue behind them.
+    ['a', () => { if (!impactRef.current && !actionBlock && !rollbackFor && !drawer && !denyFor && focused?.state === 'proposed') actions.approve(focused); }],
+    ['d', () => { if (!impactRef.current && !actionBlock && !rollbackFor && !drawer && !denyFor && focused?.state === 'proposed') actions.deny(focused); }],
+    ['Enter', () => { if (!impactRef.current && focused && !rollbackFor && !drawer && !denyFor) actions.openFinding(focused.finding_id); }],
+    ['x', () => { if (!impactRef.current && focused?.state === 'proposed' && !rollbackFor && !drawer && !denyFor) toggleSel(focused.id, !selected.has(focused.id)); }],
   ]);
 
-  const toggleSel = (id: string, v: boolean) => setSelected((s) => { const n = new Set(s); if (v) n.add(id); else n.delete(id); return n; });
+  const toggleSel = (id: string, v: boolean) => {
+    if (impactRef.current || reviewBatch) return;
+    setSelected((s) => { const n = new Set(s); if (v) n.add(id); else n.delete(id); return n; });
+  };
 
   const startScan = async () => {
     setStartingScan(true);
@@ -295,7 +333,7 @@ export default function Decisions() {
         subtitle={`${pending} waiting for approval · keys: j/k move · a approve · d deny · enter detail · x select`}
         right={<Button variant="light" onClick={() => void list.reload()} loading={list.loading}>Refresh</Button>}
       />
-      <SegmentedControl aria-label="Decision view" value={view} onChange={(value) => {
+      <SegmentedControl aria-label="Decision view" value={view} disabled={!!impact || !!reviewBatch} onChange={(value) => {
         setSavedView(value as 'queue' | 'history'); setSelected(new Set()); setFocus(0);
         if (requestedId) clearRequested();
       }} data={[{ value: 'queue', label: 'Active queue' }, { value: 'history', label: 'Changes / history' }]} />
@@ -325,18 +363,30 @@ export default function Decisions() {
         <Stack gap="xs"><Text size="sm">{requested ? `${requested.id} is shown below regardless of saved filters. Its current state is ${requested.state.replace(/_/g, ' ')}.` : list.loading ? 'Loading the linked proposal…' : list.error ? 'The linked proposal could not be checked. Refresh to retry.' : `Proposal ${requestedId} was not found on this node.`}</Text>
           <Group><Button variant="light" size="xs" onClick={clearRequested}>Clear selected proposal</Button></Group></Stack>
       </Alert>}
-      {requested && <ProposalCard p={requested} actions={actions} busy={busy.has(requested.id) || watchingRollback.has(requested.id)} actionsDisabled={!!actionBlock} focused />}
+      {requested && <ProposalCard p={requested} actions={actions} busy={busy.has(requested.id) || watchingRollback.has(requested.id)} actionsDisabled={!!actionBlock || !!impact} focused />}
+
+      {reviewBatch && <Alert color="blue" title="Selected proposal reviews" role="status">
+        <Stack gap="xs">
+          <Text size="sm">{reviewBatch.completed} of {reviewBatch.ids.length} approved. Each proposal needs its own review and decision. Unprocessed proposals remain selected.</Text>
+          {reviewBatch.completed < reviewBatch.ids.length && <Text size="sm">Review {reviewBatch.completed + 1} of {reviewBatch.ids.length}: {reviewBatch.ids[reviewBatch.completed]}</Text>}
+          <Group>
+            {reviewBatch.completed < reviewBatch.ids.length && <Button variant="light" disabled={!!impact || !!actionBlock} onClick={continueReviews}>Continue selected reviews</Button>}
+            <Button variant="subtle" disabled={!!impact} onClick={() => setReviewBatch(null)}>{reviewBatch.completed === reviewBatch.ids.length ? 'Finish selected reviews' : 'End selected reviews'}</Button>
+          </Group>
+        </Stack>
+      </Alert>}
 
       {selectable.length > 0 && (
         <Group gap="sm">
           <Checkbox
             label={`Select proposed (${selectable.length})`}
+            disabled={!!impact || !!reviewBatch}
             checked={selCount > 0 && selCount === selectable.length}
             indeterminate={selCount > 0 && selCount < selectable.length}
             onChange={(e) => setSelected(e.currentTarget.checked ? new Set(selectable.map((p) => p.id)) : new Set())}
           />
-          <Button size="sm" color="green" disabled={!selCount || !!actionBlock} onClick={() => void bulkApprove()}>Approve selected ({selCount})</Button>
-          <Button size="sm" color="red" variant="light" disabled={!selCount || !!actionBlock}
+          <Button size="sm" color="green" disabled={!selCount || !!actionBlock || !!impact || !!reviewBatch} onClick={bulkApprove}>Review selected ({selCount})</Button>
+          <Button size="sm" color="red" variant="light" disabled={!selCount || !!actionBlock || !!impact || !!reviewBatch}
             onClick={() => { setDenyError(null); setDenyFor(visible.filter((p) => selected.has(p.id) && p.state === 'proposed')); }}>
             Deny selected
           </Button>
@@ -369,9 +419,9 @@ export default function Decisions() {
                   p={p}
                   actions={actions}
                   busy={busy.has(p.id) || watchingRollback.has(p.id)}
-                  actionsDisabled={!!actionBlock}
+                  actionsDisabled={!!actionBlock || !!impact}
                   selected={selected.has(p.id)}
-                  onSelect={p.state === 'proposed' ? (v) => toggleSel(p.id, v) : undefined}
+                  onSelect={p.state === 'proposed' && !impact && !reviewBatch ? (v) => toggleSel(p.id, v) : undefined}
                   focused={i === focus}
                 />
               </div>
@@ -380,6 +430,8 @@ export default function Decisions() {
         </>
       )}
 
+      {impact && <ImpactReview key={impact.proposal.id} proposal={currentImpact} inspectOnly={impact.inspectOnly}
+        onClose={closeImpact} onChanged={recordImpact} />}
       <FindingDrawer findingId={drawer} onClose={() => setDrawer(null)} onProposed={upsert} onReviewed={() => void list.reload()} />
       <RollbackConfirmation proposal={currentRollback} busy={!!currentRollback && busy.has(currentRollback.id)}
         blockedReason={actionBlock} error={rollbackError} onConfirm={() => void confirmRollback()} onClose={() => setRollbackFor(null)} />

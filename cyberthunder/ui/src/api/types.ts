@@ -216,6 +216,30 @@ export interface Proposal {
   decision_note: string | null;
   before_state_ref: string | null;
   history: HistoryEntry[];
+  assessment?: { status: 'reviewed' | 'not_assessed'; id: string | null; note: string;
+    risk_level?: string; has_unknowns?: boolean; model_used?: boolean; valid_until?: string } | null;
+}
+
+export interface ImpactEvidence {
+  id: string; kind: string; source: string; observed_at: string; subject: string;
+  facts: Record<string, unknown>;
+}
+export interface ImpactDependency {
+  id: string; from: string; to: string; relation: string; evidence_ids: string[];
+}
+export interface ImpactReceipt {
+  version: number; id: string; proposal_id: string; target_id: string;
+  generated_at: string; valid_until: string; evidence_sha256: string; fix_sha256: string;
+  evidence_packet: { mode: 'live' | 'stored'; complete: boolean; generated_at?: string; evidence: ImpactEvidence[] };
+  assessment: { advisory_only: boolean; approval_authority: boolean;
+    source: 'model_advisory' | 'deterministic_fallback'; risk_level: 'unknown' | 'low' | 'medium' | 'high' | 'critical';
+    summary: string; evidence_ids: string[]; complete: boolean;
+    risks: { id: string; severity: string; summary: string; deterministic: boolean; evidence_ids: string[] }[];
+    dependencies: ImpactDependency[]; unknowns: string[]; required_checks: string[]; rollback_limits: string[] };
+  model: { backend: string | null; name: string | null; used: boolean; validated: boolean;
+    fallback_reason: string | null; attempts: number; input_coverage?: { limited: boolean } };
+  freshness: { ready: boolean; status: string; stale: boolean; reasons: string[]; unknowns: string[];
+    age_seconds: number | null; approval_authority: false };
 }
 
 export interface ProposalPlus extends Proposal {

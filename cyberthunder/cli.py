@@ -102,6 +102,7 @@ def cmd_kill(a: argparse.Namespace) -> int:
 
 
 def cmd_proposals(a: argparse.Namespace) -> int:
+    from cyberthunder.remediation.engine import EngineError
     ctx = _ctx(a)
     gate = ctx.gate
     try:
@@ -111,10 +112,16 @@ def cmd_proposals(a: argparse.Namespace) -> int:
         elif a.sub == "show":
             print(json.dumps(gate.get(a.id).to_dict(), indent=2))
         elif a.sub == "approve":
-            print(gate.approve(a.id, require_human(a.actor), a.note).state.value)
+            print(gate.approve(a.id, require_human(a.actor), a.note,
+                              assessment_id=a.assessment_id, assessment_note=a.assessment_note).state.value)
+        elif a.sub == "review-impact":
+            if not a.assessment_id:
+                raise ValueError("--assessment-id is required to review an approved proposal")
+            print(gate.review_assessment(a.id, require_human(a.actor), a.assessment_id,
+                                         a.assessment_note).state.value)
         elif a.sub == "deny":
             print(gate.deny(a.id, require_human(a.actor), a.note).state.value)
-    except (IllegalTransition, PermissionError, KillSwitchEngaged, KeyError) as e:
+    except (IllegalTransition, PermissionError, KillSwitchEngaged, KeyError, ValueError, EngineError) as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2
     return 0
@@ -157,9 +164,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_kill)
 
     p = sp.add_parser("proposals", help="list / approve / deny proposals")
-    p.add_argument("sub", choices=["list", "show", "approve", "deny"])
+    p.add_argument("sub", choices=["list", "show", "approve", "deny", "review-impact"])
     p.add_argument("id", nargs="?")
     p.add_argument("--note")
+    p.add_argument("--assessment-id", help="immutable dependency assessment receipt to review")
+    p.add_argument("--assessment-note", help="acknowledgement of unresolved dependencies or reason for proceeding without assessment")
     p.set_defaults(fn=cmd_proposals)
 
     for mod in CLI_MODULES:

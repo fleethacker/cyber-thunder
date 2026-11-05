@@ -6,7 +6,7 @@ import type {
   DiscoveryStatus, Explanation, FindingPlus, FindingsPage, FindingsQuery, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
   Outbox, PolicyDecision, ProposalDiff, ProposalPlan, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
   ReportHistory, SavedReportContent, TargetOutcome, TargetReport, UpdateCheck,
-  ContentUploadResult, LibraryPreferences, LibraryPreferencesInput, StigLibrary, FindingReviewHistory, FindingReviewInput,
+  ContentUploadResult, LibraryPreferences, LibraryPreferencesInput, StigLibrary, FindingReviewHistory, FindingReviewInput, ImpactReceipt,
 } from './types';
 
 export const API_BASE = '/api/v1';
@@ -140,7 +140,13 @@ export const api = {
   proposals: (q?: Query) => get<{ proposals: ProposalPlus[] }>('/proposals', q),
   proposal: (id: string) => get<ProposalPlus>(`/proposals/${enc(id)}`),
   plan: (id: string) => post<ProposalPlan>(`/proposals/${enc(id)}/plan`),
-  approve: (id: string, note?: string) => post<ProposalPlus>(`/proposals/${enc(id)}/approve`, { note }),
+  approve: (id: string, note?: string, assessmentId?: string, assessmentNote?: string) =>
+    post<ProposalPlus>(`/proposals/${enc(id)}/approve`, { note, assessment_id: assessmentId, assessment_note: assessmentNote }),
+  assessImpact: (id: string, live = true) => post<ImpactReceipt>(`/proposals/${enc(id)}/impact`, { live }),
+  latestImpact: (id: string) => get<{ assessment: ImpactReceipt | null }>(`/proposals/${enc(id)}/impact`),
+  impactReceipt: (id: string) => get<ImpactReceipt>(`/change-assessments/${enc(id)}`),
+  reviewImpact: (id: string, assessmentId: string, note?: string) =>
+    post<ProposalPlus>(`/proposals/${enc(id)}/review-impact`, { assessment_id: assessmentId, note }),
   deny: (id: string, note?: string) => post<ProposalPlus>(`/proposals/${enc(id)}/deny`, { note }),
   cancel: (id: string, note?: string) => post<ProposalPlus>(`/proposals/${enc(id)}/cancel`, { note }),
   apply: (id: string, simulate_verify_fail?: boolean) =>

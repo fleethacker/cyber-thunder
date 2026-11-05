@@ -39,7 +39,7 @@ DOCUMENT_FILES = frozenset({
     "content/index.json", "content/last_check.json", "content/source.json", "content/catalog.json",
     "content/preferences.json", "content/sync.json",
 })
-DOCUMENT_AREAS = ("explanations/", "finding_reviews/", "ingest/deltas/", "ingest/bulletins/", "discovery/", "content/jobs/")
+DOCUMENT_AREAS = ("explanations/", "finding_reviews/", "change_assessments/", "ingest/deltas/", "ingest/bulletins/", "discovery/", "content/jobs/")
 SCAN_DOCUMENTS = frozenset({"run.json", "findings.json"})
 
 

@@ -106,7 +106,11 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/proposals` | `?state&host&asset_type` (each takes comma-separated values; an unknown `state` is `400`) → `{proposals: [Proposal+]}` oldest first |
 |---|---|---|
 | GET | `/proposals/{id}` | → Proposal+ |
-| POST | `/proposals/{id}/approve` | `{note?}` → Proposal+ |
+| POST | `/proposals/{id}/approve` | `{note?, assessment_id?, assessment_note?}` → Proposal+. An attached impact receipt must match current bindings and be unexpired; unknown dependencies require a review note. Without a receipt the decision is explicitly not assessed |
+| POST | `/proposals/{id}/impact` | `{live?: true}` → immutable dependency/model assessment; explicit actor, scoped target and released kill switch required. Bounded read-only collection, no execution or approval |
+| GET | `/proposals/{id}/impact` | → `{assessment: receipt or null}` with computed freshness; no collection or model call |
+| GET | `/change-assessments/{id}` | → saved receipt with computed freshness, or 404 |
+| POST | `/proposals/{id}/review-impact` | `{assessment_id, note?}` → Proposal+. A named human can refresh the reviewed receipt while a proposal remains APPROVED; does not execute it |
 | POST | `/proposals/{id}/deny` | `{note?}` → Proposal+ |
 | POST | `/proposals/{id}/cancel` | `{note?}` → Proposal+ |
 | POST | `/proposals/{id}/plan` | → static remediation plan; named actor and kill switch checked, one `remediation.plan` audit event. Includes target identity, bound fix/digests, declared capture/verification/rollback metadata, checks and limitations. Makes no target connection, changes no proposal state and does not approve or apply anything. See [REMEDIATION_PLAN](REMEDIATION_PLAN.md) |

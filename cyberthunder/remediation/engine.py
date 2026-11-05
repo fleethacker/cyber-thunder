@@ -394,10 +394,12 @@ class RemediationEngine:
             log.warning("transport close failed for %s", target.id)
 
     def execute(self, proposal_id: str, *, actor: str, simulate_verify_fail: bool = False) -> Proposal:
+        from cyberthunder.control.assessment import AssessmentBlocked, guard_approved_assessment
         gate = self.ctx.gate
         p = gate.get(proposal_id)
         if p.state is not ProposalState.APPROVED:
             gate.start_apply(proposal_id, actor)            # records the rejection and raises IllegalTransition
+        guard_approved_assessment(self.ctx, p)
         target = self._target(p, "execute", actor)
         finding = self._finding(p.finding_id)
         if finding is None:
@@ -427,6 +429,7 @@ class RemediationEngine:
                 if self._review_suppressed(finding, actor, "apply"):
                     raise ReviewSuppressed("A review suppressed the finding before apply; no fix was executed")
                 self._guard_policy_evidence(p, finding, actor)
+                guard_approved_assessment(self.ctx, p)
                 if fix.kind == "runbook":
                     return self._issue_runbook(p, target, fix)
                 self.ctx.killswitch.guard(f"remediation.apply:{p.id}", actor)
@@ -466,7 +469,7 @@ class RemediationEngine:
                                             f"{_short(vr.evidence, 200)}")
             self._auto_rollback(p, target, adapter, transport, fix, before, why)
             return gate.get(p.id)
-        except (ReviewSuppressed, PolicyEvidenceBlocked, ReviewConflict):
+        except (ReviewSuppressed, PolicyEvidenceBlocked, ReviewConflict, AssessmentBlocked):
             # Before-state capture is read-only. Do not run a rollback when apply never ran.
             if gate.get(p.id).state is ProposalState.APPLYING:
                 gate.failed(p.id, actor, note="stopped before apply by finding evidence or review")
