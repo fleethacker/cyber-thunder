@@ -119,7 +119,8 @@ def test_findings_source_filter_is_not_a_fixed_list():
     page = (SRC / "pages" / "Findings.tsx").read_text(encoding="utf-8")
     assert "const SOURCES" not in page
     assert "'openscap', 'scc'" not in page
-    assert "data={sources}" in page
+    # Source options now use the shared facet controls. Unknown sources and options beyond the
+    # first page are covered behaviorally in tests/api/test_findings_query.py.
 
 
 def test_dist_index_points_at_built_assets():
