@@ -1,4 +1,4 @@
-import { Badge, Button, Group, Pagination, Paper, Stack, Table, Text, TextInput } from '@mantine/core';
+import { Badge, Button, Group, Pagination, Paper, Select, Stack, Table, Text, TextInput } from '@mantine/core';
 import { IconSearch } from '@tabler/icons-react';
 import { useState, type ReactNode } from 'react';
 import type { ContentRow, HeldFile, LibraryCatalog } from '../api/types';
@@ -48,12 +48,20 @@ export function LibraryTable<T>({ rows, searchText, label, headings, render, emp
   );
 }
 
-export function HeldTable({ files }: { files: HeldFile[] }) {
-  return <LibraryTable rows={files} label="local files" empty="No content on this node. Upload files or download updates in Transfers / import."
+export function HeldTable({ files, onProductSelect }: { files: HeldFile[]; onProductSelect?: (key: string) => void }) {
+  const [kind, setKind] = useState<string | null>(null);
+  const [source, setSource] = useState<string | null>(null);
+  return <Stack gap="sm">
+    <Group>
+      <Select label="Local content type" placeholder="All types" clearable data={Object.entries(KIND_LABELS).map(([value, label]) => ({ value, label }))} value={kind} onChange={setKind} />
+      <Select label="How it arrived" placeholder="All sources" clearable data={[{ value: 'pulled', label: 'Downloaded' }, { value: 'uploaded', label: 'Uploaded locally' }, { value: 'imported', label: 'Folder import' }, { value: 'bundled', label: 'Bundled reference' }]} value={source} onChange={setSource} />
+    </Group>
+    <LibraryTable rows={files.filter((file) => (!kind || file.kind === kind) && (!source || file.source === source))} label="local files" empty="No local files match. Browse all for downloads, or use Import / transfer for local files."
     searchText={(f) => `${f.product_key} ${f.benchmark_id} ${f.filename} ${f.ingest?.upload?.filename} ${f.version_label} ${f.benchmark_release} ${kindLabel(f.kind)} ${f.source}`}
     headings={<><Table.Th>File / product</Table.Th><Table.Th>Type / version</Table.Th><Table.Th>Publisher date</Table.Th><Table.Th>Local provenance</Table.Th></>}
     render={(f) => <Table.Tr key={f.filename}>
       <Table.Td><Text size="sm" fw={600} style={{ overflowWrap: 'anywhere' }}>{f.product_key ?? f.benchmark_id ?? 'Unmapped product'}</Text>
+        {f.product_key && onProductSelect && <Button variant="subtle" size="compact-xs" onClick={() => onProductSelect(f.product_key!)}>Product versions and maintenance</Button>}
         {f.product_key && f.benchmark_id && <Text size="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>{f.benchmark_id}</Text>}
         <Text size="xs" style={{ overflowWrap: 'anywhere' }}>{f.ingest?.upload?.filename ?? f.filename}</Text><Text size="xs" c="dimmed">{fmtBytes(f.bytes)}</Text></Table.Td>
       <Table.Td><Text size="sm">{kindLabel(f.kind)}</Text><Text size="sm" fw={600}>{f.version_label ?? f.benchmark_release ?? 'Version not provided'}</Text>
@@ -61,7 +69,8 @@ export function HeldTable({ files }: { files: HeldFile[] }) {
         {f.ingest?.datastream_path && <Badge size="xs" variant="light">SCAP datastream indexed</Badge>}</Table.Td>
       <Table.Td>{fmtZonedTime(f.upload_date, 'Not provided')}</Table.Td>
       <Table.Td><FileProvenance file={f} /></Table.Td>
-    </Table.Tr>} />;
+    </Table.Tr>} />
+  </Stack>;
 }
 
 export function FileProvenance({ file }: { file: HeldFile }) {
@@ -77,7 +86,10 @@ export function FileProvenance({ file }: { file: HeldFile }) {
 }
 
 export function CatalogTable({ catalogs }: { catalogs: LibraryCatalog[] }) {
-  return <LibraryTable rows={catalogs} label="rule catalogs" empty="No rule catalogs have been indexed."
+  const [origin, setOrigin] = useState<string | null>(null);
+  return <Stack gap="sm">
+    <Select label="Catalog origin" placeholder="All origins" clearable data={[{ value: 'imported_catalog', label: 'Imported catalog' }, { value: 'bundled_reference', label: 'Bundled reference' }]} value={origin} onChange={setOrigin} />
+    <LibraryTable rows={catalogs.filter((catalog) => !origin || catalog.origin === origin)} label="rule catalogs" empty="No rule catalogs match."
     searchText={(c) => `${c.title} ${c.benchmark_id} ${c.filename} ${c.release}`}
     headings={<><Table.Th>Catalog</Table.Th><Table.Th>Release / rules</Table.Th><Table.Th>Origin</Table.Th><Table.Th>Imported locally</Table.Th></>}
     render={(c) => <Table.Tr key={c.path}>
@@ -85,7 +97,8 @@ export function CatalogTable({ catalogs }: { catalogs: LibraryCatalog[] }) {
       <Table.Td>{c.release || 'Not provided'}<Text size="xs" c="dimmed">{c.rules.toLocaleString()} rules</Text></Table.Td>
       <Table.Td><Badge variant="light" color={c.origin === 'bundled_reference' ? 'gray' : 'blue'}>{c.origin === 'bundled_reference' ? 'Bundled reference' : 'Imported catalog'}</Badge></Table.Td>
       <Table.Td>{c.origin === 'bundled_reference' ? 'Included with this build' : fmtZonedTime(c.imported_at)}</Table.Td>
-    </Table.Tr>} />;
+    </Table.Tr>} />
+  </Stack>;
 }
 
 export function AvailableTable({ rows }: { rows: ContentRow[] }) {

@@ -12,6 +12,7 @@ import { ConfidenceBadge, ReviewBadge } from '../components/FindingAssurance';
 import { CONFIDENCE_LABELS, REVIEW_LABELS } from '../lib/findingAssurance';
 import { fmtTime, statusColor } from '../lib/format';
 import { useLocalPref } from '../lib/hooks';
+import { findingResultLabel, findingRowHandlers } from '../lib/findingRow';
 
 const PAGE = 200;
 const LABELS: Record<string, string> = {
@@ -181,6 +182,7 @@ export default function Findings() {
         <Text size="sm" fw={600}>{loading ? 'Updating results…' : data ? `${data.total.toLocaleString()} matching / ${data.unfiltered_total.toLocaleString()} total results` : 'Results unavailable'}</Text>
         {data && <Text size="xs" c="dimmed">Current view · baseline {data.scan_id ?? 'none'}</Text>}
       </Group>
+      <Text size="xs" c="dimmed">Open a row for finding details. Keyboard: focus a row and press Enter or Space. Confidence and review buttons open their own controls.</Text>
       <AsyncView state={st} what="Loading findings" isEmpty={(d) => d.findings.length === 0}
         empty={<Empty title="No findings match"><Stack align="center" gap="xs"><Text size="sm">Choose another quick view, clear filters, or run a scan.</Text><Button variant="light" onClick={() => quickView('all')}>Show all results</Button></Stack></Empty>}>
         {(d) => <Paper withBorder radius="md">
@@ -190,10 +192,12 @@ export default function Findings() {
                 <Table.Th>Severity</Table.Th><Table.Th>Scanner result</Table.Th><Table.Th>Evidence confidence</Table.Th><Table.Th>Human review</Table.Th><Table.Th>Machine / type</Table.Th><Table.Th>Category / source</Table.Th>
                 <Table.Th>Rule / title</Table.Th><Table.Th>Benchmark / release</Table.Th><Table.Th>Observed</Table.Th><Table.Th>Fix / explanation / proposal</Table.Th>
               </Table.Tr></Table.Thead>
-              <Table.Tbody>{d.findings.map((f) => <Table.Tr key={f.id}>
+              <Table.Tbody>{d.findings.map((f) => <Table.Tr key={f.id} className="finding-row" tabIndex={0}
+                aria-label={`Open finding ${f.rule_version || f.rule_id}: ${f.title} on ${f.host || 'unknown machine'}`} aria-haspopup="dialog"
+                {...findingRowHandlers(() => { setReviewOpen(false); setDrawer(f.id); })}>
                 <Table.Td><SeverityBadge severity={f.severity} size="sm" /></Table.Td>
                 <Table.Td><Badge color={statusColor(f.scanner_status ?? f.remediated?.scan_status ?? f.status)} variant="light" radius="sm">{LABELS[f.scanner_status ?? f.remediated?.scan_status ?? f.status]}</Badge>
-                  {(f.scanner_status ?? f.remediated?.scan_status ?? f.status) !== f.status && <Text size="xs" c="dimmed" mt={4}>Current: {LABELS[f.status]} · verified fix</Text>}</Table.Td>
+                  {(f.needs_rescan || (f.scanner_status ?? f.remediated?.scan_status ?? f.status) !== f.status) && <Text size="xs" c={f.needs_rescan ? 'orange' : 'dimmed'} mt={4}>{findingResultLabel(f)}: {LABELS[f.status]}</Text>}</Table.Td>
                 <Table.Td miw={160} maw={240}><ConfidenceBadge confidence={f.confidence} /><Text size="xs" c="dimmed" lineClamp={2} mt={4}>{f.confidence?.reason || 'Evidence strength not reported'}</Text></Table.Td>
                 <Table.Td miw={180} maw={240}><ReviewBadge review={f.review} onClick={() => { setReviewOpen(true); setDrawer(f.id); }} />
                   {f.review?.reopened_reason && <Text size="xs" c="orange" lineClamp={2} mt={4}>Reopened: {f.review.reopened_reason}</Text>}</Table.Td>
@@ -203,7 +207,8 @@ export default function Findings() {
                   <Text size="xs" c="dimmed" lineClamp={2}>{Array.from(new Set([f.group_id, ...f.references.filter((r) => r.system === 'cve').map((r) => r.id)])).filter(Boolean).join(' · ')}</Text></Table.Td>
                 <Table.Td maw={240}><Text size="xs" lineClamp={2}>{f.benchmark || 'Not recorded'}</Text><Text size="xs" c="dimmed">{f.benchmark_release || 'Not recorded'}</Text></Table.Td>
                 <Table.Td><Text size="xs">{f.collected_at && !Number.isNaN(Date.parse(f.collected_at)) ? fmtTime(f.collected_at) : 'Not recorded'}</Text></Table.Td>
-                <Table.Td><Group gap="sm"><Yes v={!!f.fix} tip={f.fix?.fix_ref ?? 'No library fix'} /><Yes v={!!f.explanation} tip={f.explanation ? 'Explanation ready' : 'Not yet explained'} />{f.proposal ? <StateBadge state={f.proposal.state} /> : <Text size="xs" c="dimmed">No proposal</Text>}</Group></Table.Td>
+                <Table.Td><Group gap="sm"><Yes v={!!f.fix} tip={f.fix?.fix_ref ?? 'No library fix'} /><Yes v={!!f.explanation} tip={f.explanation ? 'Explanation ready' : 'Not yet explained'} />{f.proposal ? <StateBadge state={f.proposal.state} /> : <Text size="xs" c="dimmed">No proposal</Text>}</Group>
+                  <Button variant="light" size="compact-xs" mt="xs" onClick={() => { setReviewOpen(false); setDrawer(f.id); }} aria-label={`View details for ${f.title}`}>View details</Button></Table.Td>
               </Table.Tr>)}</Table.Tbody>
             </Table>
           </ScrollArea>

@@ -65,8 +65,10 @@ def test_unreadable_benchmark_path_is_reported_not_scanned(transport, tmp_path):
     assert any("benchmark_path /root/missing-ds.xml is not readable" in e for e in col.errors)
 
 
-def test_without_benchmark_path_the_ssg_content_and_stig_profile_are_used(transport, tmp_path):
+def test_without_benchmark_path_the_ssg_content_and_stig_profile_are_used(transport, tmp_path, monkeypatch):
+    from cyberthunder.adapters.base import AssetFacts
     adapter = LinuxAdapter()
+    monkeypatch.setattr(adapter, "_facts_from", lambda commands: AssetFacts(model="rhel", os_version="9.4"))
     adapter.collect(_target(), transport, tmp_path / "w", modules=["check"])
     ev = _evals(transport)[0]
     assert "--profile xccdf_org.ssgproject.content_profile_stig " in ev
