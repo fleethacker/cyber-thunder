@@ -170,6 +170,7 @@ checklist, path to fleet), `demo reset|run`.
 | [docs/UI.md](docs/UI.md) | screens and behaviour |
 | [docs/DEMO.md](docs/DEMO.md) | 10-minute demo runbook |
 | [docs/SUBMISSION.md](docs/SUBMISSION.md) | portal submission draft |
+| [docs/BACKLOG.md](docs/BACKLOG.md) | what should be done and is not: identity and zero trust first, then every other known gap |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | working in this repo |
 | [docs/PLAN.md](docs/PLAN.md), [docs/CONTEXT.md](docs/CONTEXT.md) | build plan and event context |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | UDS cluster deployment: macOS, Linux, and Windows through WSL2 |
