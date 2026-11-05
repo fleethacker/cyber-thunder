@@ -5,7 +5,7 @@ from the finding's validated object reference (see kubectl.render); nothing else
 from a finding description is ever used. Before applying, the adapter saves the object it will touch
 (`kubectl get ... -o json`); rollback re-applies that saved object with server-owned fields removed
 (kubectl replace when the object still exists, kubectl apply when the fix deleted it), or deletes the
-object when the fix created it.
+object when the fix created it. This restores configuration, not runtime state, data, UIDs or service health.
 
 Control-plane flags (API server, kubelet, controller manager) live in files on the node, not in the API,
 so those fixes are runbooks: exact steps for the operator, no payload.
@@ -35,6 +35,32 @@ class FixMeta:
 
 META: dict[str, FixMeta] = {}
 
+# Keep stable references for historical proposals and saved-manifest rollback. Neither the library nor
+# an old proposal snapshot may use these entries to execute another destructive change.
+RETIRED_FIXES = {
+    "k8s:fix:delete-binding": "k8s:runbook:review-rbac-grant",
+    "k8s:fix:delete-cronjob": "k8s:runbook:investigate-cronjob",
+    "k8s:fix:delete-pod": "k8s:runbook:investigate-workload",
+    "k8s:fix:delete-dashboard-service": "k8s:runbook:review-dashboard-exposure",
+    "k8s:runbook:remove-rogue-workload": "k8s:runbook:investigate-workload",
+    "k8s:runbook:remove-dashboard": "k8s:runbook:review-dashboard-exposure",
+}
+REVIEW_FIXES = frozenset(RETIRED_FIXES.values()) | {
+    "k8s:runbook:untrusted-registry", "k8s:runbook:host-listener",
+}
+RECOVERY_LIMITS = (
+    "Saved manifests can restore configuration only. They cannot restore the original UID, running processes, "
+    "ephemeral volumes, completed or interrupted work, lost data, or guarantee application availability. "
+    "Review current owners and dependencies before recovery; validate data and service health separately."
+)
+
+
+def retired_reason(fix: FixEntry) -> str | None:
+    replacement = RETIRED_FIXES.get(fix.fix_ref)
+    if replacement:
+        return f"Retired destructive fix {fix.fix_ref}: execution disabled; use {replacement} for owner review."
+    return None
+
 
 def _strategic(container_patch: str) -> str:
     return ("kubectl patch deployment <name> -n <namespace> --type=strategic -p "
@@ -47,6 +73,8 @@ def _manifest_fixes() -> list[FixEntry]:
     out: list[FixEntry] = []
 
     def add(entry: FixEntry, meta: FixMeta) -> None:
+        entry.rollback_steps = ["Restore the captured configuration, or remove only a policy created by this fix.",
+                                RECOVERY_LIMITS]
         out.append(entry)
         META[entry.fix_ref] = meta
 
@@ -104,48 +132,47 @@ def _manifest_fixes() -> list[FixEntry]:
         before_state={"commands": {"object": "kubectl get networkpolicy " + DEFAULT_DENY + " -n <name> -o json"}},
         verify={"rule_ids": ["k8s:cis:5.3.2"]}, citations=CIS_RULES["netpol"].refs, source="kubernetes",
         notes="Blocks all inbound pod traffic in the namespace until allow rules are added. Agree the allow list with "
-              "the system owner first. Rollback deletes the policy."),
+              "the system owner first. Rollback restores a pre-existing policy, or removes only the newly created policy."),
         FixMeta(frozenset({"namespace"}), rollback_object=lambda r: ObjRef(r.name, "networkpolicy", DEFAULT_DENY)))
-    # hunt remediations: remove the rogue object; the saved copy lets rollback recreate it exactly
+    # Historical entries have no executable payload or rule mapping. META remains for saved rollback.
     add(FixEntry(
-        fix_ref="k8s:fix:delete-binding", title="Delete the rogue role binding",
-        asset_type=ASSET, applies_to=["k8s:hunt:admin-to-default", "k8s:cis:5.1.1", "k8s:ct:anonymous-binding"],
-        kind="manifest", payload="kubectl delete <kind> <name> -n <namespace>",
-        disruption="low", rollback_kind="manifest",
+        fix_ref="k8s:fix:delete-binding", title="Retired: delete an entire role binding",
+        asset_type=ASSET, applies_to=[], kind="manifest", payload="",
+        disruption="high", reversible=False, rollback_kind="manifest",
         before_state={"commands": {"object": GET_OBJECT}},
         verify={"rule_ids": ["k8s:hunt:admin-to-default", "k8s:cis:5.1.1", "k8s:ct:anonymous-binding"]},
         citations=HUNT_RULES["admin_default"].refs, source="hunt",
-        notes="Removes the grant immediately. Anything that relied on it gets 403 Forbidden; rotate the service "
-              "account token afterwards (delete its token secret) because it may already have been copied."),
+        notes="Execution disabled. Removing the entire binding revokes access for every subject, including legitimate "
+              "operators and services. Use targeted owner-reviewed RBAC correction. " + RECOVERY_LIMITS),
         FixMeta(frozenset({"clusterrolebinding", "rolebinding"})))
     add(FixEntry(
-        fix_ref="k8s:fix:delete-cronjob", title="Delete the malicious CronJob",
-        asset_type=ASSET, applies_to=["k8s:hunt:cronjob-download"], kind="manifest",
-        payload="kubectl delete cronjob <name> -n <namespace>",
-        disruption="low", rollback_kind="manifest",
+        fix_ref="k8s:fix:delete-cronjob", title="Retired: delete a CronJob",
+        asset_type=ASSET, applies_to=[], kind="manifest", payload="",
+        disruption="high", reversible=False, rollback_kind="manifest",
         before_state={"commands": {"object": GET_OBJECT}}, verify={"rule_ids": ["k8s:hunt:cronjob-download"]},
         citations=HUNT_RULES["cronjob"].refs, source="hunt",
-        notes="Jobs already spawned by the CronJob are removed with it. Preserve the saved object as evidence."),
+        notes="Execution disabled. Deletion stops scheduling and may garbage-collect owned Jobs and Pods depending "
+              "on propagation and ownership; their state is not captured by the CronJob manifest. " + RECOVERY_LIMITS),
         FixMeta(frozenset({"cronjob"})))
     add(FixEntry(
-        fix_ref="k8s:fix:delete-pod", title="Delete the rogue stand-alone pod",
-        asset_type=ASSET, applies_to=["k8s:hunt:host-escape", "k8s:hunt:unexpected-system-pod", "k8s:hunt:masquerade"],
-        kind="manifest", payload="kubectl delete pod <name> -n <namespace>",
-        disruption="low", rollback_kind="manifest",
+        fix_ref="k8s:fix:delete-pod", title="Retired: delete a pod",
+        asset_type=ASSET, applies_to=[], kind="manifest", payload="",
+        disruption="high", reversible=False, rollback_kind="manifest",
         before_state={"commands": {"object": GET_OBJECT}},
         verify={"rule_ids": ["k8s:hunt:host-escape", "k8s:hunt:unexpected-system-pod", "k8s:hunt:masquerade"]},
         citations=HUNT_RULES["escape"].refs + HUNT_RULES["system_pod"].refs[:1] + HUNT_RULES["masquerade"].refs,
         source="hunt",
-        notes="Only for pods with no controller. If a Deployment or DaemonSet owns the pod, remove that owner instead "
-              "(the pod would be recreated). The node the pod ran on should be treated as compromised."),
+        notes="Execution disabled. Deletion interrupts work and loses pod-local state; a controller may replace the "
+              "pod without correcting its template. A hunt indicator does not establish compromise. " + RECOVERY_LIMITS),
         FixMeta(frozenset({"pod"})))
     add(FixEntry(
-        fix_ref="k8s:fix:delete-dashboard-service", title="Remove the external service exposing the dashboard",
-        asset_type=ASSET, applies_to=["k8s:hunt:dashboard-exposed"], kind="manifest",
-        payload="kubectl delete service <name> -n <namespace>",
-        disruption="low", rollback_kind="manifest",
+        fix_ref="k8s:fix:delete-dashboard-service", title="Retired: delete a dashboard service",
+        asset_type=ASSET, applies_to=[], kind="manifest", payload="",
+        disruption="high", reversible=False, rollback_kind="manifest",
         before_state={"commands": {"object": GET_OBJECT}}, verify={"rule_ids": ["k8s:hunt:dashboard-exposed"]},
-        citations=HUNT_RULES["dashboard"].refs, source="hunt"),
+        citations=HUNT_RULES["dashboard"].refs, source="hunt",
+        notes="Execution disabled. Deletion interrupts all clients; restored configuration may not recover allocated "
+              "addresses, node ports or load-balancer state. Review exposure without removing the service. " + RECOVERY_LIMITS),
         FixMeta(frozenset({"service"})))
     return out
 
@@ -215,8 +242,17 @@ def _runbooks() -> list[FixEntry]:
           "Change the application to read the value from the mounted file.",
           "Apply the updated manifest through the normal change process and re-run the scan."], stig("CNTR-K8-001160").refs),
         ("k8s:runbook:move-from-default-namespace", "Move the workload to a dedicated namespace", ["CNTR-K8-000290"],
-         ["Create a namespace for the application, with its own service account and NetworkPolicy.",
-          "Re-create the workload there, move its Service and config, then delete the copy in the default namespace."],
+         ["Prepare with the application owner: inventory Services, DNS, RBAC, secrets/config, ingress, policies and "
+          "storage dependencies; define an approved maintenance window, success checks and rollback triggers.",
+          "Back up configuration and application data and test restoration. Namespace-scoped PVCs cannot simply "
+          "move with a manifest; plan storage access and data consistency, including prevention of duplicate writers or Jobs.",
+          "Prepare the destination namespace and least-privilege identities and policies. Test the replacement with "
+          "production-like dependencies before directing traffic to it.",
+          "Confirm readiness, application health and data integrity, then perform an owner-approved traffic cutover. "
+          "Keep the source configuration and recoverable data through an agreed observation period.",
+          "On failure, use the tested rollback plan; switching traffic back alone cannot undo data written after cutover. "
+          "Consider cleanup only as a separate approved change after dependency and backup review. This runbook does "
+          "not authorize namespace, PVC, PV or application-data deletion."],
          stig("CNTR-K8-000290").refs),
         ("k8s:runbook:host-port", "Stop mapping a privileged host port", ["CNTR-K8-000960"],
          ["Remove hostPort from the container ports and expose the application through a Service "
@@ -226,7 +262,8 @@ def _runbooks() -> list[FixEntry]:
           "If the image only works as root, rebuild it with a USER instruction; test before rollout."],
          CIS_RULES["root"].refs),
         ("k8s:runbook:remove-hostpath", "Replace the hostPath volume", ["k8s:cis:5.2.12"],
-         ["Replace the hostPath volume with a PersistentVolumeClaim, ConfigMap or emptyDir as the application needs.",
+         ["Inventory and back up the data before changing storage. Test restoration and a suitable persistent storage "
+          "replacement; ConfigMap is for configuration and emptyDir is only for disposable data. Preserve existing data.",
           "If node access is genuinely required (log or metrics agent), mount the narrowest path read-only and run it "
           "as a reviewed DaemonSet in a dedicated namespace."], CIS_RULES["hostPath"].refs),
         ("k8s:runbook:resource-limits", "Set CPU and memory limits", ["k8s:ct:resource-limits"],
@@ -237,38 +274,105 @@ def _runbooks() -> list[FixEntry]:
          LOCAL_RULES["latest"].refs),
         ("k8s:runbook:untrusted-registry", "Replace the image with one from an approved registry", ["k8s:hunt:untrusted-registry"],
          ["Identify who deployed the workload (audit log, owner annotations) before touching it; preserve the manifest.",
-          "If it is not authorized, delete the owning object. If it is, mirror the image into the approved registry "
-          "after review and update the reference."], HUNT_RULES["registry"].refs),
+          "Validate image provenance and business purpose with the owner. An unlisted registry does not prove malice. "
+          "Review an approved image or mirror, test dependencies and readiness, then roll out with a recovery plan. "
+          "Escalate evidence of compromise through separately approved incident response."], HUNT_RULES["registry"].refs),
         ("k8s:runbook:host-listener", "Take the pod off the host network", ["k8s:hunt:host-listener"],
          ["Confirm with the system owner why the pod needs hostNetwork. If it does not, remove hostNetwork and expose "
-          "it through a Service; if it is not authorized, delete the owning object."], HUNT_RULES["listener"].refs),
+          "it through an appropriate Service after testing connectivity and readiness. Preserve the current manifest "
+          "and a tested recovery path; investigate unauthorized use separately."], HUNT_RULES["listener"].refs),
         # the same changes for objects the deployment patches cannot touch (bare pods, CronJobs)
         ("k8s:runbook:drop-privileged", "Run the container unprivileged (pod or CronJob manifest)", ["k8s:cis:5.2.2"],
          ["Edit the manifest of the pod or CronJob and set securityContext.privileged: false and "
           "allowPrivilegeEscalation: false on the container.",
-          "A bare pod cannot be changed in place: delete it and re-create it from the corrected manifest. A CronJob "
-          "picks up the change on its next run. Re-run the scan."], CIS_RULES["privileged"].refs),
+          _REPLACEMENT_STEPS], CIS_RULES["privileged"].refs),
         ("k8s:runbook:no-escalation", "Set allowPrivilegeEscalation: false (pod or CronJob manifest)", ["k8s:cis:5.2.6"],
          ["Edit the manifest of the pod or CronJob and set securityContext.allowPrivilegeEscalation: false on the container.",
-          "Re-create a bare pod from the corrected manifest; a CronJob uses it on its next run. Re-run the scan."],
+          _REPLACEMENT_STEPS],
          CIS_RULES["escalation"].refs),
         ("k8s:runbook:host-namespaces", "Stop sharing host PID/IPC/network namespaces (pod or CronJob manifest)",
          ["k8s:cis:5.2.3", "k8s:cis:5.2.4", "k8s:cis:5.2.5"],
          ["Edit the manifest of the pod or CronJob and remove hostPID, hostIPC and hostNetwork (or set them false).",
-          "Re-create a bare pod from the corrected manifest; a CronJob uses it on its next run. Re-run the scan."],
+          _REPLACEMENT_STEPS],
          CIS_RULES["hostPID"].refs),
-        ("k8s:runbook:remove-rogue-workload", "Remove the controller that runs the rogue pod",
-         ["k8s:hunt:host-escape", "k8s:hunt:unexpected-system-pod", "k8s:hunt:masquerade"],
-         ["Save the owning object as evidence: 'kubectl get <kind> <name> -n <namespace> -o yaml'.",
-          "Delete the owning Deployment, DaemonSet or CronJob (deleting only its pods lets the controller recreate them).",
-          "Treat the nodes the pods ran on as compromised and re-run the scan."], HUNT_RULES["escape"].refs),
-        ("k8s:runbook:remove-dashboard", "Remove the Kubernetes dashboard", ["CNTR-K8-000420"],
-         ["Delete the dashboard deployment, service and service account "
-          "('kubectl delete ns kubernetes-dashboard' if it was installed in its own namespace)."], stig("CNTR-K8-000420").refs),
     ]
     for ref, title, applies, steps, cites in workload:
         rbs.append(_runbook(ref, title, applies, steps, cites, restarts=["pods of the workload"]))
-    return rbs
+    return rbs + _review_runbooks()
+
+
+_REPLACEMENT_STEPS = (
+    "For immutable pod fields, plan an owner-approved replacement: back up configuration and data, check dependencies, "
+    "test readiness and application health, and arrange cutover and rollback before retiring the old pod. A standalone "
+    "pod may require downtime; a new pod cannot recover the old runtime or ephemeral state. CronJob template changes "
+    "affect future Jobs only; inspect existing Jobs and Pods separately. Re-scan after the approved change."
+)
+
+
+def _review_runbooks() -> list[FixEntry]:
+    entries = [
+        _runbook("k8s:runbook:review-rbac-grant", "Review and narrow the RBAC grant with its owner",
+                 ["k8s:hunt:admin-to-default", "k8s:cis:5.1.1", "k8s:ct:anonymous-binding"],
+                 ["Preserve the binding and referenced role; identify every subject, namespace scope, application "
+                  "dependency and break-glass access path with the owner. A grant is not evidence of account compromise.",
+                  "Plan a targeted correction to the unwanted subject or excessive permissions. Preserve legitimate "
+                  "subjects; use a dedicated least-privilege role/binding where needed. Do not remove the entire binding "
+                  "or alter a shared role without assessing every consumer.",
+                  "Obtain approval for the specific RBAC diff and recovery plan, test allowed and denied operations "
+                  "and service access, then re-scan. Investigate credential compromise separately."],
+                 HUNT_RULES["admin_default"].refs, disruption="high"),
+        _runbook("k8s:runbook:investigate-cronjob", "Investigate the CronJob with its owner",
+                 ["k8s:hunt:cronjob-download"],
+                 ["Preserve the CronJob template and available Job/Pod evidence. Validate ownership, image provenance, "
+                  "command purpose, schedule, dependencies and existing Jobs; a network-fetch command can be legitimate.",
+                  "If urgent containment is explicitly approved, consider spec.suspend: true to stop future scheduling. "
+                  "Suspension does not stop existing Jobs or Pods, correct the template, or prove remediation. Assess "
+                  "missed business work and existing activity separately; no containment runs automatically.",
+                  "Test an owner-approved template correction and data/recovery plan. Review missed schedules and "
+                  "deadlines before resuming because missed work may start. Validate Job outcomes and service health "
+                  "before closing the investigation; re-scan configuration separately."],
+                 HUNT_RULES["cronjob"].refs, disruption="high"),
+        _runbook("k8s:runbook:investigate-workload", "Investigate workload ownership and privileges",
+                 ["k8s:hunt:host-escape", "k8s:hunt:unexpected-system-pod", "k8s:hunt:masquerade"],
+                 ["Preserve workload/controller configuration and available evidence. Validate the deployment owner, "
+                  "image provenance and business purpose; names and privilege combinations do not establish malice.",
+                  "Review host access with the owner and plan the narrowest necessary privilege correction in the "
+                  "owning template. Back up data, test dependencies and readiness, then use an approved rollout and "
+                  "recovery plan. For standalone pods, explicitly plan replacement downtime and state recovery limits.",
+                  "Investigate credible compromise through separately approved incident response. Do not infer node "
+                  "compromise or authorize workload/controller deletion from this heuristic. Validate application "
+                  "health and investigation evidence separately from a fresh configuration scan."],
+                 HUNT_RULES["escape"].refs + HUNT_RULES["system_pod"].refs + HUNT_RULES["masquerade"].refs),
+        _runbook("k8s:runbook:review-dashboard-exposure", "Review dashboard access and preserve required service",
+                 ["k8s:hunt:dashboard-exposed", "CNTR-K8-000420"],
+                 ["Confirm the actual application and owner; a dashboard-like name or label is only an indicator. "
+                  "Inventory clients, authentication, Service selectors/ports, ingress and external access dependencies.",
+                  "With owner approval, prepare and test authenticated private access. Where appropriate, review a "
+                  "Service patch to ClusterIP and removal of unneeded externalIPs, nodePort or load-balancer exposure; "
+                  "preserve required selectors and ports, validate routing, and plan cutover and recovery first.",
+                  "A private Service does not satisfy a benchmark requiring dashboard absence. If that requirement "
+                  "applies, use a separately approved retirement plan or documented review/exception, after replacement "
+                  "access and dependencies are validated. This runbook authorizes no namespace or data deletion.",
+                  "Re-scan configuration and verify authorized access, application health and exposure separately; "
+                  "disappearance of an object or finding alone is not proof of safe remediation."],
+                 HUNT_RULES["dashboard"].refs + stig("CNTR-K8-000420").refs, disruption="high"),
+    ]
+    for entry in entries:
+        entry.notes = "Owner review required; no automatic mutation or verified resolution."
+        entry.rollback_steps = ["No tool mutation. Plan recovery for any separately approved manual change.", RECOVERY_LIMITS]
+    for ref, replacement in RETIRED_FIXES.items():
+        if not ref.startswith("k8s:runbook:"):
+            continue
+        active = next(e for e in entries if e.fix_ref == replacement)
+        retired = _runbook(ref, "Retired: destructive removal runbook", [],
+                           [f"Do not execute saved removal instructions. Use {replacement} for owner review."],
+                           active.citations, disruption="high")
+        retired.verify = dict(active.verify)
+        retired.reversible = False
+        retired.notes = "Execution disabled. Controller or namespace removal can interrupt services and lose data. " + RECOVERY_LIMITS
+        retired.rollback_steps = ["Review historical manual changes with the owner and recover from tested backups.", RECOVERY_LIMITS]
+        entries.append(retired)
+    return entries
 
 
 def kubernetes_fixes() -> list[FixEntry]:
@@ -276,13 +380,12 @@ def kubernetes_fixes() -> list[FixEntry]:
 
 
 # When a manifest fix's template cannot be applied to the finding's object kind (a deployment patch for a bare
-# pod, a pod delete for a deployment), the finding points at this runbook instead, so the approver is never
+# pod), the finding points at this runbook instead, so the approver is never
 # offered a change that is bound to fail at execute.
 KIND_FALLBACK = {
     "k8s:fix:deployment-drop-privileged": "k8s:runbook:drop-privileged",
     "k8s:fix:deployment-no-escalation": "k8s:runbook:no-escalation",
     "k8s:fix:deployment-host-namespaces": "k8s:runbook:host-namespaces",
-    "k8s:fix:delete-pod": "k8s:runbook:remove-rogue-workload",
 }
 
 
@@ -290,6 +393,8 @@ def point_at_applicable_fix(findings: list) -> list:
     """Set fix_ref to the runbook fallback on findings whose first manifest fix does not fit the object kind."""
     manifests = [e for e in kubernetes_fixes() if e.fix_ref in META]
     for f in findings:
+        if f.fix_ref in RETIRED_FIXES:
+            f.fix_ref = RETIRED_FIXES[f.fix_ref]
         if f.fix_ref or not f.rule_version:
             continue
         entry = next((e for e in manifests if f.rule_version in e.applies_to), None)
