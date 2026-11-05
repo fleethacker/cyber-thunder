@@ -34,7 +34,9 @@ def test_packaged_startup_registers_host_cluster(packaged_settings):
         assert target["name"] == "Local Kubernetes cluster"
         assert target["asset_type"] == "kubernetes"
         assert target["transport"] == "kubeconfig"
-        assert target["options"] == {"kubeconfig": str(Path("/etc/cyberthunder/kubeconfig")),
+        expected_kubeconfig = target["options"]["kubeconfig"]
+        assert Path(expected_kubeconfig) == Path("/etc/cyberthunder/kubeconfig")
+        assert target["options"] == {"kubeconfig": expected_kubeconfig,
                                      "context": "in-cluster", "kubectl": "kubectl"}
         assert target["in_scope"] is True
         assert target["sudo"] is False
@@ -71,8 +73,9 @@ def test_host_cluster_discovery_uses_packaged_context_and_node_permissions(packa
     calls = []
 
     def run(argv, **kwargs):
-        assert argv[:5] == ["kubectl", "--kubeconfig", str(Path("/etc/cyberthunder/kubeconfig")),
-                            "--context", "in-cluster"]
+        assert argv[:2] == ["kubectl", "--kubeconfig"]
+        assert Path(argv[2]) == Path("/etc/cyberthunder/kubeconfig")
+        assert argv[3:5] == ["--context", "in-cluster"]
         calls.append(argv[5:])
         if argv[5:] == ["version", "-o", "json"]:
             assert any("/version" in r.get("nonResourceURLs", []) and "get" in r["verbs"]
