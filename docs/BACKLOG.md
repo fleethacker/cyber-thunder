@@ -100,12 +100,13 @@ The goal is that a target's own log names the person who approved the change and
 | Any | Broker checkout (Vault first, CyberArk CCP/Conjur) with proposal id and approver as metadata | Broker must run on the enclave; PSM session recording forces execution through its proxy | Request, scope, time out, revoke on kill switch, audit the lease | The broker, accounts, rotation, recording |
 
 **ZT-12 Windows per-user remoting.** Pillars: User, Device, Application. Step: 90 days (range domain), 180 days (enclave). Effort: 1 week app, 1-2 weeks enclave with the range owner. Depends: ZT-02, ZT-15 or AD changes, ZT-29.
-- Today: password from `CT_CRED_<ref>` (`transport/winrm.py:94-95`), default NTLM (`winrm.py:96`), Basic and CredSSP allowed (`winrm.py:26`). Kerberos untested against a real KDC.
+- Today: password from `CT_CRED_<ref>` (`transport/winrm.py:94-95`), default NTLM (`winrm.py:96`), Basic and CredSSP allowed (`winrm.py:26`). Kerberos and CredSSP are covered only by unit tests with a fake WinRM session (`tests/windows/test_winrm_transport.py`); no run against a domain controller is recorded in the repository.
 - Target: options in the table; CredSSP rejected (reusable credentials on the target), Basic rejected outright.
 - Done when: in fleet mode a Basic or CredSSP target is refused at `make_transport`; an apply approved by bob shows bob in the target's 4624/4648 events and the JEA transcript; a cmdlet outside the role capability fails on the target; a LAPS checkout writes an audit record naming the admin and host.
 
 **ZT-13 Linux and Cisco: short-lived SSH certificates, PIV for interactive, TACACS+.** Pillars: User, Device. Step: 90 days (range), 180 days (enclave). Effort: 1 week app, 1 week CA and sshd on the range. Depends: ZT-18, ZT-19.
 - Today: one username per target with a key file or password (`transport/ssh.py:43-55`); `look_for_keys=True` also tries any key in the process user's `~/.ssh` (`ssh.py:65`); sudo on by default (`docs/ADAPTING.md:37`).
+- Target: short-lived SSH certificates issued per approver by an enclave CA that the range sshd trusts, with the approver's identity as the principal; `look_for_keys` off and host keys pinned from the inventory (ZT-30); PIV or CAC over PKCS#11 for interactive console use; Cisco devices authenticate and account per user through TACACS+, so every pushed command carries the approver's name in the device's accounting log.
 - Done when: on a range RHEL host sshd logs the approver's key id and serial, matching the audit record; the certificate fails after expiry; a stray key in `~/.ssh` is not offered; Cisco TACACS+ accounting names the approver for each pushed command.
 
 **ZT-14 Kubernetes: impersonation, no shared admin kubeconfig.** Pillars: User, Application. Step: 60 days. Effort: 4-6 days. Depends: ZT-01, ZT-08, ZT-17.
