@@ -55,7 +55,8 @@ async def import_scanner(request: Request, ctx=CtxDep, actor: str = ActorDep) ->
         if len(body) + len(chunk) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "scanner upload exceeds the size limit")
         body.extend(chunk)
-    data, mapping, include_info = parse_upload(bytes(body), request.headers.get("content-type", ""))
+    data, mapping, include_info = await run_in_threadpool(parse_upload, bytes(body),
+                                                        request.headers.get("content-type", ""))
     svc = _svc(ctx, "scanner import")
     try:
         return await run_in_threadpool(svc.import_scanner, data, mapping, actor=actor, include_info=include_info)

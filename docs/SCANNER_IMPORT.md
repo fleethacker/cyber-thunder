@@ -91,6 +91,12 @@ commander report likewise omits `--scan-id`, so it regenerates the current view.
 ## Overlay, provenance and repeat policy
 
 The existing Nessus parser handles CVEs, advisory references, severity, compliance checks and merged ports.
+Before invoking its merge, the importer checks individual normalized compliance results. Different statuses
+or severities for the same source host/source/rule identity reject the entire export in either order,
+including when a conflicting informational result would otherwise be filtered out. Consistent compliance
+duplicates and ordinary same-plugin observations across ports still merge. This validation is local to
+imports; the standalone parser's behavior is unchanged.
+
 Its source remains `acas`. After host mapping, each finding ID is recalculated using the normal stable
 `Finding.make_id(target_id, source, rule_id)` convention. A later import updating that target/source/rule
 overlays the same ID. Unmentioned findings and hosts are not cleared or marked clean. Remapping a host
@@ -120,8 +126,16 @@ full scan; repeating it does not reassert old observations over that scan.
 ## Bounds and publication
 
 XML is limited to 16 MiB; mapping JSON to 256 KiB; the complete HTTP envelope to their sum plus 64 KiB.
-The request stream is checked incrementally even without a Content-Length header. XML also has limits of
-4,096 hosts, 50,000 report items, 250,000 elements, 32 nesting levels and 65,536 characters per text field
+The request stream is checked incrementally even without a Content-Length header. Multipart input must be
+one flat form with at most three fields and a 1-70 character boundary. Each part allows at most 8 KiB of
+headers and 16 distinct headers. Nested multipart and message containers, duplicate headers, incomplete
+delimiters, and non-empty preambles/epilogues are rejected with HTTP 400. Headers are parsed separately
+and the body is traversed iteratively; nested bodies never enter recursive MIME parsing. Form parsing,
+XML validation/normalization and import publication run in the existing worker thread pool, keeping the
+API event loop available for other requests.
+
+XML also has limits of 4,096 hosts, 50,000 report items, 250,000 elements, 32 nesting levels and
+65,536 characters per text field
 or attribute. Exactly one report is accepted. DTD/entity declarations (including UTF-16 input), malformed
 XML, invalid plugin IDs, severity, ports, protocols and CVE identifiers are rejected. Large exports must
 be split into bounded, one-report exports outside this workflow.

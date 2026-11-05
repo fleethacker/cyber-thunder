@@ -9,12 +9,13 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from datetime import datetime, timezone
 from email import policy
-from email.parser import BytesParser
+from email.parser import BytesHeaderParser
 from pathlib import Path
 
 from cyberthunder.audit.chain import file_lock
 from cyberthunder.control.identity import require_human
 from cyberthunder.findings.schema import Finding, RE_CVE, summarize
+from cyberthunder.parsers import nessus
 from cyberthunder.parsers.nessus import parse_nessus
 from cyberthunder.scan import ScanRun, TargetScanResult
 from cyberthunder.store import is_partial_run
@@ -22,6 +23,9 @@ from cyberthunder.store import is_partial_run
 MAX_XML_BYTES = 16 * 1024 * 1024
 MAX_MAPPING_BYTES = 256 * 1024
 MAX_UPLOAD_BYTES = MAX_XML_BYTES + MAX_MAPPING_BYTES + 64 * 1024
+MAX_PART_HEADER_BYTES = 8192
+MAX_PART_HEADERS = 16
+MAX_UPLOAD_PARTS = 3
 MAX_HOSTS = 4096
 MAX_ITEMS = 50000
 MAX_ELEMENTS = 250000
@@ -88,27 +92,64 @@ def validate_mapping(mapping) -> dict[str, str]:
     return dict(mapping)
 
 
+def _upload_headers(data: bytes):
+    """Parse bounded headers only; never give a MIME body to the recursive email parser."""
+    if len(data) > MAX_PART_HEADER_BYTES:
+        raise ValueError
+    headers = BytesHeaderParser(policy=policy.compat32).parsebytes(data + b"\r\n\r\n")
+    names = [name.lower() for name in headers.keys()]
+    if headers.defects or len(names) > MAX_PART_HEADERS or len(set(names)) != len(names):
+        raise ValueError
+    return headers
+
+
 def parse_upload(body: bytes, content_type: str) -> tuple[bytes, dict, bool]:
-    """Strict stdlib multipart reader; filenames and other MIME metadata are discarded."""
+    """Read a flat multipart form iteratively, discarding filenames and other MIME metadata."""
     if len(body) > MAX_UPLOAD_BYTES:
         raise ScannerImportError("scanner upload exceeds the size limit")
     if len(content_type) > 256 or "\r" in content_type or "\n" in content_type:
         raise ScannerImportError("invalid scanner upload content type")
     try:
-        message = BytesParser(policy=policy.default).parsebytes(
-            b"Content-Type: " + content_type.encode("ascii") + b"\r\nMIME-Version: 1.0\r\n\r\n" + body)
+        message = _upload_headers(b"Content-Type: " + content_type.encode("ascii"))
         boundary = message.get_boundary()
-        if (message.get_content_type() != "multipart/form-data" or not message.is_multipart()
-                or not boundary or len(boundary) > 70 or message.defects):
+        if (message.get_content_type() != "multipart/form-data" or not boundary
+                or not re.fullmatch(r"[0-9A-Za-z'()+_,./:=? -]{1,70}", boundary) or boundary.endswith(" ")):
             raise ValueError
+        delimiter = b"--" + boundary.encode("ascii")
+        if not body.startswith(delimiter + b"\r\n"):
+            raise ValueError
+        position = len(delimiter) + 2
+        marker = b"\r\n" + delimiter
         fields = {}
-        for part in message.iter_parts():
+        while True:
+            if len(fields) >= MAX_UPLOAD_PARTS:
+                raise ValueError
+            header_end = body.find(b"\r\n\r\n", position, position + MAX_PART_HEADER_BYTES + 4)
+            if header_end < 0:
+                raise ValueError
+            part = _upload_headers(body[position:header_end])
             name = part.get_param("name", header="content-disposition")
-            if (part.is_multipart() or part.defects or name not in {"file", "host_map", "include_info"}
+            if (part.get_content_maintype() in {"multipart", "message"}
+                    or name not in {"file", "host_map", "include_info"}
                     or name in fields or part.get_content_disposition() != "form-data"
                     or part.get("Content-Transfer-Encoding", "binary").lower() not in {"binary", "7bit", "8bit"}):
                 raise ValueError
-            fields[name] = part.get_payload(decode=True)
+            start = header_end + 4
+            end = body.find(marker, start)
+            while end >= 0:
+                tail = body[end + len(marker):end + len(marker) + 4]
+                if tail.startswith(b"\r\n") or tail in (b"--", b"--\r\n"):
+                    break
+                end = body.find(marker, end + len(marker))
+            if end < 0:
+                raise ValueError
+            fields[name] = body[start:end]
+            position = end + len(marker)
+            if body[position:position + 2] == b"--":
+                if body[position + 2:] not in (b"", b"\r\n"):
+                    raise ValueError
+                break
+            position += 2
         if set(fields) not in ({"file", "host_map"}, {"file", "host_map", "include_info"}):
             raise ValueError
         include = fields.get("include_info", b"false")
@@ -163,6 +204,7 @@ def _validate_xml(data: bytes) -> set[str]:
         raise ScannerImportError("expected a NessusClientData_v2 export")
     parents = {child: parent for parent in root.iter() for child in parent}
     reports, hosts, items = [], set(), 0
+    compliance_results = {}
     for node in root.iter():
         tag = _local(node.tag)
         parent = parents.get(node)
@@ -194,6 +236,16 @@ def _validate_xml(data: bytes) -> set[str]:
             if any(k.startswith("compliance-") for k in fields) and not any(
                     fields.get(k, "").strip() for k in ("compliance-check-id", "compliance-check-name")):
                 raise ScannerImportError("compliance results require a stable check identifier or name")
+            if any(k.startswith("compliance-") for k in fields):
+                # Use the parser's item normalization before its first-result-wins port merge. The
+                # required one-to-one host mapping preserves these identities after target mapping.
+                finding = nessus._build(parent.get("name"), {}, node.attrib, nessus._item_fields(node),
+                                        "", "acas", "")
+                key = (finding.host, finding.source, finding.rule_id)
+                result = (finding.status, finding.severity)
+                if key in compliance_results and compliance_results[key] != result:
+                    raise ScannerImportError("conflicting compliance results for the same normalized identity")
+                compliance_results[key] = result
     if len(reports) != 1 or not hosts or not items or len(hosts) > MAX_HOSTS or items > MAX_ITEMS:
         raise ScannerImportError("export must contain one report with hosts and results within the import limits")
     return hosts

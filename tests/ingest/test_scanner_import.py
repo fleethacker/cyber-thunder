@@ -263,6 +263,65 @@ def test_compliance_check_ids_and_status_survive_mapping(passive):
     assert findings["WN11-AC-000040"].status.value == "not_a_finding"
 
 
+def compliance_duplicates(results, *, stig=True):
+    reference = "STIG-ID|WN11-AC-000035" if stig else "CCI|CCI-000366"
+    items = "".join(f'''<ReportItem port="{port}" protocol="tcp" severity="{severity}" pluginID="21156">
+      <cm:compliance-check-id>password-length</cm:compliance-check-id>
+      <cm:compliance-check-name>Password length</cm:compliance-check-name>
+      <cm:compliance-reference>{reference}</cm:compliance-reference>
+      <cm:compliance-result>{status}</cm:compliance-result>
+      </ReportItem>''' for port, status, severity in results)
+    return (f'<NessusClientData_v2 xmlns:cm="urn:compliance"><Report><ReportHost name="audit-host">'
+            f'{items}</ReportHost></Report></NessusClientData_v2>').encode()
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("stig", [False, True])
+@pytest.mark.parametrize("outcomes", [("PASSED", 0, "FAILED", 3), ("PASSED", 3, "FAILED", 3),
+                                      ("FAILED", 1, "FAILED", 3)])
+def test_conflicting_compliance_results_are_rejected_before_merge_or_writes(passive, monkeypatch, reverse, stig,
+                                                                           outcomes):
+    seed(passive)
+    before = {p.relative_to(passive.store.root): p.read_bytes()
+              for p in passive.store.root.rglob("*") if p.is_file()}
+    parser = Mock(side_effect=AssertionError("conflicts must be rejected before the merge parser"))
+    monkeypatch.setattr(imports, "parse_nessus", parser)
+    results = [(0, outcomes[0], outcomes[1]), (445, outcomes[2], outcomes[3])]
+    if reverse:
+        results.reverse()
+    with pytest.raises(imports.ScannerImportError, match="conflicting compliance"):
+        run_import(passive, compliance_duplicates(results, stig=stig), {"audit-host": "workstation"},
+                   include_info=True)
+    parser.assert_not_called()
+    assert {p.relative_to(passive.store.root): p.read_bytes()
+            for p in passive.store.root.rglob("*") if p.is_file()} == before
+
+
+def test_filtering_info_does_not_hide_a_compliance_conflict(passive):
+    original = seed(passive)
+    data = compliance_duplicates([(0, "PASSED", 0), (445, "FAILED", 3)])
+    with pytest.raises(imports.ScannerImportError, match="conflicting compliance"):
+        run_import(passive, data, {"audit-host": "workstation"})
+    assert len(passive.store.list_scan_runs()) == 1
+    assert [f.id for f in passive.store.current_findings()] == [original.id]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("stig", [False, True])
+def test_consistent_compliance_duplicates_keep_stable_mapped_identity(passive, reverse, stig):
+    results = [(0, "FAILED", 3), (445, " failed ", 3)]
+    if reverse:
+        results.reverse()
+    result = run_import(passive, compliance_duplicates(results, stig=stig), {"audit-host": "workstation"},
+                        include_info=True)
+    (finding,) = passive.store.load_findings(result["scan_id"])
+    rule_id = "WN11-AC-000035" if stig else "nessus:21156:password-length"
+    assert finding.rule_id == rule_id and finding.host == "workstation"
+    assert finding.id == Finding.make_id("workstation", "acas", rule_id)
+    assert finding.status.value == "open"
+    assert {"port:0/tcp", "port:445/tcp"} <= set(finding.tags)
+
+
 def test_historical_repeat_does_not_reassert_old_results(passive):
     result = run_import(passive)
     fresh = seed(passive, run_id="new-full")

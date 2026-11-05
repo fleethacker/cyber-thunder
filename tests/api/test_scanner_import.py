@@ -1,13 +1,16 @@
 """Real import service and existing findings/report routes, using fixture input only."""
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
+import threading
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from cyberthunder.api.app import create_app
@@ -230,6 +233,125 @@ def test_duplicate_mapping_form_field_rejected(scanner_client, ctx):
     ])
     assert response.status_code == 400
     assert ctx.store.list_scan_runs() == []
+
+
+def nested_upload(depth, *, kind="multipart/mixed"):
+    body = [b'--outer\r\nContent-Disposition: form-data; name="file"; filename="input.nessus"\r\n',
+            f'Content-Type: {kind}; boundary=inner0\r\n\r\n'.encode()]
+    for level in range(depth):
+        body.append(f'--inner{level}\r\nContent-Type: {kind}; boundary=inner{level + 1}\r\n\r\n'.encode())
+    body.append(b"private-secret\r\n")
+    body.extend(f'--inner{level}--\r\n'.encode() for level in reversed(range(depth + 1)))
+    body.extend([b'--outer\r\nContent-Disposition: form-data; name="host_map"\r\n\r\n',
+                 json.dumps(MAPPING).encode(), b'\r\n--outer--\r\n'])
+    return b"".join(body)
+
+
+@pytest.mark.parametrize("depth,kind", [(1, "multipart/mixed"), (1200, "multipart/mixed"),
+                                       (1200, "message/rfc822")])
+def test_nested_mime_is_refused_without_writes(scanner_client, ctx, depth, kind):
+    seed_full(ctx)
+    before = {p.relative_to(ctx.store.root): p.read_bytes() for p in ctx.store.root.rglob("*") if p.is_file()}
+    body = nested_upload(depth, kind=kind)
+    assert len(body) < imports.MAX_UPLOAD_BYTES
+    response = scanner_client.post(URL, headers={**ACTOR, "Content-Type": "multipart/form-data; boundary=outer"},
+                                   content=body)
+    assert response.status_code == 400 and "private-secret" not in response.text
+    assert {p.relative_to(ctx.store.root): p.read_bytes()
+            for p in ctx.store.root.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_conflicting_compliance_upload_preserves_current_picture(scanner_client, ctx, reverse):
+    prior = seed_full(ctx)
+    before = {p.relative_to(ctx.store.root): p.read_bytes() for p in ctx.store.root.rglob("*") if p.is_file()}
+    results = ["PASSED", "FAILED"]
+    if reverse:
+        results.reverse()
+    items = "".join(f'''<ReportItem port="0" protocol="tcp" pluginID="21156"
+                        severity="{0 if status == 'PASSED' else 3}">
+      <cm:compliance-check-id>different-check-{i}</cm:compliance-check-id>
+      <cm:compliance-reference>STIG-ID|WN11-AC-000035</cm:compliance-reference>
+      <cm:compliance-result>{status}</cm:compliance-result>
+      </ReportItem>''' for i, status in enumerate(results))
+    data = (f'<NessusClientData_v2 xmlns:cm="urn:compliance"><Report><ReportHost name="one">'
+            f'{items}</ReportHost></Report></NessusClientData_v2>').encode()
+    response = upload(scanner_client, data, {"one": "workstation"}, include_info="true")
+    assert response.status_code == 400 and "conflicting compliance" in response.json()["detail"]
+    assert scanner_client.get("/api/v1/findings").json()["findings"][0]["id"] == prior.id
+    assert {p.relative_to(ctx.store.root): p.read_bytes()
+            for p in ctx.store.root.rglob("*") if p.is_file()} == before
+
+
+def flat_upload(data, extra_headers=b""):
+    return (b'--flat\r\nContent-Disposition: form-data; name="file"; filename="input.nessus"\r\n'
+            b'Content-Type: application/xml\r\n' + extra_headers + b'\r\n' + data
+            + b'\r\n--flat\r\nContent-Disposition: form-data; name="host_map"\r\n\r\n'
+            + json.dumps(MAPPING).encode() + b'\r\n--flat--\r\n')
+
+
+@pytest.mark.parametrize("case", ["missing_close", "preamble", "epilogue", "header_size", "header_count",
+                                 "duplicate_header"])
+def test_malformed_flat_form_is_bounded_and_does_not_write(scanner_client, ctx, case):
+    headers = b""
+    if case == "header_size":
+        headers = b"X-Large: " + b"x" * imports.MAX_PART_HEADER_BYTES + b"\r\n"
+    elif case == "header_count":
+        headers = b"".join(f"X-{i}: value\r\n".encode() for i in range(imports.MAX_PART_HEADERS))
+    elif case == "duplicate_header":
+        headers = b"Content-Type: multipart/mixed\r\n"
+    body = flat_upload(SAMPLE.read_bytes(), headers)
+    if case == "missing_close":
+        body = body.removesuffix(b"--flat--\r\n")
+    elif case == "preamble":
+        body = b"private-secret\r\n" + body
+    elif case == "epilogue":
+        body += b"private-secret"
+    before = {p.relative_to(ctx.store.root): p.read_bytes() for p in ctx.store.root.rglob("*") if p.is_file()}
+    response = scanner_client.post(URL, headers={**ACTOR, "Content-Type": "multipart/form-data; boundary=flat"},
+                                   content=body)
+    assert response.status_code == 400 and "private-secret" not in response.text
+    assert {p.relative_to(ctx.store.root): p.read_bytes()
+            for p in ctx.store.root.rglob("*") if p.is_file()} == before
+
+
+def test_flat_form_preserves_boundary_prefix_in_xml():
+    data = SAMPLE.read_bytes().replace(b"Encryption level not enforced.", b"Evidence\r\n--flat-not-a-delimiter\r\n")
+    parsed, mapping, include_info = imports.parse_upload(flat_upload(data), 'multipart/form-data; boundary="flat"')
+    assert parsed == data and mapping == MAPPING and not include_info
+
+
+def test_upload_parsing_does_not_block_other_requests(scanner_client, ctx, monkeypatch):
+    prior = seed_full(ctx)
+    entered, release = threading.Event(), threading.Event()
+    parse = imports.parse_upload
+    loop_thread = threading.get_ident()
+
+    def paused_parse(*args):
+        entered.set()
+        assert threading.get_ident() != loop_thread, "upload parser ran on the event loop"
+        assert release.wait(10), "test did not release the parser"
+        return parse(*args)
+
+    monkeypatch.setattr(imports, "parse_upload", paused_parse)
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=scanner_client.app),
+                                     base_url="http://testserver") as client:
+            pending = asyncio.create_task(client.post(URL, headers=ACTOR,
+                files={"file": ("input.nessus", SAMPLE.read_bytes())}, data={"host_map": json.dumps(MAPPING)}))
+            try:
+                assert await asyncio.to_thread(entered.wait, 5), "upload parser did not start"
+                response = await asyncio.wait_for(client.get("/api/v1/findings"), timeout=5)
+                assert response.status_code == 200
+                assert {f["id"] for f in response.json()["findings"]} == {prior.id}
+                assert not pending.done(), "upload completed before the parser was released"
+            finally:
+                release.set()
+                imported = await pending
+            assert imported.status_code == 200 and imported.json()["imported_count"] == 5
+
+    asyncio.run(exercise())
 
 
 def test_include_info_is_explicit(scanner_client):
