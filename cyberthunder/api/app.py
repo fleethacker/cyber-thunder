@@ -16,15 +16,29 @@ log = logging.getLogger(__name__)
 
 API_PREFIX = "/api/v1"
 # Fixed list: a new feature area adds a module here and nowhere else.
-ROUTE_MODULES = ("status", "targets", "scans", "findings", "proposals", "audit", "kill", "policy",
+ROUTE_MODULES = ("status", "targets", "scans", "findings", "proposals", "audit", "kill", "policy", "cluster",
                  "ingest", "reports", "demo", "discovery")
 
 
 def create_app(ctx: AppContext | None = None) -> FastAPI:
     app = FastAPI(title=PRODUCT, version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.state.ctx = ctx or AppContext()
+    app.state.runtime_tasks = None
     from cyberthunder.api.errors import register_error_handlers
     register_error_handlers(app)
+
+    @app.on_event("startup")
+    def _startup_runtime_tasks() -> None:
+        from cyberthunder.runtime import RuntimeTasks
+        tasks = RuntimeTasks(app.state.ctx)
+        tasks.start()
+        app.state.runtime_tasks = tasks
+
+    @app.on_event("shutdown")
+    def _shutdown_runtime_tasks() -> None:
+        tasks = getattr(app.state, "runtime_tasks", None)
+        if tasks is not None:
+            tasks.stop()
 
     for name in ROUTE_MODULES:
         try:

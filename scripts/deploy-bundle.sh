@@ -33,6 +33,21 @@ if ! engine_platform=$(docker info --format '{{.OSType}}/{{.Architecture}}'); th
   echo "Start the selected container engine, then rerun ./deploy.sh." >&2
   exit 1
 fi
+engine_memory_bytes=$(docker info --format '{{.MemTotal}}')
+if [ "${engine_memory_bytes:-0}" -lt 10737418240 ]; then
+  python3 - "$engine_memory_bytes" <<'PY'
+import sys
+
+memory_bytes = int(sys.argv[1] or 0)
+gib = memory_bytes / 1024 / 1024 / 1024
+sys.exit(
+    f"The selected container engine exposes only {gib:.1f} GiB RAM. "
+    "UDS Core needs at least 10 GiB for the local k3d demo; otherwise istiod cannot schedule "
+    "and ztunnel stays unready. Increase Docker/Podman/WSL memory, restart the engine, delete the "
+    "partial cyber-thunder cluster, and rerun ./deploy.sh."
+)
+PY
+fi
 
 case "$engine_platform" in
   linux/aarch64|linux/arm64) architecture=arm64 ;;
