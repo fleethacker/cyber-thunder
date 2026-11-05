@@ -165,6 +165,41 @@ your environment. A non-default storage class requires updating the PVC manifest
 and rebuilding. SSO controls access; audit actions still use the app's configured
 actor name in Settings.
 
+## SSH access to an external VM
+
+The source package supports `SCAN_TARGET_CIDR` and `SCAN_SSH_PORT` deployment
+variables. The default CIDR is the documentation-only address `192.0.2.1/32`,
+so a real target requires explicit configuration. For the local QEMU range,
+set `SCAN_TARGET_CIDR=172.18.0.1/32` and `SCAN_SSH_PORT=2222` when deploying a
+package rebuilt from this source:
+
+```sh
+zarf package deploy <rebuilt-package> --confirm --set DOMAIN=uds.dev \
+  --set SCAN_TARGET_CIDR=172.18.0.1/32 --set SCAN_SSH_PORT=2222
+```
+
+Supply these values on subsequent upgrades too. UDS permits TCP egress only
+from the scanner to that CIDR and SSH port, alongside existing Kubernetes API
+access. This rule does not enable external Kubernetes API or WinRM access.
+
+The Deployment also mounts the optional `cyberthunder-target-credentials`
+Secret read-only at `/etc/cyberthunder/targets`, with mode `0440`. Create it
+using an existing key authorized on the target and a verified known-hosts file:
+
+```sh
+kubectl -n cyberthunder create secret generic cyberthunder-target-credentials \
+  --from-file=id_ed25519=/path/to/target-key \
+  --from-file=known_hosts=/path/to/verified-known-hosts
+```
+
+Set the asset's SSH key file to `/etc/cyberthunder/targets/id_ed25519`. The
+Secret is optional so installations that only scan the local cluster still
+start without target credentials. No Secret-read permission is added to the
+scanner's service account.
+
+The existing archives are unchanged; rebuild to include these source changes.
+For an already deployed package, use the [local QEMU repair patches](../../range/README.md#qemu-ssh-from-a-uds-deployment).
+
 ## Verify
 
 From the repository root after deployment:
