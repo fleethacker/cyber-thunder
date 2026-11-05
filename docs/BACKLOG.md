@@ -413,7 +413,7 @@ From [ARCHITECTURE](ARCHITECTURE.md) section 4. Cluster survey, baseline and boo
 
 - No change without approval: the engine refuses `execute` unless the proposal is `APPROVED`, and machine identities can never take a human edge (`ApprovalGate.HUMAN_ONLY`).
 - Only vetted fixes run: `RemediationEngine.execute` runs `FixEntry.payload` only; no code path passes model output to a transport.
-- Every change is reversible: `FixEntry.rollback_kind` is required, before-state is captured, and a failed verify rolls back automatically.
+- Fixes declare rollback capabilities and capture before-state; failed verification attempts recovery. Persistent change history, same-target change guards and supported Linux file drift checks are implemented ([CHANGE_HISTORY](CHANGE_HISTORY.md)); unsupported platforms, external races and control-connection loss still limit recovery.
 - Scope is enforced: `Inventory.assert_in_scope()` in the scanner and engine, and scope changes are audited.
 - Everything is logged in an append-only hash chain, and the kill switch (`KillSwitch.guard()`, file, `CT_KILL` or sentinel) blocks apply and rollback edges, scans, discovery sweeps and accepts, and content checks and pulls.
 

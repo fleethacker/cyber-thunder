@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from cyberthunder.control.approvals import ProposalState
 from cyberthunder.control.identity import require_human
 from cyberthunder.control.policy import assurance_block_reason
+from cyberthunder.findings.current import policy_block_reason
 from cyberthunder.findings.review import ReviewService
 from cyberthunder.findings.schema import utcnow
 from cyberthunder.remediation import snapshot
@@ -109,7 +110,7 @@ def static_plan(engine: RemediationEngine, proposal_id: str, *, actor: str) -> d
         if not usable or not current.is_open:
             check("policy_evidence", "blocked", "Standing approval requires a matching open current finding.")
         else:
-            reason = assurance_block_reason(ctx, current)
+            reason = policy_block_reason(ctx, current) or assurance_block_reason(ctx, current)
             check("policy_evidence", "blocked" if reason else "pass",
                   reason or "Current stored evidence and review meet the standing-approval evidence requirement; no approval is granted.")
     else:

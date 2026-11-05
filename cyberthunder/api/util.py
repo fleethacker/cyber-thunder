@@ -17,6 +17,7 @@ from fastapi import Depends, Header, HTTPException
 
 from cyberthunder.api.deps import get_actor, get_ctx
 from cyberthunder.control.approvals import AGENT_ACTORS, Proposal
+from cyberthunder.findings.current import CurrentFindings, policy_block_reason
 from cyberthunder.findings.schema import (
     RE_CVE, RE_GROUP_ID, RE_STIG_ID, RE_STIG_RULE, Finding, Severity, Status, summarize,
 )
@@ -178,32 +179,12 @@ def _parse_ts(v: str | None) -> datetime | None:
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
 
 
-def _verified_at(p: Proposal | None) -> str | None:
-    if p is None or p.state.value != "verified":
-        return None
-    for h in reversed(p.history or []):
-        if h.get("state") == "verified":
-            return h.get("ts")
-    return p.decided_at or p.created_at
-
-
 def remediated_by(finding: Finding, p: Proposal | None) -> dict | None:
-    """An open finding whose current proposal was verified after the finding was collected has been fixed,
-    even though the scan that reported it still says open. A later scan that finds it open again wins."""
-    if not finding.is_open:
-        return None
-    vts = _verified_at(p)
-    if vts is None:
-        return None
-    v, c = _parse_ts(vts), _parse_ts(finding.collected_at)
-    if v is not None and c is not None and v < c:
-        return None
-    return {"proposal_id": p.id, "verified_at": vts, "scan_status": finding.status.value}
+    return CurrentFindings([p] if p else []).assess(finding).remediated
 
 
 def effective(finding: Finding, p: Proposal | None) -> Finding:
-    """The finding as it stands now: a verified fix makes an open result not_a_finding."""
-    return replace(finding, status=Status.NOT_A_FINDING) if remediated_by(finding, p) else finding
+    return CurrentFindings([p] if p else []).assess(finding).finding
 
 
 def current_proposals(ctx: "AppContext") -> dict[str, Proposal]:
@@ -229,7 +210,7 @@ def finding_assurance(ctx: "AppContext", finding: Finding, *, now=None, reviews=
 
 
 def finding_plus(ctx: "AppContext", finding: Finding, with_proposal: bool = True,
-                 assurance: dict | None = None) -> dict:
+                 assurance: dict | None = None, *, lifecycle: CurrentFindings | None = None) -> dict:
     d = finding.to_dict()
     d["scanner_status"] = finding.status.value
     d.update(assurance if assurance is not None else finding_assurance(ctx, finding))
@@ -238,13 +219,14 @@ def finding_plus(ctx: "AppContext", finding: Finding, with_proposal: bool = True
     d["explanation"] = _explanation(ctx, finding.id)
     fix = _fix_for(ctx, finding)
     d["fix"] = fix.to_dict() if fix is not None else None
+    current = (lifecycle or CurrentFindings.for_context(ctx)).assess(finding)
+    d["status"] = current.finding.status.value
+    d["remediated"] = current.remediated
+    d["rollback"] = current.rollback
+    d["needs_rescan"] = current.needs_rescan
     if with_proposal:
         p = proposal_for(ctx, finding.id)
         d["proposal"] = {"id": p.id, "state": p.state.value} if p is not None else None
-        rem = remediated_by(finding, p)
-        d["remediated"] = rem
-        if rem is not None:
-            d["status"] = Status.NOT_A_FINDING.value
     return d
 
 
@@ -269,6 +251,9 @@ def proposal_plus(ctx: "AppContext", p: Proposal) -> dict:
     if fix is not None and finding is not None and target is not None:
         try:
             policy = evaluate_for_context(ctx, fix, finding, target).to_dict()
+            blocked = policy_block_reason(ctx, finding)
+            if blocked:
+                policy = {**policy, "auto_eligible": False, "reasons": [blocked]}
         except Exception as exc:  # noqa: BLE001  a bad policy rule must not hide the proposal
             policy = {"auto_eligible": False, "rule": None, "reasons": [f"policy evaluation failed: {exc}"]}
     d["policy"] = policy
@@ -449,9 +434,9 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
     # The default view includes partial overlays; sid remains its baseline metadata anchor.
     all_f = ctx.store.load_findings(scan_id) if scan_id else ctx.store.load_findings()
     # Filters and the summary count a verified fix as closed, so the open totals move when a fix lands.
-    props = current_proposals(ctx) if all_f else {}
+    lifecycle = CurrentFindings.for_context(ctx)
     scanned = {f.id: f for f in all_f}
-    now = [effective(f, props.get(f.id)) for f in all_f]
+    now = [lifecycle.assess(f).finding for f in all_f]
     from cyberthunder.findings.review import ReviewService
     assessed_at = datetime.now(timezone.utc)
     reviews = ReviewService(ctx)
@@ -467,7 +452,7 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
            and (not review_filter or assurance[f.id]["review"]["disposition"] in review_filter)]
     sel = sort_findings(sel, sort_by, sort_dir, assurance=assurance)
     page = sel[offset: offset + limit]
-    return {"findings": [finding_plus(ctx, scanned.get(f.id, f), assurance=assurance[f.id]) for f in page], "total": len(sel), "scan_id": sid,
+    return {"findings": [finding_plus(ctx, scanned.get(f.id, f), assurance=assurance[f.id], lifecycle=lifecycle) for f in page], "total": len(sel), "scan_id": sid,
             "view": "scan" if scan_id else "current", "summary": summarize(now), "limit": limit, "offset": offset,
             "unfiltered_total": len(now), "facets": finding_facets(now, assurance), "sort_by": sort_by, "sort_dir": sort_dir}
 

@@ -114,6 +114,17 @@ class SimulatedLinuxHost(Transport):
             return None
         s = self.state
 
+        m = re.fullmatch(r"stat -c '%F\|%a\|%u\|%g\|%U\|%G' -- (.+)", cmd)
+        if m:
+            path = shlex.split(m.group(1))[0]
+            f = s["files"].get(path)
+            if f is None:
+                return (f"stat: {path}: missing", 1)
+            kind = f.get("type", "regular file")
+            uid = f.get("uid", next((u["uid"] for u in s["users"] if u["name"] == f["owner"]), 65534))
+            gid = f.get("gid", next((g["gid"] for g in s["groups"] if g["name"] == f["group"]), 65534))
+            return (f"{kind}|{f['mode'] & 0o7777:o}|{uid}|{gid}|{f['owner']}|{f['group']}\n", 0)
+
         m = re.fullmatch(r"stat -c '%a %U %G %n' (.+)", cmd)
         if m:
             path = shlex.split(m.group(1))[0]

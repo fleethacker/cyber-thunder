@@ -388,6 +388,42 @@ class LinuxAdapter(Adapter):
                                       f"is-system-running: {state or 'unknown'}"))
         return HealthResult(ok=all(c.ok for c in checks_out), checks=checks_out)
 
+    def rollback_file_state(self, target, transport, fix: FixEntry, before: BeforeState) -> dict:
+        """Fingerprint exactly the files this restore would overwrite; never infer script completeness."""
+        if fix.rollback_kind != "restore_files" or fix.kind == "runbook":
+            return {"coverage": "unsupported", "resources": {}, "reasons": ["not a file restore"]}
+        meta = before.extra.get("files", {})
+        if not meta or set(meta) != set(before.files):
+            raise ValueError("missing or inconsistent captured Linux file resources")
+        resources = {}
+        for path, saved in meta.items():
+            if not saved.get("exists"):
+                # The existing adapter leaves originally absent files alone. Do not claim a full restore.
+                raise ValueError(f"{path}: originally absent file has no supported restoration baseline")
+            local = Path(before.dir) / "files" / saved["local"]
+            if not saved.get("sha256") or hashlib.sha256(local.read_bytes()).hexdigest() != saved["sha256"]:
+                raise ValueError(f"{path}: captured file is missing or fails its integrity check")
+            cmd = f"stat -c '%F|%a|%u|%g|%U|%G' -- {shlex.quote(path)}"
+            stat = transport.run(cmd, sudo=True)
+            parts = stat.stdout.strip().split("|")
+            if not stat.ok or len(parts) != 6 or parts[0] not in {"regular file", "regular empty file"}:
+                raise ValueError(f"{path}: cannot establish readable regular-file metadata (symlinks are unsupported)")
+            data = transport.read_file(path)
+            again = transport.run(cmd, sudo=True)
+            if not again.ok or again.stdout != stat.stdout:
+                raise ValueError(f"{path}: metadata changed while reading")
+            resources[path] = {"sha256": hashlib.sha256(data).hexdigest(), "type": "regular file",
+                               "mode": int(parts[1], 8), "uid": int(parts[2]), "gid": int(parts[3]),
+                               "owner": parts[4], "group": parts[5]}
+        # Library identity alone is insufficient: dynamic scripts can share a native fix ref.
+        known = next((entry for entry in self.fixes() if entry.to_dict() == fix.to_dict()), None)
+        extra_effects = any(before.extra.get(k) for k in ("services", "sysctl", "selinux", "packages", "path_modes"))
+        partial = known is None or extra_effects or bool(fix.restarts_services) or bool(fix.before_state.get("quarantine"))
+        return {"coverage": "partial" if partial else "files", "resources": resources, "reasons": [],
+                "limitations": ["Only captured restoration file bytes, type, mode and ownership are compared; "
+                                "external writers are not excluded and script side effects are not proven complete."]
+                + (["Dynamic script or non-file effects: file checks do not cover every effect of this restore."] if partial else [])}
+
     def rollback(self, target, transport, fix: FixEntry, before: BeforeState) -> RollbackResult:
         if fix.kind == "runbook":
             return RollbackResult(ok=True, output="runbook: operator performs the rollback steps")

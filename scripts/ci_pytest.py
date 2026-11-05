@@ -49,6 +49,11 @@ def expected_skips(platform: str) -> dict[str, str]:
         f"tests/explain/test_service.py::test_real_local_model[{backend}]": MODEL_REASON
         for backend in BACKENDS
     }
+    if platform == "win32":
+        for replacement in ("existing_fifo", "fifo_at_open", "symlink_at_open"):
+            allowed[f"tests/engine/test_inventory_guard.py::test_fifo_or_link_replacement_refuses_promptly_and_releases_target_lock[{replacement}]"] = (
+                "POSIX FIFO and O_NOFOLLOW semantics"
+            )
     if platform == "linux":
         allowed.update({
             f"tests/test_dev.py::DevelopmentModeTests::{name}": UDS_REASON

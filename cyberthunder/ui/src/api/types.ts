@@ -259,6 +259,20 @@ export interface DiffFile {
   diff: string | null;
 }
 
+/** Static restore checks; missing fields on a failed lookup are unknown, never permission. */
+export interface RollbackGuard {
+  status: 'not_checked' | 'blocked' | 'checked_files' | 'limited';
+  coverage: 'files' | 'partial' | 'unsupported' | 'unavailable' | 'unknown';
+  live_checked: boolean;
+  identity_bound?: boolean;
+  transition_allowed?: boolean;
+  conflicting_proposals?: string[];
+  reasons: string[];
+  limitations?: string[];
+  /** An earlier attempt, not current authorization or a fresh live check. */
+  last_preflight?: Omit<RollbackGuard, 'last_preflight'> & { checked_at?: string } | null;
+}
+
 /** GET /proposals/{id}/diff: the engine's record of what changed and how it was checked. */
 export interface ProposalDiff {
   proposal?: Record<string, unknown>;
@@ -269,6 +283,7 @@ export interface ProposalDiff {
   apply: Record<string, unknown> | null;
   verify: Record<string, unknown> | null;
   rollback?: Record<string, unknown> | null;
+  rollback_guard?: RollbackGuard | null;
   files: DiffFile[];
 }
 

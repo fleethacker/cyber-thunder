@@ -80,6 +80,16 @@ def load_result(snap_dir: str | Path, name: str) -> Any:
     return _read(Path(snap_dir) / f"{name}.json")
 
 
+def save_once(snap_dir: str | Path, name: str, data: dict) -> Path:
+    """Immutable execution evidence. A partial/unreadable write fails closed at preflight."""
+    path = Path(snap_dir) / f"{name}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8", newline="\n") as stream:
+        json.dump(data, stream, indent=2, ensure_ascii=False)
+        stream.write("\n")
+    return path
+
+
 def load_fix(snap_dir: str | Path) -> FixEntry | None:
     """The FixEntry saved at propose time (fix.json), or None when it is missing or unreadable."""
     d = _read(Path(snap_dir) / "fix.json")

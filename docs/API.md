@@ -115,9 +115,9 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/proposals/{id}/cancel` | `{note?}` → Proposal+ |
 | POST | `/proposals/{id}/plan` | → static remediation plan; named actor and kill switch checked, one `remediation.plan` audit event. Includes target identity, bound fix/digests, declared capture/verification/rollback metadata, checks and limitations. Makes no target connection, changes no proposal state and does not approve or apply anything. See [REMEDIATION_PLAN](REMEDIATION_PLAN.md) |
 | POST | `/proposals/{id}/apply` | `{simulate_verify_fail?: bool}` → `202 {proposal_id, state: "applying"}`; engine.execute runs in background: before-state → apply → verify → verified, or failed → automatic rollback. `409` unless APPROVED, `423` if kill switch engaged |
-| POST | `/proposals/{id}/rollback` | → `202`; manual rollback of APPLIED, VERIFIED or FAILED |
+| POST | `/proposals/{id}/rollback` | → `202`; queues manual rollback of APPLIED, VERIFIED or FAILED. The engine checks current scope, target serialization, later recorded changes, saved identity and supported file drift before restoring. A queued response is not proof of restoration; inspect proposal, diff and audit outcome |
 | POST | `/proposals/{id}/verify` | → Proposal+; re-checks an APPLIED proposal (used after an operator completes a runbook): VERIFIED or FAILED. `501` on a node whose engine lacks it |
-| GET | `/proposals/{id}/diff` | → `{proposal, fix, before_state, before: {...}, after: {...}, verify: VerifyResult, apply: ApplyResult, rollback, files: [{path, before, after}]}` |
+| GET | `/proposals/{id}/diff` | → `{proposal, fix, before_state, before: {...}, after: {...}, verify: VerifyResult, apply: ApplyResult, rollback, rollback_guard, files: [{path, before, after}]}`. `rollback_guard` is a local static inspection with coverage, reasons, limitations and conflicting proposal ids; `last_preflight` is historical. GET does not probe the target. See [CHANGE_HISTORY](CHANGE_HISTORY.md) |
 | POST | `/proposals/bulk` | `{action: "approve"|"deny", ids: [..], note?}` → `{results: [{id, state} | {id, error, status}]}` (`status` is the HTTP code the single call would have returned) |
 
 ## Audit
