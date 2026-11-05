@@ -271,3 +271,7 @@ packages:
   - name: podinfo
     path: ../../.build/
     ref: 0.0.1
+
+  - name: nginx-bad
+    path: ../../.build/
+    ref: 0.0.1
