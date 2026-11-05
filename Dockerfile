@@ -5,11 +5,36 @@ RUN npm ci
 COPY cyberthunder/ui/ ./
 RUN npm run build
 
+FROM aquasec/trivy:0.56.2 AS trivy
+
 FROM python:3.12-slim-bookworm
+ARG KUBECTL_VERSION=v1.36.4
+ARG TARGETARCH
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     CT_STATE_DIR=/var/lib/cyberthunder \
-    CT_LLM_BACKEND=template
+    CT_LLM_BACKEND=template \
+    HOME=/var/lib/cyberthunder \
+    XDG_CACHE_HOME=/var/lib/cyberthunder/.cache \
+    TRIVY_CACHE_DIR=/var/lib/cyberthunder/trivy-cache
+RUN KUBECTL_VERSION="$KUBECTL_VERSION" TARGETARCH="$TARGETARCH" python - <<'PYTHON'
+import hashlib
+import os
+from pathlib import Path
+import urllib.request
+
+version = os.environ["KUBECTL_VERSION"]
+arch = os.environ["TARGETARCH"]
+url = f"https://dl.k8s.io/release/{version}/bin/linux/{arch}/kubectl"
+binary = urllib.request.urlopen(url).read()
+expected = urllib.request.urlopen(url + ".sha256").read().decode().strip()
+if hashlib.sha256(binary).hexdigest() != expected:
+    raise RuntimeError("kubectl checksum mismatch")
+path = Path("/usr/local/bin/kubectl")
+path.write_bytes(binary)
+path.chmod(0o755)
+PYTHON
+COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 WORKDIR /app
 COPY pyproject.toml requirements.txt ./
 COPY cyberthunder/ ./cyberthunder/

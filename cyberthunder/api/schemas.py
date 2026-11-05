@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-SCAN_TRIGGERS = ("manual", "stig_delta", "bulletin", "verify", "demo")
+SCAN_TRIGGERS = ("manual", "scheduled", "stig_delta", "bulletin", "verify", "demo")
 
 
 class NoteBody(BaseModel):
