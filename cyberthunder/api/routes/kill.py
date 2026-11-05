@@ -20,10 +20,12 @@ def kill_status(ctx=CtxDep) -> dict:
 
 
 def engage_actor(request: Request, x_actor: str | None = Header(default=None)) -> str:
+    if request.app.state.ctx.settings.auth_mode.strip().lower() == "mesh":
+        return require_actor(request, x_actor)
     if not (x_actor or "").strip():
         host = request.client.host if request.client else "unknown address"
         return f"unidentified operator ({host})"
-    return require_actor(x_actor)
+    return require_actor(request, x_actor)
 
 
 @router.post("/kill/engage")

@@ -266,6 +266,15 @@ export interface LinkState { kbps: number; latency_ms: number; connected: boolea
 
 export interface LlmStatus { backend: string; model: string | null; available: boolean; detail?: string; queue?: number }
 
+export interface Whoami {
+  mode: 'dev' | 'mesh';
+  authenticated: boolean;
+  actor: string | null;
+  subject: string | null;
+  issuer: string | null;
+  username: string | null;
+}
+
 export interface Status {
   product: string;
   version: string;

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 
 from cyberthunder.api.deps import get_actor, get_ctx
 from cyberthunder.control.approvals import AGENT_ACTORS, Proposal
@@ -36,19 +36,33 @@ LIVE_STATES = {"proposed", "approved", "applying", "applied"}
 MACHINE_PREFIXES = tuple(f"{a}:" for a in sorted(AGENT_ACTORS)) + ("policy:",)
 
 
-def require_actor(x_actor: str | None = Header(default=None)) -> str:
-    """Mutating requests must name the human acting. Machine identities are refused here so they can never
-    reach an approval, denial, kill switch or policy edge through the API."""
-    if not (x_actor or "").strip():
-        raise HTTPException(400, "X-Actor header is required: type your name in Settings before making changes")
+def _human_actor(name: str) -> str:
     from cyberthunder.control.identity import require_human
     try:
-        actor = require_human(get_actor(x_actor))
+        actor = require_human(name)
     except PermissionError as e:
         raise HTTPException(400, str(e)) from None
     if len(actor) > 128:
         raise HTTPException(400, "actor name too long")
     return actor
+
+
+def require_actor(request: Request, x_actor: str | None = Header(default=None)) -> str:
+    """Mutating requests must name the human acting. Machine identities are refused here so they can never
+    reach an approval, denial, kill switch or policy edge through the API.
+
+    dev mode reads the X-Actor header. mesh mode ignores that header and uses the Keycloak user in the
+    access token UDS Authservice forwards."""
+    if request.app.state.ctx.settings.auth_mode.strip().lower() == "mesh":
+        from cyberthunder.api.auth import AuthError, authenticate
+        try:
+            principal = authenticate(request, request.app.state.ctx.settings)
+        except AuthError as e:
+            raise HTTPException(401, str(e)) from None
+        return _human_actor(principal.actor)
+    if not (x_actor or "").strip():
+        raise HTTPException(400, "X-Actor header is required: type your name in Settings before making changes")
+    return _human_actor(get_actor(x_actor))
 
 
 CtxDep = Depends(get_ctx)

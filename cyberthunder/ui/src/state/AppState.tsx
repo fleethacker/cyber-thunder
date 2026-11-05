@@ -1,7 +1,7 @@
 // Shared app state: node status, audit chain verification, actor, and ONE audit SSE connection that any
 // component can listen to (header badges, the Audit page, apply timelines).
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, errorText, getActor, setActor as persistActor, subscribeAudit, type AuditStreamState } from '../api/client';
+import { api, errorText, getActor, setActor as persistActor, setAuthMode, subscribeAudit, type AuditStreamState } from '../api/client';
 import type { AuditRecord, AuditVerify, Status } from '../api/types';
 
 type Listener = (r: AuditRecord) => void;
@@ -11,6 +11,8 @@ interface AppStateValue {
   statusError: string | null;
   verify: AuditVerify | null;
   actor: string;
+  identityLocked: boolean;
+  identityError: string | null;
   setActor: (name: string) => void;
   stream: AuditStreamState;
   /** most recent records seen on the stream this session, newest last (bounded) */
@@ -27,6 +29,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [statusError, setStatusError] = useState<string | null>(null);
   const [verify, setVerify] = useState<AuditVerify | null>(null);
   const [actor, setActorState] = useState<string>(getActor());
+  const [identityLocked, setIdentityLocked] = useState(false);
+  const [identityError, setIdentityError] = useState<string | null>(null);
   const [stream, setStream] = useState<AuditStreamState>('connecting');
   const [recent, setRecent] = useState<AuditRecord[]>([]);
   const listeners = useRef(new Set<Listener>());
@@ -97,6 +101,31 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [loadVerify, loadStatus]);
 
   useEffect(() => {
+    let cancelled = false;
+    api.whoami().then((who) => {
+      if (cancelled) return;
+      if (who.mode === 'mesh') {
+        setAuthMode('mesh');
+        setIdentityLocked(true);
+        setIdentityError(null);
+        setActorState(who.actor ?? '');
+      }
+    }).catch((e) => {
+      if (cancelled || !(e instanceof Error)) return;
+      const status = 'status' in e ? Number((e as { status: number }).status) : 0;
+      if (status === 401) {
+        setAuthMode('mesh');
+        setIdentityLocked(true);
+        setActorState('');
+        setIdentityError(errorText(e));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const h = (e: Event) => setActorState((e as CustomEvent<string>).detail);
     window.addEventListener('ct:actor', h);
     return () => window.removeEventListener('ct:actor', h);
@@ -115,8 +144,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AppStateValue>(
-    () => ({ status, statusError, verify, actor, setActor, stream, recent, onAudit, refresh }),
-    [status, statusError, verify, actor, setActor, stream, recent, onAudit, refresh],
+    () => ({ status, statusError, verify, actor, identityLocked, identityError, setActor, stream, recent, onAudit, refresh }),
+    [status, statusError, verify, actor, identityLocked, identityError, setActor, stream, recent, onAudit, refresh],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

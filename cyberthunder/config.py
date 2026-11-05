@@ -69,6 +69,13 @@ class Settings:
     content_max_bytes: int = field(default_factory=lambda: _env_num("CT_CONTENT_MAX_BYTES", 512 * 1024 * 1024, int))
     content_timeout_s: int = field(default_factory=lambda: _env_num("CT_CONTENT_TIMEOUT", 30, int))
     content_snapshot: str | None = field(default_factory=lambda: _env("CT_CONTENT_SNAPSHOT", "") or None)
+    # identity. dev: the X-Actor header. mesh: the Keycloak access token UDS Authservice forwards.
+    auth_mode: str = field(default_factory=lambda: _env("CT_AUTH_MODE", "dev"))
+    oidc_issuer: str = field(default_factory=lambda: _env("CT_OIDC_ISSUER", ""))
+    oidc_jwks_url: str = field(default_factory=lambda: _env("CT_OIDC_JWKS_URL", ""))
+    oidc_client_id: str = field(default_factory=lambda: _env("CT_OIDC_CLIENT_ID", ""))
+    oidc_audience: str = field(default_factory=lambda: _env("CT_OIDC_AUDIENCE", ""))
+    oidc_jwks_max_age_s: int = field(default_factory=lambda: _env_num("CT_OIDC_JWKS_MAX_AGE", 86400, int))
     # web
     host: str = field(default_factory=lambda: _env("CT_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: _env_num("CT_PORT", 8000, int))

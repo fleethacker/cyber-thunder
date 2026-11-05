@@ -5,11 +5,17 @@ import type {
   DemoStatus, DiscoveredAsset, DiscoveredTarget, DiscoveryAccept, Finding, DiscoveryMode, DiscoveryOverview, DiscoveryRun, DiscoveryScope,
   DiscoveryStatus, Explanation, FindingPlus, FindingsPage, FindingsQuery, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
   Outbox, PolicyDecision, ProposalDiff, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
-  ReportHistory, SavedReportContent, TargetOutcome, TargetReport, UpdateCheck,
+  ReportHistory, SavedReportContent, TargetOutcome, TargetReport, UpdateCheck, Whoami,
 } from './types';
 
 export const API_BASE = '/api/v1';
 const ACTOR_KEY = 'ct.actor';
+let authMode: Whoami['mode'] = 'dev';
+
+/** Mesh mode takes the operator from the Keycloak session, so a typed name is not sent. */
+export function setAuthMode(mode: Whoami['mode']): void {
+  authMode = mode;
+}
 
 export function getActor(): string {
   try {
@@ -76,7 +82,7 @@ async function parseError(res: Response): Promise<ApiError> {
 export async function request<T>(method: string, path: string, opts: { query?: Query; body?: unknown; form?: FormData } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   const actor = getActor();
-  if (actor) headers['X-Actor'] = actor;
+  if (authMode !== 'mesh' && actor) headers['X-Actor'] = actor;
   let body: BodyInit | undefined;
   if (opts.form) body = opts.form;
   else if (opts.body !== undefined) {
@@ -104,6 +110,7 @@ const enc = encodeURIComponent;
 
 export const api = {
   status: () => get<Status>('/status'),
+  whoami: () => get<Whoami>('/whoami'),
 
   targets: () => get<{ targets: Target[] }>('/targets'),
   addTarget: (t: Partial<Target>) => post<Target>('/targets', t),

@@ -13,9 +13,20 @@ import { useAsync } from '../lib/hooks';
 import { useAppState } from '../state/AppState';
 
 function ActorCard() {
-  const { actor, setActor } = useAppState();
+  const { actor, identityLocked, identityError, setActor } = useAppState();
   const [draft, setDraft] = useState(actor);
   useEffect(() => setDraft(actor), [actor]);
+  if (identityLocked) {
+    return (
+      <Card withBorder radius="md">
+        <Stack gap="xs">
+          <Text fw={700}>Signed in</Text>
+          <Text size="sm" c="dimmed">Keycloak established this session. Approvals, denials, kill switch and policy changes are recorded under this account.</Text>
+          <Text>{actor || identityError || 'Sign in through Keycloak'}</Text>
+        </Stack>
+      </Card>
+    );
+  }
   const problem = actorProblem(draft);
   return (
     <Card withBorder radius="md">

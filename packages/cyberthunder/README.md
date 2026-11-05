@@ -153,7 +153,10 @@ kubectl -n cyberthunder rollout status deployment/cyberthunder
 ```
 
 Open **https://cyberthunder.uds.dev** and sign in with a Keycloak user in
-`/UDS Core/Admin` (the development `hacker` user has this group). The Kubernetes
+`/UDS Core/Admin` (the development `hacker` user has this group). The deployment
+runs with `CT_AUTH_MODE=mesh`: the UI shows that Keycloak account, and approvals
+are recorded under it. A typed `X-Actor` name is ignored. Laptop and test runs
+stay on `CT_AUTH_MODE=dev` and still use the typed name. The Kubernetes
 ClusterIP Service is `cyberthunder.cyberthunder.svc.cluster.local:80`, targeting
 container port 8000. UDS creates the `cyber-thunder-app` OIDC client and protects
 the UI and API with Authservice. The package waits for UDS configuration before

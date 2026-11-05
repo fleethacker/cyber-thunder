@@ -128,6 +128,14 @@ spec:
               value: Local Kubernetes cluster
             - name: CT_BOOTSTRAP_CLUSTER_KUBECONFIG
               value: /etc/cyberthunder/kubeconfig
+            - name: CT_AUTH_MODE
+              value: mesh
+            - name: CT_OIDC_ISSUER
+              value: https://sso.###ZARF_VAR_DOMAIN###/realms/uds
+            - name: CT_OIDC_JWKS_URL
+              value: http://keycloak-http.keycloak.svc.cluster.local:8080/realms/uds/protocol/openid-connect/certs
+            - name: CT_OIDC_CLIENT_ID
+              value: cyber-thunder-app
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

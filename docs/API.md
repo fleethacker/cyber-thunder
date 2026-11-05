@@ -3,11 +3,16 @@
 Base path `/api/v1`. JSON in and out. Served by `cyberthunder serve` from the same process as the UI.
 Interactive docs at `/api/docs`.
 
-**Identity.** Every request may carry `X-Actor: <name>` (the UI sends the name the Sailor typed).
-Every POST, PUT, PATCH and DELETE route except `POST /policy/evaluate` requires it to name a person: a missing or
-blank header, a bare or prefixed machine identity (`agent`, `llm`, `system`, `agent:*`, `llm:*`, `system:*`) and any
-`policy:*` value are refused with `400`. Approvals, denials, kill switch, scope and policy changes are recorded under
-that actor. Request validation errors return `400` with a string `detail`, not the framework default `422`.
+**Identity.** With `CT_AUTH_MODE=dev` (the default outside the UDS package), every request may carry
+`X-Actor: <name>` (the UI sends the name the Sailor typed). Every POST, PUT, PATCH and DELETE route except
+`POST /policy/evaluate` requires it to name a person: a missing or blank header, a bare or prefixed machine identity
+(`agent`, `llm`, `system`, `agent:*`, `llm:*`, `system:*`) and any `policy:*` value are refused with `400`.
+
+With `CT_AUTH_MODE=mesh`, UDS Authservice has already sent the browser through Keycloak. Those routes ignore
+`X-Actor` and require the forwarded access token. A missing, expired, or wrongly issued token is `401`. The recorded
+actor is the Keycloak username (`preferred_username`). `GET /whoami` reports that user. Approvals, denials, kill
+switch, scope and policy changes are recorded under that actor. Request validation errors return `400` with a string
+`detail`, not the framework default `422`.
 
 **Errors.** `{"detail": "..."}`. `404` unknown id · `409` illegal proposal transition or duplicate live
 proposal · `403` scope violation or machine actor on a human edge · `423` kill switch engaged ·
@@ -24,6 +29,7 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | Method | Path | Body → Response |
 |---|---|---|
 | GET | `/status` | → `AppContext.status()` + `link` {kbps, latency_ms, connected} + `outbox` {pending} |
+| GET | `/whoami` | → `{mode, authenticated, actor, subject, issuer, username}`. `mode=dev` is unauthenticated. `mode=mesh` is `401` without a Keycloak access token |
 
 ## Targets (inventory = scope)
 | GET | `/targets` | → `{targets: [Target]}` |

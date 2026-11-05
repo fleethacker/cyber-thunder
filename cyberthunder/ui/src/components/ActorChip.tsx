@@ -15,11 +15,19 @@ export function actorProblem(name: string): string | null {
 }
 
 export function ActorChip() {
-  const { actor, setActor } = useAppState();
-  const [opened, setOpened] = useState(!actor);
+  const { actor, identityLocked, identityError, setActor } = useAppState();
+  const [opened, setOpened] = useState(!actor && !identityLocked);
   const [draft, setDraft] = useState(actor);
   useEffect(() => setDraft(actor), [actor]);
   const problem = actorProblem(draft);
+
+  if (identityLocked) {
+    return (
+      <Badge size="lg" variant={actor ? 'light' : 'filled'} color={actor ? 'indigo' : 'yellow'} tt="none" leftSection={<IconUser size={14} />}>
+        {actor ? `Signed in as ${actor}` : (identityError || 'Sign in through Keycloak')}
+      </Badge>
+    );
+  }
 
   return (
     <Popover opened={opened} onChange={setOpened} position="bottom-end" withArrow trapFocus>

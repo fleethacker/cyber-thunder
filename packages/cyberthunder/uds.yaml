@@ -25,6 +25,14 @@ spec:
         port: ###ZARF_VAR_SCAN_SSH_PORT###
         remoteProtocol: TCP
         description: SSH to the approved VM range.
+      - direction: Egress
+        selector:
+          app: cyberthunder
+        remoteNamespace: keycloak
+        remoteSelector:
+          app.kubernetes.io/name: keycloak
+        port: 8080
+        description: Fetch Keycloak signing keys to verify SSO access tokens.
     expose:
       - service: cyberthunder
         selector:
