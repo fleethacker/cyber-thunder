@@ -31,7 +31,7 @@ def external_calls(monkeypatch):
 
 @pytest.fixture
 def ctx(state_dir):
-    ctx = AppContext(Settings(state_dir=state_dir, llm_backend="template", explain_precompute=False,
+    ctx = AppContext(Settings(state_dir=state_dir, node="cluster-fixture", llm_backend="template", explain_precompute=False,
                               bootstrap_cluster_target=False, bootstrap_cluster_target_id="range-cluster",
                               bootstrap_cluster_kubeconfig=str(state_dir / "unapproved-config"),
                               scheduler_actor="system:scheduler", scan_interval_s=0,

@@ -8,8 +8,8 @@ serves it with the Python API on port 8000. It runs as UID/GID 10001.
 With a running Docker daemon, replace the example registry with yours:
 
 ```sh
-docker build -t registry.example.com/team/cyberthunder:0.2.2 .
-docker push registry.example.com/team/cyberthunder:0.2.2
+docker build -t registry.example.com/team/cyberthunder:0.2.3 .
+docker push registry.example.com/team/cyberthunder:0.2.3
 ```
 
 Change `image` in `deploy/kubernetes/cyberthunder.yaml` to that published image.
@@ -20,8 +20,8 @@ reference it in the pod specification. Build for the cluster node architecture
 For a local k3d cluster, you can instead use:
 
 ```sh
-docker build -t cyberthunder:0.2.2 .
-k3d image import cyberthunder:0.2.2 -c cyber-thunder
+docker build -t cyberthunder:0.2.3 .
+k3d image import cyberthunder:0.2.3 -c cyber-thunder
 ```
 
 ## Deploy and open
@@ -61,12 +61,19 @@ Inject target credentials using Kubernetes Secrets (the transports expect
 Credentials and local state are excluded from the Docker build context.
 Network policy must allow access to the targets and any configured model server.
 
-The base image supports the Python SSH and WinRM transports. Kubernetes target
-scanning requires a compatible `kubectl` binary and an explicit mounted
-kubeconfig; extend the image and add those mounts if needed. This deployment
-neither grants cluster RBAC nor mounts a service account token. Local commands
-run inside the container and therefore describe the container, not its host.
-Do not mount a host container-engine socket merely to run the web application.
+The image supports the Python SSH and WinRM transports and includes kubectl
+v1.36.4 and Trivy v0.56.2. The deployment mounts a local-cluster kubeconfig and
+rotating service account token. Its RBAC permits only `get` and `list` of
+namespaces and workload resources for the cluster survey and baseline endpoints;
+it cannot apply Kubernetes remediation or read Secrets. Use a kubectl version
+compatible with the target cluster (`--build-arg KUBECTL_VERSION=vX.Y.Z`).
+
+Before image baselines, stage a matching Trivy vulnerability database on the
+state PVC and allow access to the image registries, including credentials for
+private images. See the [package setup instructions](../../packages/cyberthunder/README.md#cluster-scanning-release).
+Optional OpenAI summaries require a separately supplied API key and egress;
+local template descriptions remain the default. Local commands run inside the
+container and therefore describe the container, not its host.
 
 ## Troubleshooting
 
