@@ -25,13 +25,15 @@ OUT=$($TEST_CMD 2>&1); RC=$?
 echo "$OUT" | tail -15
 step "tests ($TEST_CMD)" $RC
 
-# 2. Forbidden references: the banned names in any tracked text file or in the last 50 commit messages,
-#    plus automated-trailer phrases in those commit messages.
+# 2. Forbidden references: the banned names in any tracked text file, and in the messages of the commits
+#    this push would add (everything since origin/main; the last 50 when there is no origin/main), plus
+#    automated-trailer phrases in those messages. History already on main is not ours to rewrite.
 BAD=0
 REFS=$(git grep -I -i -l -E "$BANNED" -- . ':!vendor' 2>/dev/null)
 [ -n "$REFS" ] && { BAD=1; echo "$REFS" | sed 's/^/  file: /'; }
-if git log -50 --format=%B 2>/dev/null | grep -i -E -q "$BANNED|Co-Authored-By:|Generated with"; then
-  BAD=1; echo "  a recent commit message has a forbidden reference"
+if git rev-parse --verify -q origin/main >/dev/null 2>&1; then RANGE="origin/main..HEAD"; else RANGE="-50"; fi
+if git log $RANGE --format=%B 2>/dev/null | grep -i -E -q "$BANNED|Co-Authored-By:|Generated with"; then
+  BAD=1; echo "  a commit message in $RANGE has a forbidden reference"
 fi
 step "forbidden references" $BAD
 
