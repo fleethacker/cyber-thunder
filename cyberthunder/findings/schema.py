@@ -188,22 +188,30 @@ def extract_references(texts: Iterable[str]) -> list[Reference]:
     return found
 
 
-def dump_findings(findings: Iterable[Finding], path: str | Path, meta: dict | None = None) -> dict:
-    doc = {
+def findings_doc(findings: Iterable[Finding], meta: dict | None = None) -> dict:
+    """The findings document: what a findings.json file holds and what the state store keeps per scan."""
+    return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": utcnow(),
         "meta": meta or {},
         "findings": [f.to_dict() for f in findings],
     }
+
+
+def findings_from_doc(doc: dict) -> list[Finding]:
+    if str(doc.get("schema_version", "")).split(".")[0] != SCHEMA_VERSION.split(".")[0]:
+        raise ValueError(f"unsupported findings schema_version {doc.get('schema_version')!r}")
+    return [Finding.from_dict(f) for f in doc["findings"]]
+
+
+def dump_findings(findings: Iterable[Finding], path: str | Path, meta: dict | None = None) -> dict:
+    doc = findings_doc(findings, meta=meta)
     Path(path).write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
     return doc
 
 
 def load_findings(path: str | Path) -> list[Finding]:
-    doc = json.loads(Path(path).read_text(encoding="utf-8"))
-    if str(doc.get("schema_version", "")).split(".")[0] != SCHEMA_VERSION.split(".")[0]:
-        raise ValueError(f"unsupported findings schema_version {doc.get('schema_version')!r}")
-    return [Finding.from_dict(f) for f in doc["findings"]]
+    return findings_from_doc(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
 def summarize(findings: Iterable[Finding]) -> dict:

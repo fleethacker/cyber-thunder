@@ -1,29 +1,44 @@
-"""On-disk state. Plain files so the whole state of a node can be copied, diffed and synced over a slow link.
+"""Node state. Documents live in a backend (json files or sqlite, CT_STATE_BACKEND); files stay files, so the
+whole state of a node can still be copied, diffed and synced over a slow link.
 
 Layout under <state_dir>:
-  audit.jsonl              hash-chained audit log (append-only)
-  proposals.json           approval gate store
-  killswitch.json / KILL   kill switch state file / sentinel
-  policy.json              standing-approval (automation) policy
-  targets.yaml             asset inventory
-  link.json                emulated-link state (kbps, latency, connected)
-  scans/<scan_id>/run.json, findings.json, raw/<target_id>/...
-  explanations/<finding_id>.json
-  snapshots/<proposal_id>/...     before-state captured prior to apply
-  outbox/ , synced/               sync-on-reconnect queue
-  ingest/catalog/ , ingest/deltas/ , ingest/bulletins/
-  content/files/ , content/scap/ , content/quarantine/ , content/jobs/ , content/index.json , content/last_check.json
+  audit.jsonl              hash-chained audit log (append-only)              file
+  proposals.json           approval gate store                               file (its own cross-process lock)
+  killswitch.json / KILL   kill switch state file / sentinel                 file
+  policy.json              standing-approval (automation) policy             file
+  targets.yaml             asset inventory                                   file (its own cross-process lock)
+  link.json                emulated-link state (kbps, latency, connected)    document
+  demo.json                presenter switch                                  document
+  scans/<scan_id>/run.json, findings.json                                    documents
+  scans/<scan_id>/raw/<target_id>/...   scanner working directory            files
+  explanations/<finding_id>.json                                             documents
+  snapshots/<proposal_id>/...     before-state captured prior to apply       files
+  outbox/ , synced/               sync-on-reconnect queue                    files
+  ingest/catalog/ (xml)                                                      files
+  ingest/deltas/ , ingest/bulletins/                                         documents
+  discovery/ (scopes, assets, ignored, runs/)                                documents
+  content/files/ , content/scap/ , content/quarantine/ , content/manifest.json   files
+  content/index.json , content/last_check.json , content/source.json , content/jobs/   documents
+  state.db                 the documents, when CT_STATE_BACKEND=sqlite
+
+A document is JSON the application reads and writes only through this class; a file is read from disk by
+other programs, people or transports as well. cyberthunder/state/ holds the routing list and the backends;
+docs/STATE.md the operator's view, including the migration commands.
 """
 from __future__ import annotations
 
-import json
+import logging
 import os
 import secrets
 import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from cyberthunder.findings.schema import Finding, dump_findings, load_findings, utcnow
+from cyberthunder.findings.schema import Finding, findings_doc, findings_from_doc, utcnow
+from cyberthunder.state import Backend, backend_from_env, is_document, open_backend, validate_backend
+from cyberthunder.state.json_files import JsonFilesBackend, read_json_file, write_json_file
+
+log = logging.getLogger(__name__)
 
 # Runs that re-evaluate only part of the picture; they overlay the latest full scan instead of replacing it.
 PARTIAL_TRIGGERS = {"bulletin", "stig_delta", "verify"}
@@ -34,11 +49,31 @@ def is_partial_run(run: dict) -> bool:
 
 
 class StateStore:
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, backend: str | None = None):
         self.root = Path(root)
         for sub in ("scans", "explanations", "snapshots", "outbox", "synced",
                     "ingest/catalog", "ingest/deltas", "ingest/bulletins"):
             (self.root / sub).mkdir(parents=True, exist_ok=True)
+        self._abs_root = os.path.abspath(os.fspath(self.root))
+        self.backend_name = validate_backend(backend) if backend else backend_from_env()
+        self.docs: Backend = open_backend(self.backend_name, self.root)
+        # JSON paths that are files rather than documents are always files on disk
+        self.files: Backend = self.docs if self.backend_name == "json" else JsonFilesBackend(self.root)
+        self._warn_if_unmigrated()
+
+    def _warn_if_unmigrated(self) -> None:
+        """A directory whose documents sit in the backend that is not configured looks empty. Say so once."""
+        try:
+            if self.backend_name == "sqlite" and getattr(self.docs, "created", False):
+                n = len(self.files.documents())
+                if n:
+                    log.warning("%s holds %d JSON documents that are not in state.db yet; run "
+                                "'cyberthunder state migrate --to sqlite' (CT_STATE_BACKEND=sqlite)", self.root, n)
+            elif self.backend_name == "json" and (self.root / "state.db").is_file():
+                log.warning("%s has a state.db that CT_STATE_BACKEND=json ignores; run "
+                            "'cyberthunder state info --backend sqlite' to see what it holds", self.root)
+        except Exception as e:  # noqa: BLE001  advisory only
+            log.debug("state check skipped: %s", e)
 
     # -- well-known paths -----------------------------------------------------
     @property
@@ -69,29 +104,70 @@ class StateStore:
     def new_id(prefix: str = "") -> str:
         return f"{prefix}{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-{secrets.token_hex(3)}"
 
-    @staticmethod
-    def read_json(path: str | Path, default: Any = None) -> Any:
-        p = Path(path)
-        if not p.exists():
-            return default
-        return json.loads(p.read_text(encoding="utf-8"))
+    def logical_path(self, path: str | Path) -> str | None:
+        """The path relative to the state directory in POSIX form, or None when it lies outside it."""
+        try:
+            rel = os.path.relpath(os.path.abspath(os.fspath(path)), self._abs_root)
+        except ValueError:            # another drive on Windows
+            return None
+        if rel == os.pardir or rel.startswith(os.pardir + os.sep) or rel.startswith("../"):
+            return None
+        return "" if rel == os.curdir else rel.replace("\\", "/")
 
-    @staticmethod
-    def write_json(path: str | Path, data: Any) -> None:
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
-        # Windows refuses to replace a file another reader has open for a moment (the UI polling a run);
-        # retry briefly instead of losing the write.
-        for attempt in range(20):
+    def _backend_for(self, logical: str) -> Backend:
+        return self.docs if is_document(logical) else self.files
+
+    def read_json(self, path: str | Path, default: Any = None) -> Any:
+        """A document from the backend, a file from disk for file paths and paths outside the state
+        directory; `default` when there is none."""
+        key = self.logical_path(path)
+        if key is None:
+            return read_json_file(Path(path), default)
+        doc = self._backend_for(key).get(key)
+        return default if doc is None else doc
+
+    def write_json(self, path: str | Path, data: Any) -> None:
+        key = self.logical_path(path)
+        if key is None:
+            write_json_file(Path(path), data)
+            return
+        self._backend_for(key).put(key, data)
+
+    def delete_json(self, path: str | Path) -> bool:
+        key = self.logical_path(path)
+        if key is None:
+            p = Path(path)
             try:
-                os.replace(tmp, p)
-                return
-            except PermissionError:
-                if attempt == 19:
-                    raise
-                time.sleep(0.05)
+                p.unlink()
+                return True
+            except FileNotFoundError:
+                return False
+        return self._backend_for(key).delete(key)
+
+    def list_json(self, directory: str | Path, pattern: str = "*.json") -> list[Path]:
+        """Absolute paths of the JSON documents and files under a directory of the state directory that
+        match the glob, whichever backend holds them. Replaces `directory.glob(pattern)` for callers."""
+        prefix = self.logical_path(directory)
+        if prefix is None:
+            return sorted(p for p in Path(directory).glob(pattern) if p.is_file())
+        if self.files is self.docs:
+            found = dict(self.docs.list(prefix, pattern))
+        else:
+            found = {rel: m for rel, m in self.docs.list(prefix, pattern) if is_document(rel)}
+            found.update((rel, m) for rel, m in self.files.list(prefix, pattern) if not is_document(rel))
+        return [self.root.joinpath(*rel.split("/")) for rel in sorted(found)]
+
+    def lock(self, name: str):
+        """Cross-process lock on the document backend (see cyberthunder.state.Backend.lock)."""
+        return self.docs.lock(name)
+
+    def close(self) -> None:
+        self.docs.close()
+        if self.files is not self.docs:
+            self.files.close()
+
+    def info(self) -> dict:
+        return {"backend": self.backend_name, "location": self.docs.location(), "documents": self.docs.count()}
 
     # -- scans -----------------------------------------------------------------
     def scan_dir(self, scan_id: str) -> Path:
@@ -106,7 +182,7 @@ class StateStore:
         return self.read_json(self.scans_dir / scan_id / "run.json")
 
     def list_scan_runs(self) -> list[dict]:
-        runs = [r for r in (self.read_json(p) for p in self.scans_dir.glob("*/run.json")) if r]
+        runs = [r for r in (self.read_json(p) for p in self.list_json(self.scans_dir, "*/run.json")) if r]
         return sorted(runs, key=lambda r: r.get("started_at", ""), reverse=True)
 
     def latest_scan_id(self, *, full_only: bool = True) -> str | None:
@@ -120,11 +196,11 @@ class StateStore:
         return runs[0]["id"] if runs else None
 
     def save_findings(self, scan_id: str, findings: Iterable[Finding], meta: dict | None = None) -> None:
-        dump_findings(findings, self.scan_dir(scan_id) / "findings.json", meta=meta)
+        self.write_json(self.scan_dir(scan_id) / "findings.json", findings_doc(findings, meta=meta))
 
     def _run_findings(self, scan_id: str) -> list[Finding]:
-        p = self.scans_dir / scan_id / "findings.json"
-        return load_findings(p) if p.exists() else []
+        doc = self.read_json(self.scans_dir / scan_id / "findings.json")
+        return findings_from_doc(doc) if doc else []
 
     def load_findings(self, scan_id: str | None = None) -> list[Finding]:
         """Findings of one run, or (default) the current picture: see current_findings()."""

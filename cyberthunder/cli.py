@@ -33,6 +33,7 @@ CLI_MODULES = (
     "cyberthunder.api.cli",
     "cyberthunder.demo",
     "cyberthunder.discovery.cli",
+    "cyberthunder.state.cli",
 )
 
 

@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
     from cyberthunder.inventory.targets import Target
+    from cyberthunder.store import StateStore
 
 
 @dataclass(frozen=True)
@@ -111,19 +112,21 @@ def find_rule(benchmark_id: str | None = None, title: str | None = None, product
     raise ValueError(f"no applicability rule for {key!r}; known: {[r.name for r in BENCHMARKS]}")
 
 
-def latest_scan_facts(state_root: Path, target_id: str) -> dict | None:
-    """Facts from the newest scan that collected this target, or None."""
+def latest_scan_facts(state_root: Path, target_id: str, store: "StateStore | None" = None) -> dict | None:
+    """Facts from the newest scan that collected this target, or None. collected.json files are the scanner's
+    working files on disk; the run record that dates them is a store document, so the store reads it."""
+    if store is None:
+        from cyberthunder.store import StateStore
+        store = StateStore(state_root)
     scans = Path(state_root) / "scans"
     hits = []
     # target ids come from operators; a bracket or asterisk in one must not widen the match
     for p in scans.glob(f"*/raw/{glob.escape(target_id)}/collected.json"):
-        run = p.parents[2] / "run.json"
         stamp = ""
-        if run.exists():
-            try:
-                stamp = json.loads(run.read_text(encoding="utf-8")).get("started_at", "")
-            except (ValueError, OSError):
-                stamp = ""
+        try:
+            stamp = (store.load_scan_run(p.parents[2].name) or {}).get("started_at", "")
+        except (ValueError, OSError):
+            stamp = ""
         hits.append((stamp, p.stat().st_mtime, p))
     for _, _, p in sorted(hits, reverse=True):
         try:
@@ -183,7 +186,11 @@ def _match(rule: Rule, facts: dict) -> tuple[bool | None, str, str]:
 
 
 def applicable_for(rule: Rule, targets: list["Target"], state_root: Path,
-                   discovered_by_target: dict[str, dict] | None = None) -> list[Applicable]:
+                   discovered_by_target: dict[str, dict] | None = None,
+                   store: "StateStore | None" = None) -> list[Applicable]:
+    if store is None:
+        from cyberthunder.store import StateStore
+        store = StateStore(state_root)
     out = []
     for t in targets:
         if t.asset_type != rule.asset_type:
@@ -192,7 +199,7 @@ def applicable_for(rule: Rule, targets: list["Target"], state_root: Path,
             out.append(Applicable(t, rule.name, "type", f"{t.asset_type} target; {rule.name} applies to every one"))
             continue
         decided = False
-        for basis, facts in (("facts", latest_scan_facts(state_root, t.id) or {}),
+        for basis, facts in (("facts", latest_scan_facts(state_root, t.id, store) or {}),
                              ("hint", _hint_facts(t)),
                              ("discovery", _discovery_facts((discovered_by_target or {}).get(t.id)))):
             ok, why, what = _match(rule, facts)
@@ -217,12 +224,10 @@ def applicable_targets(ctx: "AppContext", benchmark_id: str | None = None, title
     """Entry point for ingest (STIG deltas, bulletins): which inventory targets does this apply to?"""
     rule = find_rule(benchmark_id, title, product)
     discovered: dict[str, dict] = {}
-    assets_file = Path(ctx.store.root) / "discovery" / "assets.json"
-    if assets_file.exists():
-        try:
-            for a in (json.loads(assets_file.read_text(encoding="utf-8")) or {}).values():
-                if a.get("inventory_target_id"):
-                    discovered[a["inventory_target_id"]] = a
-        except (ValueError, OSError, AttributeError):
-            discovered = {}
-    return applicable_for(rule, ctx.inventory.all(), Path(ctx.store.root), discovered)
+    try:
+        for a in (ctx.store.read_json(Path(ctx.store.root) / "discovery" / "assets.json", {}) or {}).values():
+            if a.get("inventory_target_id"):
+                discovered[a["inventory_target_id"]] = a
+    except (ValueError, OSError, AttributeError):
+        discovered = {}
+    return applicable_for(rule, ctx.inventory.all(), Path(ctx.store.root), discovered, store=ctx.store)

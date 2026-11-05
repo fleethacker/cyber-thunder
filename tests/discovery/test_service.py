@@ -40,8 +40,8 @@ def test_simulated_sweep_counts_and_persistence(ctx):
     assert run.counts() == {"hosts_seen": 4, "new": 2, "known": 2, "changed": 1, "missing": 1}
     assert run.scopes == ["192.168.56.0/24"]
     d = ctx.store.root / "discovery"
-    assert (d / "assets.json").exists() and (d / "runs" / f"{run.id}.json").exists()
-    saved = json.loads((d / "runs" / f"{run.id}.json").read_text(encoding="utf-8"))
+    assert ctx.store.read_json(d / "assets.json") is not None                  # store documents
+    saved = ctx.store.read_json(d / "runs" / f"{run.id}.json")
     assert saved["status"] == "finished" and len(saved["assets"]) == 5
     assert svc.get_run(run.id).counts() == run.counts() and svc.runs()[0].id == run.id
     by = {a.address: a for a in svc.list_assets()}
