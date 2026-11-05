@@ -20,7 +20,9 @@ Each new scan stores coverage and warnings in the per-target result and in `coll
 
 Linux reports missing OpenSCAP, missing or mismatched content, missing profiles, failed evaluation, and missing result artifacts. Native findings continue to be returned. A failed OpenSCAP evaluation does not fetch an old remote results file as if it were fresh. Windows reports unconfigured or unreadable optional SCAP content while preserving native findings.
 
-The current coverage service deliberately does not assert complete control coverage. New runs carry `coverage_incomplete: true`; individual scan findings remain only the observations from that run. The findings projection must consume this flag as an overlay and retain unobserved historical finding IDs and their original provenance. That projection integration is owned separately and must be completed before shipping this feature; missing coverage must never erase earlier findings or manufacture a pass.
+The current coverage service deliberately does not assert complete control coverage. New runs carry `coverage_incomplete: true`; individual scan findings remain only the observations from that run. The current findings view overlays those observations and retains unobserved historical finding IDs with their original timestamps and provenance. An explicit newly observed pass can replace an earlier failure for the same finding. A missing observation cannot manufacture a pass or clear a previous finding. The run remains selectable as the newest full scan; requested scan scope and proven coverage are separate.
+
+Older retained findings are historical evidence, not proof that the condition still exists. Review their collection times and reassess the relevant checks. Independently assessed cluster-image scopes retain their own reconciliation rules. JSON and SQLite integration tests cover these boundaries and the finding-review lifecycle.
 
 ## Interface
 
