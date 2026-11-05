@@ -35,7 +35,8 @@ Reports replace the paperwork: commander one-pager, POA&M, checklist, path to fl
 
 Every module below is built and merged; the rehearsal in [DEMO](docs/DEMO.md) runs the pipeline end to end on
 the simulated range. Live transports (SSH, WinRM, kubectl) have been exercised through recordings and simulated
-hosts; the first run against a real range host is the next step.
+hosts. First real target scanned on 5 Nov: the team's UDS Core demo cluster (k3d under WSL2 on the hack laptop),
+127 findings and no adapter errors after one fix; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 | Module | Path | Status |
 |---|---|---|

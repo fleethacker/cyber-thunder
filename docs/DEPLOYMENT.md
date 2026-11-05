@@ -165,8 +165,13 @@ cluster deployment: Untested.
 ## Windows 11 host (WSL2)
 
 The launcher runs on Linux, so on a Windows laptop it runs inside a WSL2 Ubuntu distribution that has Docker
-Engine, k3d and the UDS CLI installed. This path has not been exercised yet; the first run is recorded here
-when it has happened.
+Engine, k3d and the UDS CLI installed.
+
+First run, 4 Nov 2026 (evening, Norfolk): Windows 11 Enterprise 22621, WSL 3.0.3 with Ubuntu 26.04.1 LTS, Docker
+Engine 29.1.3, k3d v5.9.0, UDS CLI v0.39.0, 6 CPUs and 19 GiB given to WSL. `./deploy.sh dev` built the bundle,
+created the cluster and deployed `uds-k3d-dev`, `init`, `core`, `identity-bootstrap` and `podinfo` in 24 minutes;
+`scripts/verify.sh` passed (all pods ready, Podinfo HTTPS with the SSO redirect, Prometheus scraping Podinfo).
+Cyber Thunder then scanned the cluster from Windows (see "Scanning the cluster from Windows" below).
 
 1. Enable WSL2 once from an elevated PowerShell, then restart Windows:
 
@@ -206,6 +211,38 @@ Ports 80, 443 and 6550 must be free on Windows as well as inside WSL, because WS
 `localhost`; the `uds.dev` names resolve to 127.0.0.1, so the printed addresses open from a Windows browser.
 Keep the clone in the Linux file system (`~`), not under `/mnt/c`: Docker bind mounts and k3d are far slower
 there.
+
+**Keep the WSL instance alive.** WSL stops the Ubuntu instance about a minute after the last `wsl.exe` session
+closes, and Docker and the cluster stop with it (they come back on the next launch, which takes a few minutes and
+leaves pods restarting). Two things prevent that: a session that stays open, started hidden from PowerShell,
+
+```powershell
+Start-Process wsl.exe -ArgumentList '-d','Ubuntu','--exec','sleep','infinity' -WindowStyle Hidden
+```
+
+and `vmIdleTimeout=604800000` (one week, in milliseconds) under `[wsl2]` in `.wslconfig`, which applies after the
+next `wsl --shutdown`.
+
+### Scanning the cluster from Windows
+
+The deploy writes `~/cyber-thunder/.build/kubeconfig` inside Ubuntu with the API server as `https://0.0.0.0:6550`.
+From Windows the same port answers on 127.0.0.1 through the WSL port forward, so copy the file (its Windows path is
+`\\wsl.localhost\Ubuntu\home\<user>\cyber-thunder\.build\kubeconfig`) and change the address. With a `kubectl.exe` on the laptop (the release binary from `dl.k8s.io`,
+checksum verified), register the cluster as a Kubernetes target and scan it:
+
+```bash
+python -m cyberthunder --actor <your name> targets add --id k3d-cyber-thunder --type kubernetes --transport kubeconfig --option kubeconfig=C:\path\to\k3d.kubeconfig --option kubectl=C:\Tools\kubectl.exe --in-scope --reason "team demo cluster on this laptop"
+```
+
+```bash
+python -m cyberthunder --actor <your name> scan --targets k3d-cyber-thunder --wait
+```
+
+First scan, 5 Nov 2026 02:21Z: 127 findings (119 Kubernetes STIG and CIS checks, 8 intrusion-hunt indicators) and no
+adapter errors. The first attempt had exposed one bug, RBAC objects named like `system:controller:bootstrap-signer`
+being rejected as object names, fixed before the second run. On k3s the API server runs inside the k3s process, so
+the API-server flag rules report that nothing was collected unless a `node_target` with SSH access to the node is
+set.
 
 ## Existing Kubernetes cluster
 
