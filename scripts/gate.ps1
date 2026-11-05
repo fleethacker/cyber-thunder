@@ -28,14 +28,17 @@ $testRc = $LASTEXITCODE
 $out.TrimEnd() -split "`r?`n" | Select-Object -Last 15 | ForEach-Object { Write-Output $_ }
 Step "tests ($testCmd)" ($testRc -eq 0)
 
-# 2. Forbidden references: the banned names in any tracked text file or in the last 50 commit messages,
-#    plus automated-trailer phrases in those commit messages.
+# 2. Forbidden references: the banned names in any tracked text file, and in the messages of the commits
+#    this push would add (everything since origin/main; the last 50 when there is no origin/main), plus
+#    automated-trailer phrases in those messages. History already on main is not ours to rewrite.
 $bad = $false
 $refs = git grep -I -i -l -E $banned -- . ':!vendor' 2>$null
 if ($refs) { $bad = $true; $refs | ForEach-Object { Write-Output "  file: $_" } }
-$msgs = git log -50 --format=%B 2>$null | Out-String
+git rev-parse --verify -q origin/main 2>$null | Out-Null
+if ($LASTEXITCODE -eq 0) { $range = 'origin/main..HEAD' } else { $range = '-50' }
+$msgs = git log $range --format=%B 2>$null | Out-String
 if ($msgs -match "(?i)$banned|Co-Authored-By:|Generated with") {
-    $bad = $true; Write-Output '  a recent commit message has a forbidden reference'
+    $bad = $true; Write-Output "  a commit message in $range has a forbidden reference"
 }
 Step 'forbidden references' (-not $bad)
 
