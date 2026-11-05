@@ -1,5 +1,6 @@
 {
-  "target": "sim-docker-01",
+  "target": "acd-containers",
+  "sim_target": "sim-docker-01",
   "seeded_by": "cyberthunder/adapters/containers/simulated.py (simulated) and range/containers/seed.sh (podman/docker on the range VM)",
   "purpose": "Score detection rate (measure of success #1). Do not show to the model.",
   "match": "a finding on the target whose rule_version equals 'rule' and whose container tag equals 'container'",

@@ -86,8 +86,13 @@ def _id_pattern(check_id: str) -> re.Pattern | None:
 def _qualified(item: dict, f: Finding) -> bool:
     """The finding is on the object the item names (container, Kubernetes object, discovered address)."""
     q = item.get("qualifier")
-    if q and not (f.rule_id == q or f.rule_id.endswith(":" + q) or q in f.tags):
-        return False
+    if q:
+        # On an in-process control plane (k3s) the apiserver/kubelet are reported node-scoped
+        # (rule id ends with ":-/node/<node>"), not as the static pods the simulated key names under
+        # kube-system/pod/. Credit either representation for a control-plane object.
+        cp_node = q.startswith("kube-system/pod/") and bool(re.search(r":-/node/[^/]+$", f.rule_id))
+        if not (cp_node or f.rule_id == q or f.rule_id.endswith(":" + q) or q in f.tags):
+            return False
     addr = item.get("address")
     if addr and f.rule_id.startswith("discovery:"):
         try:
@@ -106,13 +111,19 @@ def _matches(item: dict, f: Finding) -> bool:
     if cid:
         pat = _id_pattern(cid)
         if pat is not None:
-            return any(pat.fullmatch(x) for x in (f.rule_version, f.rule_id, *f.citations) if x)
-        return (f.rule_version == cid or f.rule_id == cid or f.rule_id.endswith(":" + cid)
-                or f.rule_id.startswith(cid + ":") or cid in f.citations)
-    # detector-only item (intrusion hunts): match a detector name or the vetted fix it maps to
-    for det in re.split(r"\s*\+\s*", item.get("detector") or ""):
-        if det and (f.rule_id == det or f.rule_id.startswith((det + ".", det + ":")) or f.rule_id.endswith(":" + det)):
+            if any(pat.fullmatch(x) for x in (f.rule_version, f.rule_id, *f.citations) if x):
+                return True
+        elif (f.rule_version == cid or f.rule_id == cid or f.rule_id.endswith(":" + cid)
+              or f.rule_id.startswith(cid + ":") or cid in f.citations):
             return True
+    else:
+        # detector-only item (intrusion hunts): match a detector name
+        for det in re.split(r"\s*\+\s*", item.get("detector") or ""):
+            if det and (f.rule_id == det or f.rule_id.startswith((det + ".", det + ":")) or f.rule_id.endswith(":" + det)):
+                return True
+    # Fallback for any item: the finding carries the exact vetted fix the item maps to. This credits a
+    # real-range finding (e.g. an OpenSCAP rule id) to an item whose check_id is the simulator's native id
+    # when both resolve to the same fix, without loosening the id match itself.
     return bool(item.get("fix_ref") and f.fix_ref == item["fix_ref"])
 
 
