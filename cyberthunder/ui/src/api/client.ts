@@ -7,6 +7,7 @@ import type {
   Outbox, PolicyDecision, ProposalDiff, ProposalPlan, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
   ReportHistory, SavedReportContent, TargetOutcome, TargetReport, UpdateCheck,
   ContentUploadResult, LibraryPreferences, LibraryPreferencesInput, StigLibrary, FindingReviewHistory, FindingReviewInput,
+  HostRegistration, RuntimeContext, TargetReadiness, ScopeRangeInput, ScopeRangePreview, SavedScopeRanges,
 } from './types';
 
 export const API_BASE = '/api/v1';
@@ -107,12 +108,17 @@ export const api = {
   status: () => get<Status>('/status'),
 
   targets: () => get<{ targets: Target[] }>('/targets'),
+  runtimeContext: () => get<RuntimeContext>('/runtime/context'),
+  registerHost: (body: HostRegistration) => post<Target>('/targets/register-host', body),
+  targetReadiness: (id: string) => get<TargetReadiness>(`/targets/${enc(id)}/readiness`),
   addTarget: (t: Partial<Target>) => post<Target>('/targets', t),
   updateTarget: (id: string, t: Partial<Target> & { reason?: string }) => put<Target>(`/targets/${enc(id)}`, t),
   removeTarget: (id: string) => del<{ ok: boolean }>(`/targets/${enc(id)}`),
   discover: (id: string) => post<AssetFacts>(`/targets/${enc(id)}/discover`),
 
   discovery: () => get<DiscoveryOverview>('/discovery'),
+  previewScopeRanges: (body: ScopeRangeInput) => post<ScopeRangePreview>('/discovery/scopes/preview', body),
+  saveScopeRanges: (body: ScopeRangeInput & { reason: string }) => put<SavedScopeRanges>('/discovery/scopes/ranges', body),
   putDiscoveryScopes: (scopes: { cidr: string; allow_public?: boolean; scanner_target?: string | null }[], reason: string) =>
     put<{ scopes: DiscoveryScope[] }>('/discovery/scopes', { scopes, reason }),
   sweep: (mode: DiscoveryMode, scopes?: string[]) =>

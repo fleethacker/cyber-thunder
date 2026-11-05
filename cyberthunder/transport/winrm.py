@@ -15,6 +15,7 @@ The password is read from the environment when the transport is built and is nev
 from __future__ import annotations
 
 import base64
+import ipaddress
 import os
 import re
 import time
@@ -82,7 +83,13 @@ class WinRMTransport(Transport):
 
     @property
     def endpoint(self) -> str:
-        return f"{'https' if self.ssl else 'http'}://{self.host}:{self.port}/wsman"
+        host = self.host
+        try:
+            if ipaddress.ip_address(host).version == 6:
+                host = f"[{host}]"
+        except ValueError:
+            pass
+        return f"{'https' if self.ssl else 'http'}://{host}:{self.port}/wsman"
 
     @classmethod
     def from_target(cls, target) -> "WinRMTransport":

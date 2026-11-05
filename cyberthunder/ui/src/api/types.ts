@@ -272,6 +272,43 @@ export interface Target {
 
 export type AssetFacts = Record<string, unknown>;
 
+/** Local runtime markers only; neither the physical deployment host nor connectivity is inferred. */
+export interface RuntimeContext {
+  kind: 'native' | 'container' | 'kubernetes' | 'unknown';
+  detection: 'local_markers' | 'no_container_markers' | 'unknown';
+  runtime_os: 'linux' | 'windows' | 'darwin' | 'unknown';
+  physical_host_os: 'unknown';
+  host_address: null;
+  host_address_required: true;
+  local_transport: { boundary: 'container' | 'runtime' | 'unknown'; description: string };
+  supported_host_transports: ('ssh' | 'winrm')[];
+  hints: { code: string; message: string }[];
+}
+
+export interface HostRegistration {
+  id: string;
+  name: string;
+  asset_type: 'linux' | 'windows';
+  transport: 'ssh' | 'winrm';
+  address: string;
+  port?: number | null;
+  username: string;
+  credential_ref: string;
+  sudo?: boolean;
+  in_scope: boolean;
+  reason: string;
+}
+
+export interface TargetReadiness {
+  target_id: string;
+  ready_for_connection_test: boolean;
+  checked: 'declarations_only';
+  connection_test_route: string;
+  checks: { code: string; status: 'ok' | 'blocked' | 'unknown'; message: string }[];
+  warnings: string[];
+  runtime: RuntimeContext;
+}
+
 export interface TargetScanResult {
   target_id: string;
   status: string;
@@ -429,6 +466,34 @@ export interface DiscoveryScope {
   added_at: string;
   reason: string;
   scanner_target: string | null;
+}
+
+export interface ScopeRangeInput {
+  include: string[];
+  exclude?: string[];
+  allow_public?: boolean;
+  scanner_target?: string | null;
+  acknowledge_normalization?: boolean;
+}
+
+export interface ScopeRangePreview {
+  networks: string[];
+  network_count: number;
+  input_address_count: string;
+  excluded_address_count: string;
+  address_count: string;
+  truncated: boolean;
+  can_save: boolean;
+  blocking_reasons: string[];
+  warnings: string[];
+  normalizations: { field: 'include' | 'exclude'; input: string; normalized: string }[];
+  requires_normalization_acknowledgment: boolean;
+  limits: { max_entries: number; max_networks: number; max_addresses: number };
+}
+
+export interface SavedScopeRanges {
+  scopes: DiscoveryScope[];
+  preview: ScopeRangePreview;
 }
 
 export interface DiscoveryRun {

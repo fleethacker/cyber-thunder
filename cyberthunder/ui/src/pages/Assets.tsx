@@ -1,14 +1,16 @@
 // Assets: the inventory is the scope guardrail. Scope changes ask for a reason and are audited.
-import { ActionIcon, Badge, Button, Drawer, Group, Menu, Paper, ScrollArea, Stack, Switch, Table, Text } from '@mantine/core';
+import { ActionIcon, Alert, Badge, Button, Drawer, Group, Menu, Paper, ScrollArea, Stack, Switch, Table, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconDots, IconPencil, IconPlus, IconTrash, IconZoomScan } from '@tabler/icons-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { api, errorText } from '../api/client';
 import type { AssetFacts, Severity, Target } from '../api/types';
 import { ConfirmReasonModal } from '../components/ConfirmReasonModal';
 import { DiscoveryPanel } from '../components/DiscoveryPanel';
 import { AssetIcon, AsyncView, Empty, ErrorBox, JsonView, Loading, Mono, PageTitle, SeverityBadge, SimulatedBadge } from '../components/common';
 import { TargetForm } from '../components/TargetForm';
+import { HostSetup } from '../components/HostSetup';
+import { useSetupAccess } from '../components/setupAccess';
 import { fmtAgo } from '../lib/format';
 import { useAsync } from '../lib/hooks';
 
@@ -17,13 +19,16 @@ type Counts = Record<string, Partial<Record<Severity, number>>>;
 export default function Assets() {
   const st = useAsync(async () => (await api.targets()).targets, []);
   const open = useAsync(async () => (await api.findings({ status: 'open', limit: 5000 })).findings, []);
-  const [form, setForm] = useState<{ open: boolean; target: Target | null }>({ open: false, target: null });
+  const [form, setForm] = useState<{ open: boolean; target: Target | null; defaults?: Partial<Target> }>({ open: false, target: null });
+  const [hostSetup, setHostSetup] = useState(false);
   const [scopeFor, setScopeFor] = useState<Target | null>(null);
   const [removeFor, setRemoveFor] = useState<Target | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [facts, setFacts] = useState<{ target: Target; data?: AssetFacts; error?: string } | null>(null);
   const [loadingDemo, setLoadingDemo] = useState(false);
+  const blocked = useSetupAccess();
+  const inFlight = useRef(false);
 
   const counts = useMemo(() => {
     const c: Counts = {};
@@ -36,7 +41,8 @@ export default function Assets() {
   }, [open.data]);
 
   const changeScope = async (reason: string) => {
-    if (!scopeFor) return;
+    if (!scopeFor || !reason.trim() || blocked || inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setModalError(null);
     try {
@@ -49,12 +55,14 @@ export default function Assets() {
     } catch (e) {
       setModalError(errorText(e));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
 
   const remove = async () => {
-    if (!removeFor) return;
+    if (!removeFor || blocked || inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setModalError(null);
     try {
@@ -64,11 +72,13 @@ export default function Assets() {
     } catch (e) {
       setModalError(errorText(e));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
 
   const discover = async (t: Target) => {
+    if (blocked || !t.in_scope) return;
     setFacts({ target: t });
     try {
       setFacts({ target: t, data: await api.discover(t.id) });
@@ -78,6 +88,8 @@ export default function Assets() {
   };
 
   const loadDemo = async () => {
+    if (blocked || inFlight.current) return;
+    inFlight.current = true;
     setLoadingDemo(true);
     try {
       await api.demoLoad();
@@ -86,6 +98,7 @@ export default function Assets() {
     } catch (e) {
       notifications.show({ color: 'red', title: 'Refused', message: errorText(e) });
     } finally {
+      inFlight.current = false;
       setLoadingDemo(false);
     }
   };
@@ -94,18 +107,20 @@ export default function Assets() {
     <Stack gap="md">
       <PageTitle
         title="Assets"
-        subtitle="The inventory is the scope: the agent only touches in-scope assets listed here."
+        subtitle="Only explicitly authorized inventory assets may be scanned or changed with approval. Discovery search ranges are separate."
         right={<>
-          <Button leftSection={<IconPlus size={16} />} onClick={() => setForm({ open: true, target: null })}>Add asset</Button>
+          <Button variant="light" onClick={() => setHostSetup(true)}>Set up deployment host</Button>
+          <Button leftSection={<IconPlus size={16} />} disabled={!!blocked} onClick={() => setForm({ open: true, target: null })}>Add asset</Button>
           <Button variant="light" onClick={() => { void st.reload(); void open.reload(); }} loading={st.loading}>Refresh</Button>
         </>}
       />
+      {blocked && <Alert color="yellow">{blocked}</Alert>}
       <AsyncView
         state={st}
         what="Loading inventory"
         isEmpty={(d) => d.length === 0}
         empty={
-          <Empty title="No assets in the inventory" action={<Button loading={loadingDemo} onClick={() => void loadDemo()}>Load simulated range</Button>}>
+          <Empty title="No assets in the inventory" action={<Button loading={loadingDemo} disabled={!!blocked} onClick={() => void loadDemo()}>Load simulated range</Button>}>
             Add assets by hand, or load the simulated range for a demonstration.
           </Empty>
         }
@@ -136,7 +151,7 @@ export default function Assets() {
                         <Table.Td><Text size="sm">{t.transport}</Text></Table.Td>
                         <Table.Td><Mono>{t.address ? `${t.address}${t.port ? `:${t.port}` : ''}` : '-'}</Mono></Table.Td>
                         <Table.Td>
-                          <Switch checked={t.in_scope} onChange={() => { setModalError(null); setScopeFor(t); }} aria-label={`Scope for ${t.name}`} color="teal" />
+                          <Switch checked={t.in_scope} disabled={!!blocked || busy} onChange={() => { setModalError(null); setScopeFor(t); }} aria-label={`Scope for ${t.name}`} color="teal" />
                         </Table.Td>
                         <Table.Td><Text size="sm">{fmtAgo(t.last_scan)}</Text></Table.Td>
                         <Table.Td>
@@ -148,12 +163,12 @@ export default function Assets() {
                         </Table.Td>
                         <Table.Td>
                           <Group gap={4} wrap="nowrap">
-                            <Button size="xs" variant="light" leftSection={<IconZoomScan size={14} />} disabled={!t.in_scope} onClick={() => void discover(t)}>Discover</Button>
+                            <Button size="xs" variant="light" leftSection={<IconZoomScan size={14} />} disabled={!!blocked || !t.in_scope} onClick={() => void discover(t)}>Read asset facts</Button>
                             <Menu position="bottom-end">
                               <Menu.Target><ActionIcon variant="subtle" aria-label="More"><IconDots size={16} /></ActionIcon></Menu.Target>
                               <Menu.Dropdown>
-                                <Menu.Item leftSection={<IconPencil size={14} />} onClick={() => setForm({ open: true, target: t })}>Edit</Menu.Item>
-                                <Menu.Item color="red" leftSection={<IconTrash size={14} />} onClick={() => { setModalError(null); setRemoveFor(t); }}>Remove</Menu.Item>
+                                <Menu.Item disabled={!!blocked || busy} leftSection={<IconPencil size={14} />} onClick={() => setForm({ open: true, target: t })}>Edit</Menu.Item>
+                                <Menu.Item disabled={!!blocked || busy} color="red" leftSection={<IconTrash size={14} />} onClick={() => { setModalError(null); setRemoveFor(t); }}>Remove</Menu.Item>
                               </Menu.Dropdown>
                             </Menu>
                           </Group>
@@ -171,30 +186,32 @@ export default function Assets() {
 
       <DiscoveryPanel onInventoryChanged={() => void st.reload()} />
 
-      <TargetForm opened={form.open} initial={form.target} onClose={() => setForm({ open: false, target: null })} onSaved={() => void st.reload()} />
+      <HostSetup opened={hostSetup} onClose={() => setHostSetup(false)} onSaved={() => void st.reload()}
+        onUseLocal={(defaults) => { setHostSetup(false); setForm({ open: true, target: null, defaults }); }} />
+      <TargetForm opened={form.open} initial={form.target} defaults={form.defaults} onClose={() => setForm({ open: false, target: null })} onSaved={() => void st.reload()} />
       <ConfirmReasonModal
         opened={!!scopeFor}
-        onClose={() => setScopeFor(null)}
+        onClose={() => { if (!inFlight.current) setScopeFor(null); }}
         title={scopeFor?.in_scope ? `Remove ${scopeFor?.name} from scope` : `Put ${scopeFor?.name} in scope`}
-        body={scopeFor?.in_scope ? 'The agent will stop scanning or changing this asset.' : 'The agent may scan this asset and, with approval, change it.'}
+        body={scopeFor?.in_scope ? 'The agent will stop scanning or changing this asset. Discovery search ranges are unchanged.' : 'Authorize scans and approved changes for this inventory asset only. This does not start a scan or authorize other addresses in its discovery range.'}
         reasonRequired
         reasonHint="Required: kept in the asset notes; the scope change itself is audited (scope.change)"
         confirmLabel={scopeFor?.in_scope ? 'Remove from scope' : 'Put in scope'}
         confirmColor={scopeFor?.in_scope ? 'orange' : 'teal'}
         busy={busy}
-        error={modalError}
+        error={modalError ?? blocked}
         onConfirm={(r) => void changeScope(r)}
       />
       <ConfirmReasonModal
         opened={!!removeFor}
-        onClose={() => setRemoveFor(null)}
+        onClose={() => { if (!inFlight.current) setRemoveFor(null); }}
         title={`Remove ${removeFor?.name} from the inventory`}
         body="The asset leaves the inventory (and the scope). Its past findings and audit records stay. Audited as inventory.remove."
         noReason
         confirmLabel="Remove"
         confirmColor="red"
         busy={busy}
-        error={modalError}
+        error={modalError ?? blocked}
         onConfirm={() => void remove()}
       />
       <Drawer opened={!!facts} onClose={() => setFacts(null)} position="right" size="lg" title={<Text fw={700}>Asset facts: {facts?.target.name}</Text>}>

@@ -39,6 +39,8 @@ audited as `discovery.scopes` with the before and after lists. Limits:
 A sweep request may name part of a saved scope (`--scope 192.168.56.0/26`); anything outside every saved
 scope is refused.
 
+The [range editor](HOST_SCOPE.md#preview-and-save-discovery-ranges) additionally accepts individual IPs and inclusive start-end ranges, with exclusions. Its preview does no DNS or probing; save compiles the effective address space into these same CIDR scopes. Range-editor limits also bound total addresses and output networks. Search-range changes never change an inventory target's separate `in_scope` decision.
+
 ## Modes
 
 | Mode | Sends packets | What runs |
