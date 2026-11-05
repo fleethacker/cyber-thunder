@@ -104,8 +104,10 @@ that `ingest content` prints:
 | Windows | `scap_datastream` | `<state>/content/scap/MS_Windows_11/U_MS_Windows_11_V2R11_STIG_SCAP_1-3_Benchmark.xml` |
 | Linux | `benchmark_path` | `<state>/content/scap/RHEL_9/U_RHEL_9_V2R10_STIG_SCAP_1-3_Benchmark.xml` |
 
-Both options are being added to the adapters on a separate branch; until they land the datastreams sit
-in the content store ready for use.
+Both adapters support these options. Windows reads `scap_datastream` on the Cyber Thunder node.
+Linux reads `benchmark_path` on the target host: copy the extracted datastream to that host and set
+the target-side path before scanning. A path under the node's content store is not automatically
+available on a remote Linux host. See [SCAP](SCAP.md) for profile selection and applicability limits.
 
 ## The disconnected round trip
 

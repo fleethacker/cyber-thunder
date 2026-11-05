@@ -111,8 +111,8 @@ function OutboxCard() {
   );
 }
 
-type Doc = 'commander' | 'fleet' | 'friction';
-const DOC_PATH: Record<Doc, string> = { commander: '/reports/commander', fleet: '/reports/fleet', friction: '/reports/friction' };
+type Doc = 'commander' | 'fleet' | 'friction' | 'coverage';
+const DOC_PATH: Record<Doc, string> = { commander: '/reports/commander', fleet: '/reports/fleet', friction: '/reports/friction', coverage: '/reports/coverage' };
 
 export default function Reports() {
   const [doc, setDoc] = useState<Doc>('commander');
@@ -150,6 +150,7 @@ export default function Reports() {
           <Group justify="space-between" wrap="wrap">
             <SegmentedControl value={doc} onChange={(v) => setDoc(v as Doc)} data={[
               { value: 'commander', label: 'Commander one-pager' }, { value: 'fleet', label: 'Path to fleet' }, { value: 'friction', label: 'Friction log' },
+              { value: 'coverage', label: 'Check & fix coverage' },
             ]} />
             <Group gap="xs">
               <Download href={url(DOC_PATH[doc], { format: 'html' })} label="HTML" file={`${doc}.html`} />

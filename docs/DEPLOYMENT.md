@@ -22,8 +22,11 @@ container engines. Linux uses native Docker or rootful Podman. macOS uses a
 rootful Podman machine. On November 4, 2026, `./deploy.sh dev` passed against
 the existing `arm64` cluster on macOS with Podman. Verification covered the
 development SSO login, workload readiness, Podinfo HTTPS redirect, and Prometheus
-scraping. Fresh cluster creation, Linux deployment, and existing Kubernetes
-cluster deployment: Untested.
+scraping. A WSL2 Ubuntu deployment and a scan of its k3d demo cluster from Windows
+are also recorded below (5 Nov 2026). Native Linux, fresh macOS cluster creation,
+and arbitrary existing Kubernetes cluster deployment remain unvalidated here.
+These results do not establish that every Cyber Thunder container-to-target scan
+and remediation path has been exercised; see [the validation matrix](VALIDATION.md).
 
 ## Deployment
 

@@ -1,0 +1,33 @@
+{
+  "reviewed_on": "2026-11-05",
+  "notes": [
+    "Recorded means the repository contains a dated account of a real run. It does not mean this matrix reran that experiment or verified a production deployment.",
+    "Exact tested commits and some component versions were not captured in the run notes. The evidence commits below identify the write-up, not the binary that ran. Future runs must record both.",
+    "A seed detection score measures the deliberately planted items, not whole-benchmark compliance. See COVERAGE.md for implemented checks and local content mappings.",
+    "No platform has a complete recorded false-positive review (VAL-02). A successful Linux rollback is evidence for that one fix, not every fix or platform.",
+    "Native and container deployments remain supported directions. The target matrix below describes what was scanned; it does not imply every deployment-to-target combination has been tested. The UDS package and SSO configuration are merged, while per-user application authorization and target credentials remain open."
+  ],
+  "rows": [
+    {"platform":"Rocky Linux 9", "real_run":true, "date":"2026-11-04", "seeds":"12/12", "fix_flow":"One /etc/shadow fix: apply, verify, rollback", "evidence":"range/README.md#results-first-real-host-run-2026-11-04", "evidence_commit":"6ce5a22; scoring correction 3557f9a", "summary":"Rocky 9 over SSH: 12/12 Linux seeds detected; one fix applied, verified and rolled back."},
+    {"platform":"Podman on Rocky Linux 9 (engine version not recorded)", "real_run":true, "date":"2026-11-04", "seeds":"6/6", "fix_flow":"Not exercised", "evidence":"range/README.md#results-first-real-host-run-2026-11-04", "evidence_commit":"6ce5a22; scoring correction 3557f9a", "summary":"The same range run detected 6/6 Podman seeds and 10/10 k3s seeds (28/28 across all three targets)."},
+    {"platform":"k3s on Rocky Linux 9 (k3s version not recorded)", "real_run":true, "date":"2026-11-04", "seeds":"10/10", "fix_flow":"Not exercised", "evidence":"range/README.md#results-first-real-host-run-2026-11-04", "evidence_commit":"6ce5a22; scoring correction 3557f9a"},
+    {"platform":"k3d / UDS Core demo cluster on WSL2", "real_run":true, "date":"2026-11-05 02:21Z", "seeds":"Not scored; 127 findings, no adapter errors", "fix_flow":"Not exercised", "evidence":"docs/DEPLOYMENT.md#scanning-the-cluster-from-windows", "summary":"The WSL2 UDS demo cluster was scanned over kubectl: 127 findings and no adapter errors."},
+    {"platform":"Windows 11", "real_run":false, "evidence":"range/windows/README.md"},
+    {"platform":"Windows Server 2019", "real_run":false},
+    {"platform":"Windows Server 2022", "real_run":false},
+    {"platform":"Windows Server 2025", "real_run":false},
+    {"platform":"Active Directory domain / Kerberos remoting", "real_run":false},
+    {"platform":"RHEL 8", "real_run":false},
+    {"platform":"RHEL 9", "real_run":false},
+    {"platform":"AlmaLinux 8", "real_run":false},
+    {"platform":"AlmaLinux 9", "real_run":false},
+    {"platform":"Ubuntu 22.04", "real_run":false},
+    {"platform":"Ubuntu 24.04", "real_run":false},
+    {"platform":"Cisco IOS switch", "real_run":false, "evidence":"range/cisco/README.md"},
+    {"platform":"Cisco IOS router", "real_run":false, "evidence":"range/cisco/README.md"},
+    {"platform":"Cisco IOS-XE switch", "real_run":false, "evidence":"range/cisco/README.md"},
+    {"platform":"Cisco IOS-XE router", "real_run":false, "evidence":"range/cisco/README.md"},
+    {"platform":"Conformant Kubernetes distribution beyond the k3s/k3d range", "real_run":false},
+    {"platform":"Docker host through the container adapter", "real_run":false, "evidence":"range/containers/README.md"}
+  ]
+}

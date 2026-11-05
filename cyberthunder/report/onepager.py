@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from cyberthunder.control.approvals import Proposal, ProposalState
 from cyberthunder.findings.schema import RE_ATTACK, Finding, Severity
 from cyberthunder.report.render import ReportError, render
+from cyberthunder.report.coverage import build_coverage
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -236,6 +237,7 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
         "discovery": [{"host": f.host.removeprefix("discovered:"), "title": f.title, "severity": f.severity.value,
                        "check": f.rule_id} for f in sorted(disc, key=lambda f: (-f.severity.rank, f.host, f.rule_id))],
         "link": _link_line(ctx), "next_actions": nxt, "command": cmd,
+        "coverage": build_coverage(ctx),
     }
 
 

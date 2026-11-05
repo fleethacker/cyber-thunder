@@ -47,6 +47,9 @@ def cmd_report(a: argparse.Namespace) -> int:
             text = svc.fleet(a.format or "html")
         elif kind == "friction":
             text = svc.friction(a.format or "html")
+        elif kind == "coverage":
+            result = svc.coverage(a.format or "md", a.benchmark_dir)
+            text = json.dumps(result, indent=2) if isinstance(result, dict) else result
         else:
             res = svc.score(a.scan_id, a.key_dir)
             text = json.dumps(res, indent=2)
@@ -59,11 +62,13 @@ def cmd_report(a: argparse.Namespace) -> int:
 
 
 def register_cli(subparsers) -> None:
-    p = subparsers.add_parser("report", help="commander one-pager, POA&M, checklist, path to fleet, friction log, score")
-    p.add_argument("kind", choices=("commander", "poam", "checklist", "fleet", "friction", "score"))
+    p = subparsers.add_parser("report", help="commander one-pager, POA&M, checklist, fleet, friction, score, coverage")
+    p.add_argument("kind", choices=("commander", "poam", "checklist", "fleet", "friction", "score", "coverage"))
     p.add_argument("--scan-id", default=None, help="scan run id (default: latest)")
     p.add_argument("--host", default=None, help="checklist: host to build the checklist for")
-    p.add_argument("--format", choices=("html", "md"), default=None, help="commander, fleet, friction (default html)")
+    p.add_argument("--format", choices=("html", "md", "json"), default=None,
+                   help="page format (default html); coverage defaults to md and also supports json")
+    p.add_argument("--benchmark-dir", default=None, help="coverage: directory of XCCDF/SCAP XML; overrides automatic content discovery")
     p.add_argument("--out", default=None, help="write to this file instead of stdout")
     p.add_argument("--key-dir", default=None, help="score: answer key directory (default range/answer_key)")
     p.add_argument("--queue", action="store_true", help="render and queue in the sync outbox instead of printing")

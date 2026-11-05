@@ -10,13 +10,13 @@ import inspect
 import json
 from typing import TYPE_CHECKING
 
-from cyberthunder.report import checklist, fleet, friction, onepager, poam, score
+from cyberthunder.report import checklist, coverage, fleet, friction, onepager, poam, score
 from cyberthunder.report.render import FORMATS, ReportError
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
 
-KINDS = ("commander", "poam", "checklist", "fleet", "friction", "score")
+KINDS = ("commander", "poam", "checklist", "fleet", "friction", "score", "coverage")
 _CONTENT_PARAMS = ("content", "data", "payload", "body", "text")
 _NAME_PARAMS = ("name", "filename", "file_name")
 
@@ -80,6 +80,17 @@ class ReportService:
         self._audited("score", head, scan_id=res["scan_id"], seeded=res["seeded"], found=res["found"])
         return res
 
+    def coverage(self, fmt: str = "html", benchmark_dir: str | None = None) -> str | dict:
+        if fmt not in ("html", "md", "json"):
+            raise ReportError("coverage format must be html, md or json")
+        head = self._head()
+        data = coverage.build_coverage(self.ctx, benchmark_dir)
+        data["audit_head"] = head
+        text = data if fmt == "json" else coverage.render("coverage", fmt, r=data)
+        self._audited("coverage", head, format=fmt, benchmarks=len(data["benchmarks"]),
+                      library_entries=data["library_entries"], errors=len(data["errors"]))
+        return text
+
     # -- sync on reconnect ------------------------------------------------------------
     def render_kind(self, kind: str, scan_id: str | None = None, host: str | None = None) -> tuple[str, str]:
         """(filename, text) for a report in its portable form: html for pages, csv for the POA&M, json for data."""
@@ -97,6 +108,8 @@ class ReportService:
             return "friction-log.html", self.friction("html")
         if kind == "score":
             return f"score-{scan_id or 'latest'}.json", json.dumps(self.score(scan_id), indent=2)
+        if kind == "coverage":
+            return "coverage.html", self.coverage("html")
         raise ReportError(f"unknown report kind {kind!r}; expected one of {KINDS}")
 
     def queue(self, kind: str, scan_id: str | None = None, host: str | None = None, *, actor: str = "report") -> dict:

@@ -39,6 +39,6 @@ measures_of_success:
 guardrails:
   may: Scan in-scope hosts, read configurations and logs, propose fixes, and apply fixes from the vetted library after a human approves.
   never: Run commands written by a model, change anything without approval, touch a host outside the inventory, or delete logs or the audit trail.
-  requires_approval: Every state-changing action, one fix at a time, by a named human.
+  requires_approval: "Every state-changing action, one fix at a time. Today the name is self-asserted; gateway SSO is not yet bound to a verified application approver or per-user target credential. See docs/BACKLOG.md section 1."
   logged: Every scan, finding, proposal, approval or denial, apply, verify, rollback and kill switch event, hash-chained.
   stopped: The kill switch (UI button, state file, CT_KILL or a KILL file) blocks every pending and future change at once.

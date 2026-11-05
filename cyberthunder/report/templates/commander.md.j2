@@ -76,6 +76,25 @@ No open findings to rank.
 {{ r.link }}
 {% endif %}
 
+## Check and fix coverage
+
+**Coverage:** finding every seeded item does not mean a whole benchmark is covered. These available content mappings describe capabilities, not checks completed in this scan.
+
+{% if r.coverage.benchmarks %}
+| Available benchmark | Rules | Native | SCAP eligible | Executable fix | Runbook only | Unmapped |
+|---|---:|---:|---:|---:|---:|---:|
+{% for row in r.coverage.benchmarks %}
+| {{ row.benchmark }} ({{ row.release }}) | {{ row.published_rules }} | {{ row.native_checks }} | {{ row.scap_eligible }} | {{ row.executable_fixes }} | {{ row.runbook_only }} | {{ row.not_covered }} |
+{% endfor %}
+{% else %}
+Full benchmark totals are unknown; no local benchmark document is available.
+{% endif %}
+
+Native and SCAP counts overlap. Linux SCAP needs external OpenSCAP and host applicability checks. Matching rule IDs across releases needs content review. See Reports / Check & fix coverage for sources, datastreams and limitations.
+{% if r.coverage.errors %}
+Coverage inventory is incomplete; see that report's errors.
+{% endif %}
+
 ## Next actions
 
 {% for a in r.next_actions %}

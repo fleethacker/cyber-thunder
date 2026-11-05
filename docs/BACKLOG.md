@@ -2,11 +2,13 @@
 
 What should be done and is not. Every entry here is known work, so nobody mistakes a demo shortcut for a design decision. An item leaves this file in the same pull request that ships it; if it is dropped instead, say why in that PR. Line references were checked against the tree on 4 Nov 2026 and will drift; search for the named function if a line has moved.
 
-**Identity today, in one line:** the approver is a typed name, machine names are refused, and nothing about a person is verified.
+**Identity today, in one line:** the application approver is still a typed name; the merged UDS package adds gateway SSO, but the application does not yet bind approvals to that verified user or a per-user target credential.
 
 **What stops this being fielded, in short:** section 2; identity is one of five blockers, not the only one.
 
 Identity items carry the transition-plan step from [SUBMISSION](SUBMISSION.md) (30, 60, 90 or 180 days). Other items carry one of: **now** (before the event ends), **before range** (before the training-range experiment), **before fleet** (before a limited deployment), **later**.
+
+Completed documentation/reporting work: COV-01 now ships as `report coverage`, the Reports view and commander-report counts ([COVERAGE](COVERAGE.md)). DOC-01, DOC-02, DOC-03, DOC-04 and DOC-06 are corrected; unmeasured submission results and the unconfirmed mission owner are explicit. VAL-01 has a generated matrix and README status, while real-platform validation remains open.
 
 ## 1. Identity, credentials and zero trust
 
@@ -18,7 +20,7 @@ Identity items carry the transition-plan step from [SUBMISSION](SUBMISSION.md) (
 | What is checked about the name? | Not empty, no control characters, at most 128 characters, not `agent`/`llm`/`system`-style, not `policy:` | `cyberthunder/control/identity.py:35-48` |
 | Where does the UI get the name? | A free-text box kept in browser `localStorage` | `cyberthunder/ui/src/pages/Settings.tsx:25`, `cyberthunder/ui/src/api/client.ts:16,24` |
 | CLI identity | `--actor`, defaulting to `CT_ACTOR`, then the OS user name | `cyberthunder/cli.py:113,131` |
-| Login, session, token, certificate | None | `cyberthunder/api/` |
+| Login, session, token, certificate | No application principal/session validation; the UDS gateway has Keycloak SSO configuration | `cyberthunder/api/`, `packages/cyberthunder/uds.yaml` |
 | Transport to the UI and API | Plain HTTP, bound to `127.0.0.1:8000` by default | `cyberthunder/api/app.py:50-53`, `cyberthunder/config.py:58-59` |
 | Roles, approver roster, two-person rule | None; any accepted name may do anything | `ActorDep` at `cyberthunder/api/util.py:52` |
 | Kill switch engage | Allowed with no name ("unidentified operator (address)") | `cyberthunder/api/routes/kill.py:22-25` |
@@ -32,8 +34,8 @@ What is real: machine identities can never take a human edge, and every action i
 ### 1.1 People into the app
 
 **ZT-01 Package Cyber Thunder as a UDS package behind Keycloak SSO.** Pillars: User, Application, Network. Step: 60 days. Effort: 1-2 weeks. Depends: UDS Core cluster ([DEPLOYMENT](DEPLOYMENT.md)), `packages/identity-bootstrap`.
-- Today: `packages/` holds only `identity-bootstrap`, `nginx-bad` and `podinfo`; the app is a bare uvicorn process.
-- Target: `packages/cyber-thunder` (Zarf package plus UDS Package CR, modeled on `packages/podinfo`) with sidecar injection, tenant-gateway expose, an SSO client, authservice selector, egress limited to inventory CIDRs and the in-namespace model server, state on a PVC. Laptop mode stays, labeled as unverified identity. Also produce an SBOM and pin image digests (`docs/fleet.yaml:16` names Iron Bank onboarding).
+- Today: PRs #18 and #19 added the application image, PVC, Zarf package (`packages/cyberthunder`, 0.2.2) and UDS ingress/Keycloak SSO restricted to `/UDS Core/Admin`. Native Python operation remains available. App-level principal validation, per-user permissions and target credentials remain open; packaging alone does not close this item.
+- Target: `packages/cyber-thunder` (Zarf package plus UDS Package CR, modeled on `packages/podinfo`) with sidecar injection, tenant-gateway expose, an SSO client, authservice selector, egress limited to inventory CIDRs and the in-namespace model server, state on a PVC. Native deployment remains supported with standalone OIDC (ZT-03/04); the optional development identity mode stays explicitly unverified. Also produce an SBOM and pin image digests (`docs/fleet.yaml:16` names Iron Bank onboarding).
 - Done when: a request without a session is redirected to Keycloak; a pod outside the mesh cannot reach the app; `uds zarf dev lint packages/cyber-thunder` passes; the UI loads after login as an identity-bootstrap test user.
 
 **ZT-02 Replace the typed X-Actor name with a verified principal.** Pillars: User, Application. Step: 30 days. Effort: 4-6 days. Depends: none for the seam.
@@ -218,8 +220,8 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 
 ### 2.1 Proof across real platforms
 
-**VAL-01 Validation matrix per platform and version.** Step: now (the matrix), before fleet (every row filled). Effort: hours for the file, then days per platform. Depends: RNG-01, SCAN-03, REM-02, ZT-12 for the domain row.
-- Today: the first real-host run scanned a Rocky 9 VM over SSH, plus podman and k3s on it, and scored 28 of 28 seeded items with one fix applied, verified and rolled back (`range/README.md:126-203`); the UDS demo cluster (k3d) was scanned from Windows over kubectl (`docs/DEPLOYMENT.md:226-245`). Windows over WinRM, Cisco over SSH and an Active Directory domain have never been run against a real system: WinRM and SSH are exercised through recordings and simulated hosts (`README.md:36-38`), Kerberos and CredSSP only against a fake session (ZT-12), Cisco push only through recordings (REM-02).
+**VAL-01 Validation matrix per platform and version.** Step: before fleet (remaining real runs and missing metadata). Effort: days per platform; matrix/generator shipped. Depends: RNG-01, SCAN-03, REM-02, ZT-12 for the domain row.
+- Today: `docs/VALIDATION.md` and the README status are generated from `docs/validation.json` by `scripts/validation_status.py`; `--check` detects drift. Recorded runs still lack the exact tested application commit and some component versions. The first real-host run scanned a Rocky 9 VM over SSH, plus podman and k3s on it, and scored 28 of 28 seeded items with one fix applied, verified and rolled back (`range/README.md:126-203`); the UDS demo cluster (k3d) was scanned from Windows over kubectl (`docs/DEPLOYMENT.md:226-245`). Windows over WinRM, Cisco over SSH and an Active Directory domain have never been run against a real system: WinRM and SSH are exercised through recordings and simulated hosts (`README.md:36-38`), Kerberos and CredSSP only against a fake session (ZT-12), Cisco push only through recordings (REM-02).
 - Target: `docs/VALIDATION.md` with one row per platform and version: Windows Server 2019, 2022, 2025 and Windows 11; RHEL 8 and 9 with Rocky and Alma; Ubuntu 22.04 and 24.04; Cisco IOS and IOS-XE switch and router; k3s and one conformant distribution; an Active Directory domain. Columns: scanned on a real host (yes/no, date, commit), seeded items found of seeded, false positives reviewed (VAL-02), fixes exercised (apply, verify, rollback), evidence path.
 - Done when: the file exists with every row; no row says yes without a dated evidence path under `range/` or `docs/`; the README status line is generated from it, so the two cannot disagree.
 
@@ -234,11 +236,6 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 - Done when: importing RHEL 9 V2R10 changes the titles and ids on the next scan with no code change; a finding records the benchmark release it was checked against; a test with a renamed rule id shows the catalog id.
 
 ### 2.2 Coverage and fix safety
-
-**COV-01 Published coverage report per adapter.** Step: before range. Effort: days. Depends: VAL-03 for the benchmark side.
-- Today: no report. Counted on 5 Nov: native rule entries in `adapters/*/stig_rules.json` are Linux 29, Cisco 30 (three benchmarks), Kubernetes 20, and the Windows catalog carries 19 rules; the RHEL 9 V2R10 manual benchmark in `STIG/` has 445 rules (393 in the SCAP datastream), RHEL 8 V2R9 has 371. The fix library loads 209 entries (STIG, hunt and patch): Linux 30 scripts and 38 runbooks, Windows 24 PowerShell and 1 runbook, Cisco 34 config snippets and 33 runbooks, Kubernetes 9 manifests and 27 runbooks, containers 1 script and 12 runbooks, plus ComplianceAsCode fixes built at scan time for real Linux targets (`remediation/engine.py:115`). Fixes are `FixEntry` records in each adapter's `fixes.py` (Cisco in `adapters/cisco/adapter.py`).
-- Target: `report coverage` per adapter and benchmark release: rules in the benchmark, rules checked natively, rules the SCAP path evaluates, rules with a vetted executable fix, rules with a runbook only, rules not covered. Rendered on the Reports page and in the one-pager so nobody reads "28 of 28" as "the benchmark is covered".
-- Done when: the command prints the six counts for every adapter; a test fails if a new library entry is not counted; the counts above are reproduced by it.
 
 **COV-02 Fix safety for lockout-prone changes.** Pillars: Automation, Network. Step: before fleet. Effort: 1-2 weeks. Depends: VAL-01, REM-02.
 - Today: `RemediationEngine.execute` (`remediation/engine.py:362-453`) opens one transport, captures before-state, applies and verifies over that same connection; verify includes a health result, and a failure or exception rolls back over the same transport. There is no pre-flight reachability check, no second session, no revert if the control connection itself drops, and no canary option: an approved sshd, firewall, WinRM or management-interface change that cuts the session leaves the rollback with no way in.
@@ -375,12 +372,7 @@ Identity negative tests are part of ZT-02, ZT-03 and ZT-08.
 
 | ID | Gap and today | Target | Done when | Effort | Step |
 |---|---|---|---|---|---|
-| DOC-01 | `docs/SUBMISSION.md:35,108`, `docs/fleet.yaml:42` and `README.md:22` say "named person" or "named human" without saying the name is self-asserted; SUBMISSION now carries one line under its transition plan | Add the same plain limitations line to the fleet file and the README, pointing at section 1 of this file | `docs/fleet.yaml` and README carry the line | hours | now |
-| DOC-02 | Refused actor: `docs/API.md:9` says 400, `docs/DISCOVERY.md:132` says 403; the code raises 400 (`api/util.py:39-47`, `api/routes/discovery.py:56-61`) | Fix DISCOVERY.md | Both say 400 | hours | now |
-| DOC-03 | `docs/friction.yaml` ends at F8 with nothing on identity | Add entries: no known enclave IdP or CA, who issues service credentials, CAC middleware on the range, maximum CRL age, ask for a test IdP | `report friction` renders them | hours | now |
-| DOC-04 | SUBMISSION still has `[ ]` placeholders for mission owner and every measured result | Fill from the rehearsal, audit log and detection score; say "not measured" where true | No `[ ]` remains | hours | now |
-| DOC-05 | `docs/CONTENT.md:107` says benchmark options are "being added on a separate branch"; both adapters already use them | Remove the sentence; add an end-to-end test for the content-store path | CONTENT.md matches the code | hours | now |
-| DOC-06 | `docs/DEPLOYMENT.md:26` "Untested" predates the WSL2 run | Update with DEP-01 | Status line matches the evidence | hours | now |
+| DOC-05 | CONTENT.md now describes the shipped benchmark options and distinguishes node-side Windows content from target-side Linux paths | Add an end-to-end content-store-to-adapter test | Imported content is used by each adapter in a regression test | hours | before range |
 
 ### Cluster MVP path (team plan of 5 Nov)
 
@@ -388,7 +380,7 @@ The team's MVP plan (Cyber Thunder running inside the UDS cluster, fixing `nginx
 
 | ID | Gap and today | Target | Done when | Effort | Step |
 |---|---|---|---|---|---|
-| MVP-01 | Cyber Thunder is not a package in `packages/` (team plan item 1): it runs as a Python process on the operator node; `packages/example` is the template to copy | Covered by ZT-01; start from `packages/example`, state on a PVC, the model server as an in-namespace service | `uds zarf dev lint` passes and the UI loads inside the cluster behind the tenant gateway | 1-2 weeks | before range |
+| MVP-01 | Application packaging and UDS gateway SSO shipped in PRs #18/#19 (`packages/cyberthunder`); end-to-end validation of the intended cluster scan/fix flow remains open | Validate the existing package and PVC with the intended model service and target access; verified application principals remain in ZT-02/03 | `uds zarf dev lint` passes and the UI loads inside the cluster behind the tenant gateway | 1-2 weeks | before range |
 | MVP-02 | Keycloak sign-in (item 1.3) | Covered by ZT-01 to ZT-03 | see those items | - | 30-60 days |
 | MVP-03 | Image vulnerability scanning for cluster workloads (item 2.1): the container adapter runs Trivy only where it is installed on the host (`cyberthunder/adapters/containers/adapter.py:187-194`); the Kubernetes adapter has no image CVE path | Trivy on the node or as an in-cluster job over the images pods reference, results through the existing Trivy parser | nginx-bad's stale UBI image yields CVE findings with ids and the image reference | days | before range |
 | MVP-04 | STIG checks inside container images (item 2.2): OpenSCAP runs on hosts over SSH, never on an image filesystem | `oscap-podman` or an image-filesystem evaluation with the RHEL 9 datastream for UBI-based images | the RHEL 9 profile evaluates against the nginx-bad image and the results land as findings | days | before fleet |
@@ -451,7 +443,6 @@ Section 2 items by step:
 
 | Step | Items |
 |---|---|
-| now | VAL-01 (the matrix file) |
-| before range | COV-01 coverage report, COV-03 dry run and windows |
+| before range | COV-03 dry run and windows |
 | before fleet | VAL-01 (every row), VAL-02 triage, VAL-03 version drift, COV-02 lockout safety, COV-04 fix library growth, SCL-01 state store, SCL-02 job queue, SCL-03 500 hosts, SCL-04 retention, ATO-01 node hardening, ATO-02 SBOM, ATO-03 control mapping (90 days), ATO-04 maintainer and releases (180 days) |
 | later | SCL-05 multi-enclave sync |

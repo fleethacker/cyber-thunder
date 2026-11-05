@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Cyber Thunder - Check and fix coverage</title>
+<style>{% include "_style.css.j2" %}
+body { max-width: 12in; } caption { text-align: left; padding: 4pt 0; }
+details { margin: 6pt 0; } th { font-size: 8pt; }
+</style></head>
+<body>
+<h1>Check and fix coverage</h1>
+<p class="meta">Generated {{ r.generated_at }}{% if r.audit_head %} | Audit head <code>{{ r.audit_head }}</code>{% endif %}</p>
+<div class="bluf">{{ r.limitations[0] }}</div>
+{% if r.errors %}<h2>Incomplete inventory</h2><ul>{% for error in r.errors %}<li class="bad">{{ error }}</li>{% endfor %}</ul>{% endif %}
+<h2>Installed native checks</h2>
+<p>These are bundled subsets, not complete benchmarks. A missing denominator is shown as unknown.</p>
+<table>
+<tr><th>Adapter / reference</th><th>Release</th><th>Catalog entries</th><th>Native checks</th><th>Rules with executable fixes</th><th>Rules with runbooks only</th></tr>
+{% for row in r.native_catalogs %}
+<tr><td>{{ row.asset_type }} / {{ row.benchmark }}</td><td>{{ row.release }}</td><td class="n">{{ row.catalog_entries }}</td><td class="n">{{ row.native_checks }}</td><td class="n">{{ row.executable_fixes }}</td><td class="n">{{ row.runbook_only }}</td></tr>
+{% endfor %}
+</table>
+<h2>Supplied benchmark coverage</h2>
+<p>All rules in each document, before profile selection. Native and SCAP counts can overlap. No mapped check means neither a native identifier match nor an eligible SCAP mapping. It does not measure pass or fail.</p>
+{% if r.benchmarks %}
+<table>
+<tr><th>Adapter / benchmark release</th><th>Published rules</th><th>Native ID matches</th><th>SCAP eligible</th><th>Rules with executable fixes</th><th>Rules with runbooks only</th><th>No mapped check</th></tr>
+{% for row in r.benchmarks %}
+<tr><td>{{ row.asset_type }} / {{ row.benchmark }}<br><span class="meta">{{ row.release }} | {{ row.source }}<br>{{ row.scap_engine }}</span></td><td class="n">{{ row.published_rules }}</td><td class="n">{{ row.native_checks }}</td><td class="n">{{ row.scap_eligible }}</td><td class="n">{{ row.executable_fixes }}</td><td class="n">{{ row.runbook_only }}</td><td class="n">{{ row.not_covered }}</td></tr>
+{% endfor %}
+</table>
+{% for row in r.benchmarks %}
+<details><summary>{{ row.source }}: {{ row.not_covered }} rules without a mapped check</summary><p class="meta">SHA-256 <code>{{ row.sha256 }}</code></p><ul>{% for rid in row.not_covered_rule_ids %}<li><code>{{ rid }}</code></li>{% else %}<li>No unmapped identifiers in this document.</li>{% endfor %}</ul></details>
+{% endfor %}
+{% else %}
+<p><b>Published rule totals, SCAP coverage and unmapped totals are unknown.</b> No usable XCCDF or SCAP XML is available locally. Import a benchmark through Content updates, or provide a benchmark directory to <code>report coverage</code>.</p>
+{% endif %}
+<h2>Fix library inventory</h2>
+<p>{{ r.library_entries }} entries across STIG, hunt and patch sources. Entries are not a count of unique benchmark rules; multiple entries can address one rule.</p>
+<table><tr><th>Adapter</th><th>Entries</th><th>By kind</th><th>By source</th></tr>
+{% for row in r.fix_library %}<tr><td>{{ row.asset_type }}</td><td class="n">{{ row.entries }}</td><td>{% for key, count in row.by_kind.items() %}{{ key }}: {{ count }}{% if not loop.last %}; {% endif %}{% endfor %}</td><td>{% for key, count in row.by_source.items() %}{{ key }}: {{ count }}{% if not loop.last %}; {% endif %}{% endfor %}</td></tr>{% endfor %}</table>
+<h2>How to interpret this report</h2><ul>{% for note in r.limitations[1:] %}<li>{{ note }}</li>{% endfor %}</ul>
+<p class="foot">Available offline through Reports and <code>python -m cyberthunder report coverage --format json</code>. Generating this report never scans or changes a target.</p>
+</body></html>

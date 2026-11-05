@@ -102,6 +102,7 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/reports/checklist.cklb` | `?scan_id&host` → CKLB JSON with statuses written back |
 | GET | `/reports/fleet` | `?format=html|md` → path-to-fleet one-pager |
 | GET | `/reports/friction` | `?format=html|md` → friction log |
+| GET | `/reports/coverage` | `?format=html|md|json` → offline check/fix inventory and locally supplied benchmark coverage; no scan required |
 | GET | `/reports/score` | `?scan_id` → `{seeded, found, share, items: [{id, kind, what, found, finding_ids}]}` against `range/answer_key/<type>.json` |
 | POST | `/reports/queue` | `{kind: "commander"|"poam"|"checklist", scan_id?}` → outbox entry (queued for sync) |
 

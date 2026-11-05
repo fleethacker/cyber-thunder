@@ -99,3 +99,13 @@ def queue(body: QueueBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
     _check_scan(ctx, body.scan_id)
     with feature("report queue"):
         return to_plain(call_first(svc, ("queue", "queue_report"), body.kind, body.scan_id, body.host, actor=actor))
+
+
+@router.get("/reports/coverage")
+def coverage(ctx=CtxDep, format: Literal["html", "md", "json"] = Query("html")) -> Response:
+    svc = _svc(ctx)
+    with feature("coverage report"):
+        result = call_first(svc, ("coverage",), format)
+        if format == "json":
+            return JSONResponse(to_plain(result))
+        return _doc(result, format, "coverage")
