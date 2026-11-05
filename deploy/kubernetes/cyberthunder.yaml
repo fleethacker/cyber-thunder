@@ -4,6 +4,66 @@ metadata:
   name: cyberthunder
 ---
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cyberthunder
+  namespace: cyberthunder
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cyberthunder-survey
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, pods]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [get, list]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cyberthunder-survey
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cyberthunder-survey
+subjects:
+  - kind: ServiceAccount
+    name: cyberthunder
+    namespace: cyberthunder
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cyberthunder-kubeconfig
+  namespace: cyberthunder
+data:
+  kubeconfig: |
+    apiVersion: v1
+    kind: Config
+    clusters:
+      - name: in-cluster
+        cluster:
+          server: https://kubernetes.default.svc
+          certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    users:
+      - name: cyberthunder
+        user:
+          tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    contexts:
+      - name: in-cluster
+        context:
+          cluster: in-cluster
+          user: cyberthunder
+    current-context: in-cluster
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: cyberthunder-state
@@ -31,6 +91,7 @@ spec:
       labels:
         app: cyberthunder
     spec:
+      serviceAccountName: cyberthunder
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -41,7 +102,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cyberthunder
-          image: cyberthunder:0.2.2
+          image: cyberthunder:0.2.3
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -51,6 +112,8 @@ spec:
               value: /var/lib/cyberthunder
             - name: CT_LLM_BACKEND
               value: template
+            - name: CT_BOOTSTRAP_CLUSTER_KUBECONFIG
+              value: /etc/cyberthunder/kubeconfig
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -83,12 +146,32 @@ spec:
               mountPath: /var/lib/cyberthunder
             - name: tmp
               mountPath: /tmp
+            - name: kubeconfig
+              mountPath: /etc/cyberthunder
+              readOnly: true
+            - name: cluster-credentials
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
       volumes:
         - name: state
           persistentVolumeClaim:
             claimName: cyberthunder-state
         - name: tmp
           emptyDir: {}
+        - name: kubeconfig
+          configMap:
+            name: cyberthunder-kubeconfig
+        - name: cluster-credentials
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
 ---
 apiVersion: v1
 kind: Service

@@ -25,7 +25,7 @@ def survey(ctx=CtxDep) -> dict:
 
 @router.post("/baseline")
 def baseline(body: BaselineBody | None = None, ctx=CtxDep, actor: str = ActorDep) -> dict:
-    return to_plain(_svc(ctx).scan(use_openai=bool((body or BaselineBody()).use_openai)))
+    return to_plain(_svc(ctx).scan(use_openai=bool((body or BaselineBody()).use_openai), actor=actor))
 
 
 @router.get("/risk")

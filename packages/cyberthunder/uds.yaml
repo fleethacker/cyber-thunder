@@ -12,6 +12,12 @@ spec:
   network:
     serviceMesh:
       mode: sidecar
+    allow:
+      - direction: Egress
+        selector:
+          app: cyberthunder
+        remoteGenerated: KubeAPI
+        description: Read cluster namespaces and workloads for the cluster survey.
     expose:
       - service: cyberthunder
         selector:
