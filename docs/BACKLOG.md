@@ -381,6 +381,23 @@ Identity negative tests are part of ZT-02, ZT-03 and ZT-08.
 | DOC-05 | `docs/CONTENT.md:107` says benchmark options are "being added on a separate branch"; both adapters already use them | Remove the sentence; add an end-to-end test for the content-store path | CONTENT.md matches the code | hours | now |
 | DOC-06 | `docs/DEPLOYMENT.md:26` "Untested" predates the WSL2 run | Update with DEP-01 | Status line matches the evidence | hours | now |
 
+### Cluster MVP path (team plan of 5 Nov)
+
+The team's MVP plan (Cyber Thunder running inside the UDS cluster, fixing `nginx-bad`) mapped to what exists. Done already: file-based state, the UI, the configurable model backend, approval, apply with verify and automatic rollback, the Cisco simulation, the Linux VM run from the node. Pointer rows name the item that carries the work.
+
+| ID | Gap and today | Target | Done when | Effort | Step |
+|---|---|---|---|---|---|
+| MVP-01 | Cyber Thunder is not a package in `packages/` (team plan item 1): it runs as a Python process on the operator node; `packages/example` is the template to copy | Covered by ZT-01; start from `packages/example`, state on a PVC, the model server as an in-namespace service | `uds zarf dev lint` passes and the UI loads inside the cluster behind the tenant gateway | 1-2 weeks | before range |
+| MVP-02 | Keycloak sign-in (item 1.3) | Covered by ZT-01 to ZT-03 | see those items | - | 30-60 days |
+| MVP-03 | Image vulnerability scanning for cluster workloads (item 2.1): the container adapter runs Trivy only where it is installed on the host (`cyberthunder/adapters/containers/adapter.py:187-194`); the Kubernetes adapter has no image CVE path | Trivy on the node or as an in-cluster job over the images pods reference, results through the existing Trivy parser | nginx-bad's stale UBI image yields CVE findings with ids and the image reference | days | before range |
+| MVP-04 | STIG checks inside container images (item 2.2): OpenSCAP runs on hosts over SSH, never on an image filesystem | `oscap-podman` or an image-filesystem evaluation with the RHEL 9 datastream for UBI-based images | the RHEL 9 profile evaluates against the nginx-bad image and the results land as findings | days | before fleet |
+| MVP-05 | API key for the OpenAI-compatible explain backend (item 3.1): `OpenAICompatBackend` sends no Authorization header (`cyberthunder/explain/backends.py:117`); whether a separate agent harness joins the MVP is the team's open decision | `CT_LLM_API_KEY` read at request time, never logged or audited | a keyed endpoint answers and the key appears in no log, audit record or report | hours | now |
+| MVP-06 | CVE remediation by newer image (items 4.1 and 6.2): nothing pulls container images or bumps image tags; the resumable, allow-listed downloader exists for STIG content only (`cyberthunder/ingest/content/fetch.py`) | a newer-image check against the pinned tag or digest; a durable registry pull over the slow link reusing the downloader's resume and caps (Zarf air-gap packages as the carrier in UDS); a fix entry that bumps the deployment image with before-state and rollback | nginx-bad's image is updated through approve, apply, verify and rollback, with the pull surviving a dropped link | 1 week | before range |
+| MVP-07 | GitOps-style Kubernetes remediation (item 4.2.1): fixes patch live objects with before-state (`cyberthunder/adapters/kubernetes/fixes.py`), so a chart or ArgoCD sync would undo them | emit the fix as a chart or manifest change to the package repository when a GitOps controller owns the workload, with the live patch as the immediate action | a fix survives an ArgoCD sync | 1 week | before fleet |
+| MVP-08 | STIG-hardened RHEL 9 image pipeline (item 4.2.2): nothing rebuilds a hardened container image pinned by the chart or Zarf package | a build that applies the RHEL 9 STIG content to the UBI base, scans it, and pins the result by digest in the package | the rebuilt nginx-bad image scans clean and the package pins its digest | 1-2 weeks | later |
+| MVP-09 | Velero as cluster-wide rollback (item 7): every fix restores its own before-state; there is no cluster-level snapshot | an optional Velero backup before a batch apply and a restore path in the engine for cluster targets | a batch of Kubernetes fixes is reverted by a Velero restore recorded in the audit log | days | later |
+| MVP-10 | Linux VM STIG changes from inside the cluster (parallel item 2): done from the operator node (`range/README.md`); from a pod it needs MVP-01, egress to the host and credentials (ZT-12, ZT-13, ZT-19) | depends on MVP-01 | the Rocky range run repeats from a pod | - | after MVP-01 |
+
 ## 4. Already enforced today (for contrast)
 
 From [ARCHITECTURE](ARCHITECTURE.md) section 4:
