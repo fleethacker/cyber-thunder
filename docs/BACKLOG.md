@@ -4,6 +4,8 @@ What should be done and is not. Every entry here is known work, so nobody mistak
 
 **Identity today, in one line:** the approver is a typed name, machine names are refused, and nothing about a person is verified.
 
+**What stops this being fielded, in short:** section 2; identity is one of five blockers, not the only one.
+
 Identity items carry the transition-plan step from [SUBMISSION](SUBMISSION.md) (30, 60, 90 or 180 days). Other items carry one of: **now** (before the event ends), **before range** (before the training-range experiment), **before fleet** (before a limited deployment), **later**.
 
 ## 1. Identity, credentials and zero trust
@@ -131,8 +133,8 @@ The goal is that a target's own log names the person who approved the change and
 - Done when: a scheduled scan's record shows the workload id; the workload identity gets 403 on approve; a bundle signed by another node is rejected on import.
 
 **ZT-18 Least-privilege scanning; apply privilege only inside an approved window; payload digest binding.** Pillars: Automation, User. Step: 30 days (digest), 60 days (leases). Effort: 4-5 days. Depends: ZT-16; ZT-13 or ZT-15 for leases.
-- Today: nothing ties the executed payload to the approved text beyond the proposal id; `start_apply` (`control/approvals.py:262`) needs no fresh credential.
-- Target: each approval stores sha256 of (fix_ref, rendered payload, target); `RemediationEngine.execute` refuses on mismatch. Apply lease scoped to target and fix timeout. Record `approved_by`, `executed_by`, `lease_id`, `payload_digest`. The digest alone works on a laptop range today and answers "what exactly did the Sailor approve?"
+- Today: `RemediationEngine.execute` refuses when the fix's preview text or the sha256 of its library entry differs from what was approved (`remediation/engine.py:82-84,175-193`), so a library edit after approval is caught; the digest does not cover the target or the payload as rendered for that host, there is no apply lease, and `start_apply` (`control/approvals.py:262`) needs no fresh credential.
+- Target: the existing digest grows to cover (fix_ref, rendered payload, target); `RemediationEngine.execute` refuses on mismatch. Apply lease scoped to target and fix timeout. Record `approved_by`, `executed_by`, `lease_id`, `payload_digest`. The digest alone works on a laptop range today and answers "what exactly did the Sailor approve?"
 - Done when: approve, edit the library payload on disk, apply: refused with "payload changed since approval" and state unchanged; the apply record has all four fields.
 
 ### 1.5 Credential backend
@@ -202,7 +204,107 @@ The goal is that a target's own log names the person who approved the change and
 - Target: a hardening guide (service account, directory ACLs, disk encryption, STIG the node itself); startup warns on permissive ACLs; node key (ZT-17) in a TPM where available.
 - Done when: startup warns when the state directory is readable by other users; the guide exists in `docs/` and names its ISSO reviewer and review date.
 
-## 2. Other areas
+## 2. What stands between the prototype and a limited deployment
+
+Verified identity is necessary and not sufficient. Five things stand between this prototype and a limited deployment; any one of them is enough to stop it.
+
+| Blocker | Why it matters | Items |
+|---|---|---|
+| Identity and credentials | Today an approval proves only that someone typed a name, and one shared account per target does every scan and every change | ZT-01 to ZT-31 (section 1) |
+| Proof across real platforms | Only Linux over SSH and a k3s/k3d cluster have met real systems; Windows, Cisco and Active Directory have not, so no detection or fix claim for them is evidence yet | VAL-01 to VAL-03, with RNG-01, SCAN-03, REM-02 |
+| Coverage and fix safety | A few dozen natively checked rules per benchmark against hundreds published, and nothing stops an approved sshd or firewall change from cutting off the node that must roll it back | COV-01 to COV-04, with REM-01, SCAN-02 |
+| Plumbing for scale | State is JSON files on one node and scans walk targets one at a time, which holds for a range of ten hosts and not for an enclave of hundreds | SCL-01 to SCL-05, with ZT-25 |
+| Accreditation path | No authorizing official can sign for software with no SBOM, no control mapping, no hardening guide and no named maintainer | ATO-01 to ATO-04, with ZT-01, ZT-27, ZT-31, DEP-04 |
+
+### 2.1 Proof across real platforms
+
+**VAL-01 Validation matrix per platform and version.** Step: now (the matrix), before fleet (every row filled). Effort: hours for the file, then days per platform. Depends: RNG-01, SCAN-03, REM-02, ZT-12 for the domain row.
+- Today: the first real-host run scanned a Rocky 9 VM over SSH, plus podman and k3s on it, and scored 28 of 28 seeded items with one fix applied, verified and rolled back (`range/README.md:126-203`); the UDS demo cluster (k3d) was scanned from Windows over kubectl (`docs/DEPLOYMENT.md:226-245`). Windows over WinRM, Cisco over SSH and an Active Directory domain have never been run against a real system: WinRM and SSH are exercised through recordings and simulated hosts (`README.md:36-38`), Kerberos and CredSSP only against a fake session (ZT-12), Cisco push only through recordings (REM-02).
+- Target: `docs/VALIDATION.md` with one row per platform and version: Windows Server 2019, 2022, 2025 and Windows 11; RHEL 8 and 9 with Rocky and Alma; Ubuntu 22.04 and 24.04; Cisco IOS and IOS-XE switch and router; k3s and one conformant distribution; an Active Directory domain. Columns: scanned on a real host (yes/no, date, commit), seeded items found of seeded, false positives reviewed (VAL-02), fixes exercised (apply, verify, rollback), evidence path.
+- Done when: the file exists with every row; no row says yes without a dated evidence path under `range/` or `docs/`; the README status line is generated from it, so the two cannot disagree.
+
+**VAL-02 False-positive triage on each real platform.** Step: before fleet. Effort: days per platform. Depends: VAL-01.
+- Today: no finding class has a recorded disposition. The stock `system:public-info-viewer` binding to `system:unauthenticated` exists on every real cluster and is carried in a test (`tests/kubernetes/test_rbac_names.py:33`), with no recorded decision on whether reporting it is right; on k3s the API-server flag rules report that nothing was collected without a `node_target` (`docs/DEPLOYMENT.md:243-245`, SCAN-01), which a reviewer cannot tell from a pass.
+- Target: for each real platform, every finding class reviewed once with a disposition of true, benchmark-not-applicable or check wrong, recorded beside VAL-01. Check wrong means the adapter is fixed with a regression test; not applicable means the rule is marked so for that platform, with the reason, in the adapter's rule data.
+- Done when: every class seen on a real host has a disposition; each "check wrong" has a test that fails on the old adapter; a rescan of the same host shows no undispositioned class.
+
+**VAL-03 Benchmark version drift.** Step: before fleet. Effort: 1 week. Depends: DOC-05 (content-store path into the adapters), CON-01.
+- Today: each adapter carries its own extract: Linux `RHEL 9 V2R9` (`adapters/linux/rules.py:16`) while `STIG/` holds RHEL 9 V2R10 and RHEL 8 V2R9; Kubernetes says V2R4 (`adapters/kubernetes/checks.py:60`) with V2R6 withdrawals noted in its `stig_rules.json`; Cisco NDM V3R6, L2S V3R1, RTR V3R3 (`adapters/cisco/rules.py:29-31`); Windows 11 Release 11 in `adapters/windows/w11_catalog.json`. A host on any other release is checked against the bundled text and ids. The content pull already keeps one catalog copy per benchmark (`docs/ADAPTING.md:87`), but no adapter reads rule text from it; the nearest open item is DOC-05.
+- Target: the catalog copy for the target's benchmark and release drives rule ids, titles, severities and CCIs; the bundled extract is the fallback and is labeled so on the finding; a target may pin a release; a rule the adapter checks that the catalog release dropped is reported as withdrawn, not passed.
+- Done when: importing RHEL 9 V2R10 changes the titles and ids on the next scan with no code change; a finding records the benchmark release it was checked against; a test with a renamed rule id shows the catalog id.
+
+### 2.2 Coverage and fix safety
+
+**COV-01 Published coverage report per adapter.** Step: before range. Effort: days. Depends: VAL-03 for the benchmark side.
+- Today: no report. Counted on 5 Nov: native rule entries in `adapters/*/stig_rules.json` are Linux 29, Cisco 30 (three benchmarks), Kubernetes 20, and the Windows catalog carries 19 rules; the RHEL 9 V2R10 manual benchmark in `STIG/` has 445 rules (393 in the SCAP datastream), RHEL 8 V2R9 has 371. The fix library loads 209 entries (STIG, hunt and patch): Linux 30 scripts and 38 runbooks, Windows 24 PowerShell and 1 runbook, Cisco 34 config snippets and 33 runbooks, Kubernetes 9 manifests and 27 runbooks, containers 1 script and 12 runbooks, plus ComplianceAsCode fixes built at scan time for real Linux targets (`remediation/engine.py:115`). Fixes are `FixEntry` records in each adapter's `fixes.py` (Cisco in `adapters/cisco/adapter.py`).
+- Target: `report coverage` per adapter and benchmark release: rules in the benchmark, rules checked natively, rules the SCAP path evaluates, rules with a vetted executable fix, rules with a runbook only, rules not covered. Rendered on the Reports page and in the one-pager so nobody reads "28 of 28" as "the benchmark is covered".
+- Done when: the command prints the six counts for every adapter; a test fails if a new library entry is not counted; the counts above are reproduced by it.
+
+**COV-02 Fix safety for lockout-prone changes.** Pillars: Automation, Network. Step: before fleet. Effort: 1-2 weeks. Depends: VAL-01, REM-02.
+- Today: `RemediationEngine.execute` (`remediation/engine.py:362-453`) opens one transport, captures before-state, applies and verifies over that same connection; verify includes a health result, and a failure or exception rolls back over the same transport. There is no pre-flight reachability check, no second session, no revert if the control connection itself drops, and no canary option: an approved sshd, firewall, WinRM or management-interface change that cuts the session leaves the rollback with no way in.
+- Target: fixes tagged lockout-prone (sshd, PAM, firewall, WinRM listener, Cisco management plane and AAA) get a pre-flight that a second session can be opened; that second session stays open through apply and verify; the change is armed on the host with a timed revert (`at`/systemd timer, scheduled task, Cisco `configure replace` with a rollback timer) cancelled only after verify succeeds from a fresh connection; a policy option applies a fix to one canary host and waits for a human before the rest.
+- Done when: on the range, a deliberately bad sshd fix that blocks logins is reverted by the host within the timer and the proposal ends ROLLED_BACK with the cause; a Cisco ACL fix that drops the session is reverted the same way; with canary on, the second host is not touched until a second approval.
+
+**COV-03 Dry run and maintenance windows.** Step: before range. Effort: days. Depends: none.
+- Today: `engine.diff` (`remediation/engine.py:579`) shows before and after only once a fix has run; the approver sees the payload verbatim but no per-host render of what apply would touch. Windows exist only on standing-policy auto-approval rules (`control/policy.py:32-33,74-80,104-105`); `execute` applies whenever an approved proposal is run.
+- Target: `apply --plan` and a Plan button render, per host, the payload, files and services touched, reboot, before-state to be captured and rollback steps, without connecting for anything but read-only checks; per-target or per-enclave maintenance windows the engine refuses to apply outside of, overridable by an approver with a reason, audited.
+- Done when: a plan run makes no change on the host and writes an audit record of kind plan; an apply outside the window is refused with "outside maintenance window" and state unchanged; an override records the person and reason.
+
+**COV-04 Fix library growth from ComplianceAsCode and PowerSTIG.** Step: before fleet, then every release. Effort: ongoing, about a day per ten reviewed fixes. Depends: COV-01, COV-02, VAL-01.
+- Today: each fix is a hand-written `FixEntry` (`remediation/library.py:20-40`) loaded from the adapters (`library.py:138`); ComplianceAsCode fix text is used only as built at scan time from the evaluated benchmark (`engine.py:115-125`); nothing is imported from PowerSTIG.
+- Target: an import tool turning ComplianceAsCode Bash/Ansible and PowerSTIG DSC remediations into `FixEntry` records with before-state and rollback, each held as unreviewed until a named reviewer signs it off and it has passed apply, verify and rollback on the range for its platform.
+- Done when: an unreviewed imported fix cannot be proposed; each reviewed fix lists its reviewer, review date and range run; COV-01 shows the executable-fix count rising per release.
+
+### 2.3 Plumbing for scale
+
+**SCL-01 State store behind the existing interface.** Step: before fleet. Effort: 1-2 weeks. Depends: none.
+- Today: JSON and YAML files under the state directory (`store.py:36-65`), written by temp file and replace (`store.py:80-94`); the audit log, proposals and inventory take a cross-process file lock (`audit/chain.py:28-63`, `control/approvals.py:143`, `inventory/targets.py:131`); scan runs and findings do not.
+- Target: SQLite in WAL mode for a single node and PostgreSQL under UDS, behind `StateStore`; a `state migrate` tool that imports an existing directory and verifies the audit chain afterwards.
+- Done when: a test runs two API workers and the CLI against one state, approving, scanning and editing inventory concurrently, with no lost update; migrating the range state directory keeps every proposal and `audit verify` passes.
+
+**SCL-02 Scheduling and queued jobs.** Step: before fleet. Effort: 1 week. Depends: SCL-01, ZT-17.
+- Today: a scan starts when someone asks, from the CLI or `start_scan` (`api/routes/scans.py:14-31`), on a daemon thread (`scan.py:102`); content pulls and the reconnect check run on daemon threads (`ingest/content/service.py:273,552`); verify runs inside `execute`. A restart loses whatever was running.
+- Target: a persistent job queue for recurring scans, content checks on reconnect and verify-after-apply, with retries and backoff, the kill switch pausing the queue, and a Jobs view showing queued, running, failed and done.
+- Done when: a node restarted mid-scan resumes the job; a scheduled scan runs under the workload identity; engaging the kill switch holds queued jobs and the view says so.
+
+**SCL-03 A fleet of hosts per enclave.** Step: before fleet. Effort: 1 week. Depends: SCL-02, ZT-19.
+- Today: `Scanner.run` walks targets one at a time (`scan.py:163-170`); SSH has a 20 s connect and 120 s command timeout (`transport/ssh.py:35,72`) but there is no per-host deadline for a whole collection.
+- Target: tested at 500 hosts per enclave as the first goal; parallel collection with a configurable concurrency limit; a per-host deadline; partial results saved per host with the host marked incomplete rather than the run failed.
+- Done when: a simulated 500-host run finishes within a stated time on the reference node; one host that hangs is marked timed out and the other 499 report; peak connections never exceed the limit.
+
+**SCL-04 Retention and export.** Pillars: Visibility, Data. Step: before fleet. Effort: days. Depends: SCL-01; ZT-25 for audit export to the enclave SIEM.
+- Today: scans, explanations, snapshots and reports accumulate under the state directory with no retention (`store.py:55-63`); audit rotation and SIEM forwarding are ZT-25.
+- Target: retention per kind (scans, findings, explanations, snapshots, reports) set by the enclave's records schedule; expired data exported to an archive bundle before deletion; deletion audited. Audit-log rotation and retention stay in ZT-25 and are not purged here.
+- Done when: with a 30-day scan retention, older runs leave the store and appear in the archive with their hashes; the audit log is untouched by a purge; each purge has an audit record.
+
+**SCL-05 Multi-enclave sync.** Pillars: Data, Network. Step: later. Effort: weeks. Depends: SCL-01, ZT-17, ZT-24, CON-01.
+- Today: the outbox queues reports, POA&Ms, audit extracts and scan summaries for shore and moves them to `synced/` on reconnect (`ingest/outbox.py:1-10,93`); it is one way, and nothing syncs inventory, findings or decisions between two nodes.
+- Target: a two-node design (ship and shore, or two enclaves) for inventory, findings and approval decisions over the constrained link: signed deltas, conflict rules (a decision on one node is never overwritten by the other), and a size budget per sync at the emulated link speed.
+- Done when: a design note is reviewed; a two-node test syncs a day of changes under the link emulator within the budget and both audit chains still verify.
+
+### 2.4 Accreditation path
+
+**ATO-01 The node's own stack, hardened and documented.** Pillars: Device. Step: before fleet. Effort: 1 week. Depends: ZT-31 (state directory and node hardening), ZT-27 (TLS).
+- Today: nobody has scanned the node itself; the hardening guide and state-directory checks are ZT-31, TLS is ZT-27.
+- Target: the node scanned with Cyber Thunder and with the enclave's own tool against the STIG for its operating system, its findings closed or carried on a POA&M; the ZT-31 guide extended to the model server and listening ports.
+- Done when: a checklist for the node itself, dated and attached to the release, shows no open CAT I and every open CAT II on a POA&M.
+
+**ATO-02 SBOM and approved images.** Pillars: Application. Step: before fleet. Effort: days, plus Iron Bank lead time. Depends: ZT-01 (packaging, SBOM, digests), DEP-03, DEP-04.
+- Today: ZT-01 covers the SBOM and digest pinning; Iron Bank onboarding is named in `docs/fleet.yaml:16,30`; no SBOM is produced.
+- Target: beyond ZT-01 (app SBOM, digests) and DEP-03 (podinfo digest): the SBOM also covers the UI bundle and the model runtime, is produced by the release build, base images come from Iron Bank, and the SBOM gets a dependency scan at each release with findings tracked.
+- Done when: every release has an SBOM listing the Python package, UI bundle and every image; the dependency scan result is in the release notes; an image not from Iron Bank is listed with its exception.
+
+**ATO-03 Control mapping for the authorizing official.** Step: before fleet (the 90-day authorization step). Effort: days. Depends: ZT-23 for identity evidence.
+- Today: guardrails and where each is enforced are in `docs/ARCHITECTURE.md:82-93`; the transition plan puts the authorization path at 90 days (`docs/SUBMISSION.md:82`) and the ATO friction line is still `[ ]` (`docs/SUBMISSION.md:98`). No mapping to NIST SP 800-53 exists.
+- Target: `docs/CONTROLS.md` mapping the tool's guardrails to 800-53 families, at least AC (approval gate, roles), AU (hash-chained audit, anchors), CM (vetted fix library, before-state, rollback), IA (section 1) and SI (scans, hunt, bulletin matching), saying for each control what the tool provides, what the enclave must provide and what evidence to pull (audit export, proposal records, reports); written for the authorizing official, not for developers.
+- Done when: an ISSO has read it and their questions are answered in the file; every claim points at a code path or a report the tool produces.
+
+**ATO-04 Maintaining organization and release process.** Step: before fleet (the 180-day decision). Effort: days to set up, then ongoing. Depends: ATO-02.
+- Today: the technical owner is a person (`docs/SUBMISSION.md:19`) while `docs/fleet.yaml:7-8` names NAVIFOR / Naval Network Warfare Command as mission owner and NIWC Atlantic as technical owner; the mission owner is still to be confirmed (`docs/SUBMISSION.md:18`). There are no signed releases, no vulnerability disclosure path and no update cadence.
+- Target: a named maintaining organization with a point of contact; signed releases with the content, fix library and SBOM versions stated; a published disclosure path; a release within a set number of weeks after each DISA quarterly release (`docs/CONTENT.md:21`), plus out-of-band releases for critical fixes.
+- Done when: the owner is recorded in `docs/fleet.yaml` and SUBMISSION agrees with it; a release signature verifies on an offline node; the disclosure path is in the README.
+
+## 3. Other areas
 
 ### Scanning and benchmarks
 
@@ -262,7 +364,7 @@ The rest of the identity UI is in ZT-04 and ZT-08.
 |---|---|---|---|---|---|
 | TST-01 | No CI; `scripts/gate.sh` is manual; three deploy test modules ignored on Windows (`tests/conftest.py:33`); others skip without the UDS CLI, bash or Windows (`tests/test_dev.py:119`, `tests/ops/test_gate.py:26`, `tests/report/test_reports.py:99`) | CI on Linux and Windows running pytest, the gate and the UI build; fail if skip counts grow | A pull request runs the full suite on Linux with no ignored modules | days | before fleet |
 | TST-02 | Live-model test skips unless `CT_TEST_LLM=1` (`tests/explain/test_service.py:151`); no browser flow test | Browser smoke test against the simulated range; live-model test before each release | A scripted browser run approves, applies and rolls back and the chain stays valid | days | before fleet |
-| RNG-01 | SSH and WinRM never run against a real host; the only real target so far is the k3d cluster over kubectl (`README.md:36-39`) | Range access, or the Rocky 9 and optional Windows VM from `range/README.md`; full flow over real SSH/WinRM | Scores against `range/answer_key/` from a live scan appear on the Reports page | days | before range |
+| RNG-01 | Linux over SSH has met a real host (the Rocky 9 range VM: 28 of 28 seeded items, one fix applied and rolled back, `range/README.md` "First real-host run") and the k3d cluster was scanned over kubectl; WinRM and Cisco over SSH have never run against a real system | The Windows VM from `range/windows/README.md` over real WinRM, and a Cisco device or emulator over SSH | Scores against `range/answer_key/` from a live scan appear on the Reports page | days | before range |
 | RNG-02 | Event unknowns open: range access, link speed, Evaluate-STIG/SCC, datasets, Ark, Google link (`docs/CONTEXT.md:171-179`) | Ask in `#tech-support` and the portal | Each item is checked or has a recorded answer | hours | now |
 | RNG-03 | No IT Sailor recruited as approver and no remediation-time baseline (`docs/CONTEXT.md:176`) | Run the approval flow with one IT Sailor; record today's manual hours per release and network | A sourced hours figure appears in `docs/SUBMISSION.md` | hours | now |
 
@@ -279,7 +381,7 @@ Identity negative tests are part of ZT-02, ZT-03 and ZT-08.
 | DOC-05 | `docs/CONTENT.md:107` says benchmark options are "being added on a separate branch"; both adapters already use them | Remove the sentence; add an end-to-end test for the content-store path | CONTENT.md matches the code | hours | now |
 | DOC-06 | `docs/DEPLOYMENT.md:26` "Untested" predates the WSL2 run | Update with DEP-01 | Status line matches the evidence | hours | now |
 
-## 3. Already enforced today (for contrast)
+## 4. Already enforced today (for contrast)
 
 From [ARCHITECTURE](ARCHITECTURE.md) section 4:
 
@@ -289,7 +391,7 @@ From [ARCHITECTURE](ARCHITECTURE.md) section 4:
 - Scope is enforced: `Inventory.assert_in_scope()` in the scanner and engine, and scope changes are audited.
 - Everything is logged in an append-only hash chain, and the kill switch (`KillSwitch.guard()`, file, `CT_KILL` or sentinel) blocks apply and rollback edges, scans, discovery sweeps and accepts, and content checks and pulls.
 
-## 4. Identity items by transition step
+## 5. Identity items by transition step
 
 | Item | 30 days | 60 days | 90 days | 180 days |
 |---|---|---|---|---|
@@ -326,3 +428,12 @@ From [ARCHITECTURE](ARCHITECTURE.md) section 4:
 | ZT-31 Node hardening | | yes | | |
 
 Order of the hard dependencies: ZT-02, ZT-03, ZT-01, then ZT-04 and ZT-05, then ZT-07. Separately: ZT-19, ZT-16, ZT-18, then ZT-15, ZT-13 and ZT-12. The 30-day set needs code only, no enclave services: about 4 to 5 weeks for one person.
+
+Section 2 items by step:
+
+| Step | Items |
+|---|---|
+| now | VAL-01 (the matrix file) |
+| before range | COV-01 coverage report, COV-03 dry run and windows |
+| before fleet | VAL-01 (every row), VAL-02 triage, VAL-03 version drift, COV-02 lockout safety, COV-04 fix library growth, SCL-01 state store, SCL-02 job queue, SCL-03 500 hosts, SCL-04 retention, ATO-01 node hardening, ATO-02 SBOM, ATO-03 control mapping (90 days), ATO-04 maintainer and releases (180 days) |
+| later | SCL-05 multi-enclave sync |

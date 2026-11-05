@@ -34,9 +34,10 @@ Reports replace the paperwork: commander one-pager, POA&M, checklist, path to fl
 ## Status
 
 Every module below is built and merged; the rehearsal in [DEMO](docs/DEMO.md) runs the pipeline end to end on
-the simulated range. Live transports (SSH, WinRM, kubectl) have been exercised through recordings and simulated
-hosts. First real target scanned on 5 Nov: the team's UDS Core demo cluster (k3d under WSL2 on the hack laptop),
-127 findings and no adapter errors after one fix; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+the simulated range. Live transports have now met real targets: the Rocky 9 range host over SSH (28 of 28 seeded
+items found, one fix applied and rolled back; [range/README.md](range/README.md)) and the team's UDS Core demo
+cluster over kubectl (127 findings, no adapter errors after one fix; [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
+WinRM against a real Windows host is next.
 
 | Module | Path | Status |
 |---|---|---|
@@ -170,7 +171,7 @@ checklist, path to fleet), `demo reset|run`.
 | [docs/UI.md](docs/UI.md) | screens and behaviour |
 | [docs/DEMO.md](docs/DEMO.md) | 10-minute demo runbook |
 | [docs/SUBMISSION.md](docs/SUBMISSION.md) | portal submission draft |
-| [docs/BACKLOG.md](docs/BACKLOG.md) | what should be done and is not: identity and zero trust first, then every other known gap |
+| [docs/BACKLOG.md](docs/BACKLOG.md) | what should be done and is not: identity and zero trust first, then what stands between the prototype and a limited deployment, then every other known gap |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | working in this repo |
 | [docs/PLAN.md](docs/PLAN.md), [docs/CONTEXT.md](docs/CONTEXT.md) | build plan and event context |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | UDS cluster deployment: macOS, Linux, and Windows through WSL2 |
