@@ -4,7 +4,7 @@ Base path `/api/v1`. JSON in and out. Served by `cyberthunder serve` from the sa
 Interactive docs at `/api/docs`.
 
 **Identity.** Every request may carry `X-Actor: <name>` (the UI sends the name the Sailor typed).
-Every POST, PUT, PATCH and DELETE route except `POST /policy/evaluate` requires it to name a person: a missing or
+Every POST, PUT, PATCH and DELETE route except the read-only `POST /policy/evaluate` and `POST /discovery/scopes/preview` requires it to name a person: a missing or
 blank header, a bare or prefixed machine identity (`agent`, `llm`, `system`, `agent:*`, `llm:*`, `system:*`) and any
 `policy:*` value are refused with `400`. Approvals, denials, kill switch, scope and policy changes are recorded under
 that actor. Request validation errors return `400` with a string `detail`, not the framework default `422`.
@@ -27,14 +27,17 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | Method | Path | Body → Response |
 |---|---|---|
 | GET | `/status` | → `AppContext.status()` + `link` {kbps, latency_ms, connected} + `outbox` {pending} |
+| GET | `/runtime/context` | → local runtime kind/OS markers, container-local boundary and nonsecret hints; no DNS or network; physical host remains unknown ([host setup](HOST_SCOPE.md)) |
 
 ## Targets (inventory = scope)
 | GET | `/targets` | → `{targets: [Target]}` |
 |---|---|---|
 | POST | `/targets` | Target fields → Target, `201`. Audit `inventory.add` |
+| POST | `/targets/register-host` | Explicit host OS/transport/address/account/credential reference, `in_scope` and reason → Target, `201`. No connection; audited registration and scope choice ([fields](HOST_SCOPE.md#api)) |
+| GET | `/targets/{id}/readiness` | → declaration-only readiness, scope/kill checks and runtime hints; no DNS, transport creation or connection |
 | PUT | `/targets/{id}` | partial fields → Target. `in_scope` changes audited as `scope.change` with before/after |
 | DELETE | `/targets/{id}` | → `{ok: true}`. Audit `inventory.remove` |
-| POST | `/targets/{id}/discover` | → `AssetFacts` (read-only; opens transport, runs adapter.discover) |
+| POST | `/targets/{id}/discover` | → `AssetFacts` (explicit read-only connection test; persisted scope and kill guards before target I/O; success/failure audited) |
 
 ## Scans
 | POST | `/scans` | `{target_ids?: [..], modules?: ["check","hunt","cve"], rule_filter?: [..], trigger?: str}` → ScanRun, `202`. Runs in a background thread. Omitted target_ids = all in-scope targets |
@@ -233,6 +236,10 @@ sequential requests. Legacy STIG import, check, pull, job, manifest and folder-i
 ## Discovery
 The `/discovery/*` routes (scopes, sweeps, discovered assets, discovery findings, applicable benchmarks) are
 documented in [DISCOVERY.md](DISCOVERY.md). They follow the same actor and error rules as above.
+
+`POST /discovery/scopes/preview` accepts include/exclude IP, CIDR and inclusive start-end ranges and returns bounded effective CIDRs and exact decimal-string counts without probes or state changes. `PUT /discovery/scopes/ranges` adds a required reason and named actor, recomputes validation and saves ordinary CIDR scopes. Neither grants inventory scope or starts discovery. See [range limits and fields](HOST_SCOPE.md#preview-and-save-discovery-ranges).
+
+Host-bit CIDRs such as `192.168.1.20/24` are reported explicitly as `192.168.1.0/24`; both scope save APIs require `acknowledge_normalization=true` for such inputs. Preview returns `normalizations` and `requires_normalization_acknowledgment`, and save recomputes the exact submitted input rather than trusting a prior preview.
 
 ## Vulnerability data
 

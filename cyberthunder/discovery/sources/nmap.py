@@ -90,7 +90,14 @@ def _hosts(hosts: Iterable[str], scopes: list[DiscoveryScope]) -> list[str]:
 def build_ping_command(scopes: Iterable[DiscoveryScope | str], *, resolve: bool = False,
                        nmap: str = "nmap") -> list[str]:
     sc = _scopes(scopes)
-    return [nmap, *PING_OPTIONS, *(() if resolve else NO_RESOLVE), *OUTPUT_OPTIONS, *(s.cidr for s in sc)]
+    return [nmap, *_family_options(sc), *PING_OPTIONS, *(() if resolve else NO_RESOLVE), *OUTPUT_OPTIONS, *(s.cidr for s in sc)]
+
+
+def _family_options(scopes):
+    versions = {s.network.version for s in scopes}
+    if len(versions) != 1:
+        raise ValueError("IPv4 and IPv6 scopes must run in separate commands")
+    return ("-6",) if versions == {6} else ()
 
 
 def build_command(scopes: Iterable[DiscoveryScope | str], mode: str = "quick", privileged: bool = False, *,
@@ -102,7 +109,7 @@ def build_command(scopes: Iterable[DiscoveryScope | str], mode: str = "quick", p
     sc = _scopes(scopes)
     targets = _hosts(hosts, sc) if hosts is not None else [s.cidr for s in sc]
     opts = [*MODE_OPTIONS[mode], *(PRIVILEGED_OPTIONS[mode] if privileged else ())]
-    return [nmap, *opts, *(() if resolve else NO_RESOLVE), *OUTPUT_OPTIONS, *targets]
+    return [nmap, *_family_options(sc), *opts, *(() if resolve else NO_RESOLVE), *OUTPUT_OPTIONS, *targets]
 
 
 def render(argv: list[str], transport: "Transport | None" = None) -> str:

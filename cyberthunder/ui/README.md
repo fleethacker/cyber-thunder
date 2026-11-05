@@ -81,8 +81,9 @@ src/pages/              Decisions, Findings, Assets, Scans, Audit, Reports, Sett
   `action.blocked`) with the proposal history as fallback for timestamps.
 - Keyboard on Decisions: `j`/`k` move, `a` approve, `d` deny (note modal), `enter` finding detail, `x` select.
 - Findings are paged 200 at a time server-side (limit/offset) instead of virtualizing.
-- Discovery (Assets page, `components/DiscoveryPanel.tsx`): scopes bar (`PUT /discovery/scopes` with a
-  reason), Run sweep with a mode select (polls `/discovery/runs/{id}`), a candidate table with
+- Discovery (Assets page, `components/DiscoveryPanel.tsx`): search-range editor with a read-only exact
+  preview and reasoned save (`POST /discovery/scopes/preview`, `PUT /discovery/scopes/ranges`), a separate
+  Run sweep action with a mode select (polls `/discovery/runs/{id}`), a candidate table with
   new/known/changed/missing badges and expandable evidence, Accept (name, type, transport, an explicit
   in/out of scope choice with no default, required reason) and Ignore (required reason), and a Findings tab
   from `/discovery/findings`. Assets from a simulated sweep can only be accepted with transport `simulated`.
@@ -95,3 +96,48 @@ src/pages/              Decisions, Findings, Assets, Scans, Audit, Reports, Sett
 - Scope toggle: the API has no reason field on `PUT /targets/{id}`, so the required reason is appended to the
   target's `notes` in the same request; the change itself is audited as `scope.change`.
 - Audit download builds `audit.jsonl` client-side from paged `GET /audit` (there is no download route).
+
+## Deployment-host setup and search ranges
+
+In **Assets → Set up deployment host**, first read the service environment. Runtime markers do not
+identify the physical host, its OS or a reachable address. A container's local transport runs inside
+that container. Supply the intended host's OS, an existing reachable SSH/WinRM endpoint, account and
+named credential reference. This flow does not install services, configure firewalls or reveal secret
+values. Existing generic asset configuration remains available for key-file and other supported
+authentication arrangements.
+
+Choose **record only** or **authorize scans and approved changes** explicitly, enter the owner's
+authorization reason, review the exact declarations, then confirm registration. Neither registration
+nor the following static readiness GET connects to the target or starts a scan. **Declarations ready**
+means only that a separate connection test may be requested. **Test connection (read asset facts)**
+is an explicit target-contact action; its result is not proof of every scan/change privilege or ongoing
+reachability. Actor, scope and kill guards remain authoritative. Duplicate IDs are refused rather than
+overwriting existing aliases.
+
+For a native Linux/Windows runtime, **Register this service environment for local access** opens the
+ordinary add-asset form with local transport selected. It still requires an explicit scope choice,
+reason and review. Native detection means no known container marker was found, not proof of bare
+metal. The generic registration API retains legacy compatibility; its UI records the reason in notes
+included in the inventory audit, while guided remote host registration uses the dedicated reason field.
+
+**Discovery → Edit search ranges** accepts IPv4/IPv6 single addresses, CIDRs and inclusive start-end
+ranges, one per line or separated by commas. Exclusions affect discovery search only. Preview shows
+the exact effective CIDRs, included/removed/effective address counts, size limits and server warnings.
+Counts include network/broadcast addresses; they are not device counts. CIDRs with host bits can
+broaden to the entire network: inspect each returned input-to-network mapping, explicitly acknowledge
+that broadening, and preview again with the acknowledgement before confirming. The save sends the
+same `acknowledge_normalization` decision to the server for the exact current inputs. Missing
+normalization metadata blocks saving. Changing the input or scanner/public settings resets the
+preview, broadening acknowledgement and confirmation. Additional returned warnings need their own
+acknowledgement.
+
+The editor requires a decision reason and explicit review before saving. Truncated, oversized, fully
+excluded or otherwise blocked previews cannot be saved. Empty inputs require preview and confirmation
+to clear search ranges. Public address permission is explicit. One scanner/public policy applies to
+the result; differing saved policies cannot be replaced without an additional explicit choice. On
+reopen, the editor loads saved effective CIDRs; the submitted exclusion expressions remain in audit,
+not in the editable saved representation.
+
+Search ranges **do not authorize inventory targets**. Saving them never accepts candidates or starts
+a sweep or scan. Each candidate must be reviewed and accepted with its own in/out scope choice and
+reason. Network search and target authorization are separate decisions.

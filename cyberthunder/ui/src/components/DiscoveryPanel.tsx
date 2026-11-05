@@ -8,16 +8,18 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconChevronDown, IconChevronRight, IconRadar, IconRefresh } from '@tabler/icons-react';
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { api, errorText } from '../api/client';
 import {
   ASSET_TYPES, DISCOVERY_MODES, TRANSPORTS,
-  type DiscoveredAsset, type DiscoveryMode, type DiscoveryRun, type DiscoveryScope, type DiscoveryStatus,
+  type DiscoveredAsset, type DiscoveryMode, type DiscoveryRun, type DiscoveryStatus,
 } from '../api/types';
 import { fmtAgo } from '../lib/format';
 import { useAsync, useInterval } from '../lib/hooks';
 import { ConfirmReasonModal } from './ConfirmReasonModal';
 import { ErrorBox, Loading, Mono, SeverityBadge } from './common';
+import { useSetupAccess } from './setupAccess';
+import { ScopeEditor } from './ScopeEditor';
 
 const DEFAULT_TRANSPORT: Record<string, string> = {
   linux: 'ssh', windows: 'winrm', cisco_ios: 'ssh', kubernetes: 'kubeconfig', containers: 'ssh',
@@ -38,54 +40,8 @@ function changeText(a: DiscoveredAsset): string {
   return a.changes.map((c) => `${c.kind}${c.detail ? `: ${c.detail}` : ''}`).join('; ');
 }
 
-// -- scopes ------------------------------------------------------------------------------------------
-function ScopesModal({ opened, current, onClose, onSaved }: {
-  opened: boolean; current: DiscoveryScope[]; onClose: () => void; onSaved: () => void;
-}) {
-  const [text, setText] = useState('');
-  const [reason, setReason] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (opened) { setText(current.map((s) => s.cidr).join('\n')); setReason(''); setError(null); }
-  }, [opened, current]);
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const keep = new Map(current.map((s) => [s.cidr, s]));
-      const cidrs = text.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
-      await api.putDiscoveryScopes(cidrs.map((cidr) => {
-        const prev = keep.get(cidr);
-        return prev ? { cidr, allow_public: prev.allow_public, scanner_target: prev.scanner_target } : { cidr };
-      }), reason.trim());
-      notifications.show({ color: 'green', message: 'Discovery scopes saved' });
-      onSaved();
-      onClose();
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Modal opened={opened} onClose={onClose} title={<Text fw={700}>Edit discovery scopes</Text>} centered>
-      <Stack>
-        <Text size="sm">One CIDR per line. Sweeps only touch these ranges. Public address space is refused here; save it from the CLI with --allow-public and a reason.</Text>
-        <Textarea label="Scopes" autosize minRows={3} ff="monospace" value={text} onChange={(e) => setText(e.currentTarget.value)} />
-        <Textarea label="Reason" required placeholder="why the scope changes (written to the audit log)" value={reason} onChange={(e) => setReason(e.currentTarget.value)} />
-        {error && <Alert color="red">{error}</Alert>}
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onClose}>Cancel</Button>
-          <Button disabled={!reason.trim()} loading={busy} onClick={() => void save()}>Save scopes</Button>
-        </Group>
-      </Stack>
-    </Modal>
-  );
-}
-
 // -- accept ------------------------------------------------------------------------------------------
-function AcceptModal({ asset, onClose, onAccepted }: { asset: DiscoveredAsset | null; onClose: () => void; onAccepted: () => void }) {
+export function AcceptModal({ asset, onClose, onAccepted }: { asset: DiscoveredAsset | null; onClose: () => void; onAccepted: () => void }) {
   const [name, setName] = useState('');
   const [type, setType] = useState<string | null>(null);
   const [transport, setTransport] = useState<string | null>(null);
@@ -94,6 +50,8 @@ function AcceptModal({ asset, onClose, onAccepted }: { asset: DiscoveredAsset | 
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const blocked = useSetupAccess();
+  const inFlight = useRef(false);
   // A device seen by the simulated sweep exists only in the emulator, so it can only become a simulated target.
   const simulated = !!asset?.facts?.simulated;
   useEffect(() => {
@@ -108,8 +66,10 @@ function AcceptModal({ asset, onClose, onAccepted }: { asset: DiscoveredAsset | 
     setError(null);
   }, [asset, simulated]);
   if (!asset) return null;
-  const ready = !!type && !!scope && !!reason.trim() && !!name.trim();
+  const ready = !!type && !!transport && !!scope && !!reason.trim() && !!name.trim();
   const accept = async () => {
+    if (!ready || blocked || inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -123,11 +83,13 @@ function AcceptModal({ asset, onClose, onAccepted }: { asset: DiscoveredAsset | 
     } catch (e) {
       setError(errorText(e));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
   return (
-    <Modal opened onClose={onClose} title={<Text fw={700}>Accept {asset.address ?? asset.id} into the inventory</Text>} centered size="lg">
+    <Modal opened onClose={() => { if (!inFlight.current) onClose(); }} closeOnClickOutside={!busy} closeOnEscape={!busy} withCloseButton={!busy}
+      title={<Text fw={700}>Accept {asset.address ?? asset.id} into the inventory</Text>} centered size="lg">
       <Stack>
         <Group grow>
           <TextInput label="Name" required value={name} onChange={(e) => setName(e.currentTarget.value)} />
@@ -140,7 +102,7 @@ function AcceptModal({ asset, onClose, onAccepted }: { asset: DiscoveredAsset | 
             description={simulated ? 'seen by the simulated sweep' : undefined} />
           <TextInput label="Username" value={username} onChange={(e) => setUsername(e.currentTarget.value)} />
         </Group>
-        <Radio.Group label="In scope" description="Decide explicitly. In scope allows scans of this asset; out of scope only records it." required value={scope} onChange={setScope}>
+        <Radio.Group label="Inventory authorization" description="A search range does not authorize candidates. Choose whether this asset permits scans and approved changes, or is recorded only." required value={scope} onChange={setScope}>
           <Group mt="xs">
             <Radio value="in" label="In scope" />
             <Radio value="out" label="Out of scope" />
@@ -151,10 +113,12 @@ function AcceptModal({ asset, onClose, onAccepted }: { asset: DiscoveredAsset | 
           This adds the asset to the inventory
           {scope === 'in' ? ' and allows scans of it.' : scope === 'out' ? '. It stays out of every scan until someone puts it in scope.' : '.'}
         </Text>
+        <Text size="sm">Acceptance does not start a scan. Connection declarations do not verify credentials, reachability or privileges.</Text>
+        {blocked && <Alert color="yellow">{blocked}</Alert>}
         {error && <Alert color="red">{error}</Alert>}
         <Group justify="flex-end">
-          <Button variant="default" onClick={onClose}>Cancel</Button>
-          <Button disabled={!ready} loading={busy} onClick={() => void accept()}>Accept</Button>
+          <Button variant="default" disabled={busy} onClick={() => { if (!inFlight.current) onClose(); }}>Cancel</Button>
+          <Button disabled={!ready || !!blocked || busy} loading={busy} onClick={() => void accept()}>Accept</Button>
         </Group>
       </Stack>
     </Modal>
@@ -231,6 +195,10 @@ function RunSummary({ run }: { run: DiscoveryRun }) {
 }
 
 export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: () => void }) {
+  const blocked = useSetupAccess();
+  const sweepFlight = useRef(false);
+  const ignoreFlight = useRef(false);
+  const [starting, setStarting] = useState(false);
   const overview = useAsync(() => api.discovery(), []);
   const [statusFilter, setStatusFilter] = useState('all');
   const assets = useAsync(
@@ -267,16 +235,21 @@ export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: ()
   }, 1000, running);
 
   const sweep = async () => {
+    if (blocked || running || sweepFlight.current) return;
+    sweepFlight.current = true; setStarting(true);
     setSweepError(null);
     try {
       setRun(await api.sweep(chosenMode, subset));
     } catch (e) {
       setSweepError(errorText(e));
+    } finally {
+      sweepFlight.current = false; setStarting(false);
     }
   };
 
   const ignore = async (reason: string) => {
-    if (!ignoreFor) return;
+    if (!ignoreFor || !reason.trim() || blocked || ignoreFlight.current) return;
+    ignoreFlight.current = true;
     setIgnoreErr(null);
     try {
       await api.ignoreAsset(ignoreFor.id, reason);
@@ -284,6 +257,8 @@ export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: ()
       refreshAll();
     } catch (e) {
       setIgnoreErr(errorText(e));
+    } finally {
+      ignoreFlight.current = false;
     }
   };
 
@@ -301,26 +276,29 @@ export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: ()
           <Button size="xs" variant="light" leftSection={<IconRefresh size={14} />} loading={overview.loading || assets.loading} onClick={refreshAll}>Refresh</Button>
         </Group>
         {overview.error && <ErrorBox error={overview.error} onRetry={() => void overview.reload()} />}
+        <Text size="sm">Search ranges only limit discovery probes. They do not authorize any discovered address for scans or changes. Review and accept each inventory asset with an explicit scope decision.</Text>
+        {blocked && <Alert color="yellow">{blocked}</Alert>}
 
         <Group gap="xs" align="center">
-          <Text size="sm" fw={600}>Scopes:</Text>
+          <Text size="sm" fw={600}>Search ranges:</Text>
           {scopes.length === 0 && <Text size="sm" c="dimmed">none saved (a simulated sweep uses the demo enclave)</Text>}
           {scopes.map((s) => (
             <Tooltip key={s.cidr} label={`added by ${s.added_by || '-'} ${fmtAgo(s.added_at)}${s.reason ? `: ${s.reason}` : ''}`} multiline w={320}>
               <Badge variant="outline" tt="none" ff="monospace">{s.cidr}{s.allow_public ? ' (public)' : ''}</Badge>
             </Tooltip>
           ))}
-          <Button size="compact-sm" variant="subtle" onClick={() => setScopesOpen(true)}>Edit scopes</Button>
+          <Button size="compact-sm" variant="subtle" disabled={!overview.data || !!overview.error || overview.loading}
+            onClick={() => { if (overview.data && !overview.error && !overview.loading) setScopesOpen(true); }}>Edit search ranges</Button>
         </Group>
 
         <Group gap="sm" align="flex-end">
           <Select label="Mode" data={[...DISCOVERY_MODES]} value={chosenMode} allowDeselect={false} w={140}
             onChange={(v) => setMode(v as DiscoveryMode)} />
           {scopes.length > 1 && (
-            <MultiSelect label="Scopes to sweep" data={scopes.map((s) => s.cidr)} value={subset} onChange={setSubset}
+            <MultiSelect label="Search ranges to sweep" data={scopes.map((s) => s.cidr)} value={subset} onChange={setSubset}
               placeholder="all saved" clearable w={260} />
           )}
-          <Button leftSection={<IconRadar size={16} />} loading={running} onClick={() => void sweep()}>Run sweep</Button>
+          <Button leftSection={<IconRadar size={16} />} disabled={!!blocked || running || starting} loading={running || starting} onClick={() => void sweep()}>Run sweep</Button>
         </Group>
         {sweepError && <Alert color="red" title="Sweep refused">{sweepError}</Alert>}
         {shownRun && <RunSummary run={shownRun} />}
@@ -392,7 +370,7 @@ export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: ()
         </Tabs>
       </Stack>
 
-      <ScopesModal opened={scopesOpen} current={scopes} onClose={() => setScopesOpen(false)} onSaved={() => void overview.reload()} />
+      <ScopeEditor opened={scopesOpen} current={scopes} onClose={() => setScopesOpen(false)} onSaved={() => void overview.reload()} />
       <AcceptModal asset={acceptFor} onClose={() => setAcceptFor(null)}
         onAccepted={() => { refreshAll(); onInventoryChanged?.(); }} />
       <ConfirmReasonModal
@@ -401,7 +379,7 @@ export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: ()
         body={<Text size="sm">Ignored devices stay ignored on later sweeps and drop out of discovery findings.</Text>}
         reasonRequired
         confirmLabel="Ignore"
-        error={ignoreErr}
+        error={ignoreErr ?? blocked}
         onConfirm={(r) => void ignore(r)}
         onClose={() => setIgnoreFor(null)}
       />

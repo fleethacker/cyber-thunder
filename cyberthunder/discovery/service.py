@@ -193,11 +193,18 @@ class DiscoveryService:
     def scopes(self) -> list[DiscoveryScope]:
         return [DiscoveryScope.from_dict(d) for d in (self._read(self.scopes_file, []) or [])]
 
-    def set_scopes(self, scopes: Iterable, actor: str, reason: str) -> list[DiscoveryScope]:
+    def set_scopes(self, scopes: Iterable, actor: str, reason: str, *, range_input: dict | None = None,
+                   acknowledge_normalization: bool = False) -> list[DiscoveryScope]:
         actor, reason = require_human(actor), _reason(reason)
         new: list[DiscoveryScope] = []
+        normalizations = []
         for s in scopes:
             sc = s if isinstance(s, DiscoveryScope) else DiscoveryScope.from_dict(s)
+            if sc._normalization:
+                normalizations.append(sc._normalization)
+                if acknowledge_normalization is not True:
+                    raise ValueError(f"CIDR {sc._normalization['input']} expands to {sc.cidr}; "
+                                     "explicit acknowledge_normalization=true is required, or submit the intended canonical network")
             sc.added_by = sc.added_by or actor
             sc.reason = (sc.reason or "").strip() or reason
             sc.validate()
@@ -212,7 +219,9 @@ class DiscoveryService:
             self._write(self.scopes_file, [s.to_dict() for s in new])
         self.ctx.audit.append("discovery.scopes", actor, {
             "before": [s["cidr"] for s in before], "after": [s.cidr for s in new],
-            "allow_public": [s.cidr for s in new if s.allow_public], "reason": reason})
+            "allow_public": [s.cidr for s in new if s.allow_public], "reason": reason,
+            **({"normalizations": normalizations, "acknowledge_normalization": True} if normalizations else {}),
+            **({"range_input": range_input} if range_input is not None else {})})
         return new
 
     def _sweep_scopes(self, scopes, mode: str) -> list[DiscoveryScope]:
