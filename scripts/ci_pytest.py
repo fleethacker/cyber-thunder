@@ -58,6 +58,27 @@ def expected_skips(platform: str) -> dict[str, str]:
             "tests/security/test_oidc.py::test_symlink_cache_and_directory_rejected":
                 "POSIX symlinks; Windows reparse handling has a separate fixture",
         })
+        # Reviewed node IDs, including each parameter: never allow a whole module.
+        for name in (
+            "test_posix_policy_write_permissions_denied[400]",
+            "test_posix_policy_write_permissions_denied[386]",
+            "test_posix_policy_write_permissions_denied[438]",
+            "test_posix_policy_write_permissions_denied[950]",
+            "test_posix_writable_parent_denied[504]",
+            "test_posix_writable_parent_denied[455]",
+            "test_posix_untrusted_owner_denied[file]",
+            "test_posix_untrusted_owner_denied[parent]",
+            "test_posix_permission_change_during_parse_denied",
+            "test_posix_root_sticky_directory_exception_never_applies_to_file",
+            "test_posix_parent_swap_to_symlink_before_open_denied_and_fds_closed",
+        ):
+            allowed[f"tests/security/test_access_file_trust.py::{name}"] = (
+                "requires POSIX owner/mode and descriptor-relative filesystem semantics"
+            )
+        for mode in (420, 416, 438):
+            allowed[f"tests/security/test_kube_credentials.py::test_real_posix_config_permission_failure[{mode}]"] = (
+                "real POSIX file permissions"
+            )
         for replacement in ("existing_fifo", "fifo_at_open", "symlink_at_open"):
             allowed[f"tests/engine/test_inventory_guard.py::test_fifo_or_link_replacement_refuses_promptly_and_releases_target_lock[{replacement}]"] = (
                 "POSIX FIFO and O_NOFOLLOW semantics"
@@ -65,6 +86,9 @@ def expected_skips(platform: str) -> dict[str, str]:
     if platform == "linux":
         allowed["tests/security/test_oidc.py::test_windows_junction_cache_path_rejected"] = (
             "Windows directory junction fixture"
+        )
+        allowed["tests/security/test_access_file_trust.py::test_actual_windows_junction_parent_denied"] = (
+            "requires Windows NTFS junction support"
         )
         allowed.update({
             f"tests/test_dev.py::DevelopmentModeTests::{name}": UDS_REASON
