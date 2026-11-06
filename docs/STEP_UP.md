@@ -127,6 +127,11 @@ requirements. The runtime does not reinterpret token issuance as authentication.
 
 ## Verification and remaining acceptance
 
+The separate [local provider acceptance](OIDC_REVIEW.md#local-independent-approval-and-freshness-acceptance)
+passed actual password-realm authentication-age, re-login and independent-account
+approval checks on both document backends. It did not validate CAC/PIV or the
+intended enclave realm's assurance policy.
+
 Focused tests exercise direct core calls, API challenges, both document backends,
 real signed tokens from an isolated HTTPS loopback provider, retained ID-token
 assurance across refresh, reauthentication bindings, session/CSRF protections,

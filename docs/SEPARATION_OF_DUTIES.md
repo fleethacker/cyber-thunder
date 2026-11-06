@@ -155,6 +155,11 @@ work. The optional first-change device-registrar rule is not implemented here.
 
 ## Independent review checks
 
+Subsequent [local Keycloak acceptance](OIDC_REVIEW.md#local-independent-approval-and-freshness-acceptance)
+exercised real sessions, proposer exclusion, duplicate-vote refusal and one/two
+account quorums on JSON and SQLite. Its password-fixture accounts do not prove
+that distinct subjects always belong to distinct people in an actual deployment.
+
 The bounded review reproduced and fixed three gaps: restoring an old proposal
 snapshot bypassed later audited cancellation/denial/apply; revocation during
 start-apply receipt validation was not rechecked; and finding, receipt or fix

@@ -37,6 +37,11 @@ also be permitted by the remote system. Its existence does not prove that the
 remote account has only the intended privileges. Local development mode uses
 explicitly unverified names and cannot supply verified-person evidence.
 
+Approval uniqueness currently uses issuer and subject, which identify accounts.
+One person's normal and privileged accounts are not automatically correlated.
+The organization must enforce distinct-person assignment for an independent-person
+requirement; a trusted person-association extension remains in ZT-09.
+
 Protected configuration, the node OS/service account and the identity provider
 are trusted boundaries. Compromise of a trusted node administrator is not
 contained by an ordinary application role. Current browser sessions require one
