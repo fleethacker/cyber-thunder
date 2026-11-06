@@ -7,6 +7,7 @@ fix library, the approval gate and the kill switch like any other finding.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import tempfile
@@ -127,16 +128,27 @@ class IngestService:
     def _ingest_stig(self, path_or_bytes: str | Path | bytes, filename: str | None = None, *,
                      old: str | Path | None = None, actor: str = "operator", method: str | None = None,
                      receipt_source: str = "local") -> dict:
+        from cyberthunder.ingest.content import fetch as fx, signatures as sig
         tmpdir: Path | None = None
         try:
+            self.ctx.killswitch.guard("ingest.stig", actor)
+            maximum = min(getattr(self.ctx.settings, "content_max_bytes", fx.DEFAULT_MAX_BYTES), sig.MAX_FILE_BYTES)
+            tmpdir = Path(tempfile.mkdtemp(prefix="ct-ingest-"))
             if isinstance(path_or_bytes, (bytes, bytearray)):
-                tmpdir = Path(tempfile.mkdtemp(prefix="ct-ingest-"))
-                name = Path(filename or "benchmark.xml").name
-                new_path = tmpdir / name
-                new_path.write_bytes(bytes(path_or_bytes))
+                if not 0 < len(path_or_bytes) <= maximum:
+                    raise sig.AuthenticityError("Invalid content import size")
+                full = bytes(path_or_bytes)
+                filename = filename or "benchmark.xml"
+                new_path = tmpdir / fx.disk_name(filename)
+                new_path.write_bytes(full)
+                digest, size = hashlib.sha256(full).hexdigest(), len(full)
             else:
-                new_path = Path(path_or_bytes)
-                filename = filename or new_path.name
+                original = Path(path_or_bytes)
+                filename = filename or original.name
+                new_path = tmpdir / fx.disk_name(filename)
+                digest, size = sig.copy_checked(original, new_path, maximum=maximum)
+            authenticity = sig.acceptance(self.ctx, actor, digest, size)
+            fx.check_file(new_path, "manual_stig", filename=filename)
             try:
                 new = dl.load_benchmark(new_path)
             except dl.BenchmarkError:
@@ -153,9 +165,12 @@ class IngestService:
             transfer = {"full_seconds": transfer_seconds(sizes["full_bytes"], state),
                         "delta_seconds": transfer_seconds(sizes["compressed_bytes"], state),
                         "link": state.to_dict()}
+            authenticity = sig.acceptance(self.ctx, actor, digest, size)
+            self.ctx.killswitch.guard("ingest.stig", actor)
             catalog = dl.apply(report, new_path, self.store)
             extra = {"filename": filename, "sizes": sizes, "transfer": transfer, "catalog_path": str(catalog),
-                     "full_import": prev is None, "receipt_source": receipt_source}
+                     "full_import": prev is None, "receipt_source": receipt_source,
+                     "authenticity": dict(authenticity, sha256=digest, bytes=size)}
             self.store.write_json(dl.deltas_dir(self.store) / f"{report.id}.json", dict(report.to_dict(), **extra))
         finally:
             if tmpdir is not None:
@@ -164,7 +179,8 @@ class IngestService:
         self.audit.append("ingest.stig", actor, {
             "delta_id": report.id, "benchmark_id": report.benchmark_id, "old_release": report.old_release,
             "new_release": report.new_release, "counts": report.counts, "filename": filename,
-            "full_bytes": sizes["full_bytes"], "compressed_bytes": sizes["compressed_bytes"], "method": sizes["method"]},
+            "full_bytes": sizes["full_bytes"], "compressed_bytes": sizes["compressed_bytes"], "method": sizes["method"],
+            "authenticity": extra["authenticity"]},
             subject=report.id)
         return out
 

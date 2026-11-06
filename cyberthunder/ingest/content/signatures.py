@@ -476,18 +476,47 @@ def verify_document(raw, kind, config):
         key.verify(signature, (value["protected"] + "." + value["payload"]).encode("ascii"))
     except (InvalidSignature, UnsupportedAlgorithm, OSError, ValueError, TypeError):
         _fail()
-    return doc, dict(evidence, status="operator_attested", operator_attested=True)
+    evidence["key_sha256"] = hashlib.sha256(key.public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).hexdigest()
+    digests = frozenset((r["sha256"], r["bytes"]) for r in doc.get("files", []))
+    return doc, _Attestation(MappingProxyType(dict(evidence, status="operator_attested", operator_attested=True)),
+                            raw, kind, digests)
+
+
+@dataclass(frozen=True)
+class _Attestation(Mapping):
+    """Keep verifier input with the evidence; serialized status is never authority."""
+    facts: Mapping
+    raw: bytes = field(repr=False)
+    kind: str
+    digests: frozenset
+
+    def __iter__(self):
+        return iter(self.facts)
+
+    def __len__(self):
+        return len(self.facts)
+
+    def __getitem__(self, key):
+        return self.facts[key]
 
 
 def decide(ctx, evidence, actor, override_reason=None):
     from cyberthunder.control.principal import require_current
     if evidence["status"] == "trusted_https_source":
-        # Only the internal downloader receipt can reach this branch. This is
-        # the existing live-updater admin permission, not an offline exception.
+        from .fetch import _source_evidence
+        evidence = _source_evidence(evidence)
         if required(ctx):
             require_current("admin", actor)
             ctx.authorize("admin", actor=actor)
         return dict(evidence)
+    if evidence["status"] == "operator_attested":
+        if type(evidence) is not _Attestation:
+            _fail()
+        # Re-read protected keys, even when a caller retains an earlier receipt.
+        _, evidence = verify_document(evidence.raw, evidence.kind, config_for(ctx))
+    if evidence["status"] not in {"operator_attested", "unsigned", "unknown_signer"}:
+        _fail()
     if required(ctx):
         require_current("import", actor)
         ctx.authorize("import", actor=actor)
@@ -514,7 +543,7 @@ def decide(ctx, evidence, actor, override_reason=None):
 
 @contextmanager
 def receipt(ctx, actor, digests, evidence, override_reason=None, *, recheck=None):
-    token = _receipt.set((ctx, actor, frozenset(digests), dict(evidence), override_reason, recheck))
+    token = _receipt.set((ctx, actor, frozenset(digests), evidence, override_reason, recheck))
     try:
         yield
     finally:
@@ -529,9 +558,16 @@ def acceptance(ctx, actor, digest, size):
     if owner is not ctx or actor != expected_actor or (digest, size) not in digests:
         _fail()
     # Recheck the current principal/session and policy, including on background threads.
-    base = dict(recheck() if recheck is not None else evidence)
-    if base["status"] in {"human_override", "unsigned_dev"}:
-        base["status"] = "unsigned"
+    base = recheck() if recheck is not None else evidence
+    if type(base) is _Attestation:
+        _, base = verify_document(base.raw, base.kind, config_for(ctx))
+        if type(base) is _Attestation and (digest, size) not in base.digests:
+            _fail()
+    if base["status"] == "trusted_https_source":
+        from .fetch import _source_evidence
+        source = _source_evidence(base)
+        if (digest, size) != (source["sha256"], source["bytes"]):
+            _fail()
     return decide(ctx, base, actor, reason)
 
 

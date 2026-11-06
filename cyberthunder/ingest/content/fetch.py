@@ -25,6 +25,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass, field
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable
 from xml.etree import ElementTree as ET
@@ -53,6 +54,30 @@ class _HTTPProof:
     size: int
     final_url: str
     seal: object = field(repr=False)
+
+
+@dataclass(frozen=True)
+class _SourceEvidence(Mapping):
+    proof: _HTTPProof = field(repr=False)
+
+    def __iter__(self):
+        return iter(_source_evidence(self))
+
+    def __len__(self):
+        return 6
+
+    def __getitem__(self, key):
+        return _source_evidence(self)[key]
+
+
+def _source_evidence(value):
+    from .signatures import AuthenticityError
+    if type(value) is not _SourceEvidence or value.proof.seal is not _HTTP_SEAL:
+        raise AuthenticityError("No verified live-download receipt is available")
+    proof = value.proof
+    _live_url(proof.client, proof.final_url)
+    return {"status": "trusted_https_source", "operator_attested": False, "disa_signature": False,
+            "final_url": proof.final_url, "sha256": proof.sha256, "bytes": proof.size}
 
 
 def _trusted_client(client):
@@ -93,8 +118,7 @@ def live_evidence(result, client):
             or proof.size != result.bytes):
         raise ContentError("No verified live-download receipt is available")
     _live_url(client, proof.final_url)
-    return {"status": "trusted_https_source", "operator_attested": False, "disa_signature": False,
-            "final_url": proof.final_url, "sha256": proof.sha256, "bytes": proof.size}
+    return _SourceEvidence(proof)
 
 
 class ContentError(RuntimeError):
@@ -315,13 +339,15 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
              progress: Callable[[dict], None] | None = None, quarantine_dir: str | Path | None = None,
              retries: int = 2, timeout: float | None = None, expected_sha256: str | None = None,
              sleep: Callable[[float], None] = time.sleep,
-             stop: Callable[[], str | None] | None = None, trusted_source: bool = False) -> FetchResult:
+             stop: Callable[[], str | None] | None = None, trusted_source: bool = False,
+             fresh: bool = False) -> FetchResult:
     """Fetch entry.url into dest_dir and verify it. See the module docstring for the steps.
 
     `stop` is polled between chunks; a non-empty answer ends the download with Stopped and keeps the .part."""
     if pace and (link is None or link.mode != "test"):
         raise ContentError("pacing requires explicit link test mode")
     client = as_client(opener)
+    fresh = fresh or trusted_source
     if trusted_source:
         _trusted_client(client)
     if isinstance(entry, dict):
@@ -366,8 +392,8 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
     attempt = 0
     while True:
         attempt += 1
-        if trusted_source:
-            # Unauthenticated pre-existing partial bytes cannot inherit HTTPS provenance.
+        if fresh:
+            # Earlier partial bytes cannot inherit transport provenance or an operator signature.
             part.unlink(missing_ok=True)
             meta_p.unlink(missing_ok=True)
         have = part.stat().st_size if part.exists() else 0
@@ -421,14 +447,14 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
     if total is not None and got != total:
         raise ContentError(f"{entry.filename}: got {got} of {total} bytes", resumable=True, filename=entry.filename)
     digest = sha256_file(part)
-    if trusted_source and (digest != n["source_sha256"] or got != n["source_bytes"]):
+    if fresh and (digest != n["source_sha256"] or got != n["source_bytes"]):
         raise ContentError("Downloaded bytes changed before integrity checking")
     report(state="verifying", bytes=got, total=total)
     reason = None
     if expected_sha256 and digest.lower() != expected_sha256.lower():
         reason = f"SHA-256 {digest} does not match the expected {expected_sha256}"
-    elif trusted_source:
-        # Parse a private, stable snapshot of exactly the authenticated response.
+    elif fresh:
+        # Parse a private, stable snapshot of exactly this complete response.
         # Progress callbacks and unrelated staging files cannot supply parser input.
         from .signatures import copy_checked, AuthenticityError
         with tempfile.TemporaryDirectory(prefix=".verified-", dir=dest_dir) as directory:
@@ -451,7 +477,7 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
         qpath = quarantine(part, qdir, reason, filename=entry.filename, url=url)
         report(state="quarantined", bytes=got, total=total, error=reason)
         raise Quarantined(f"{entry.filename}: {reason}", path=qpath, filename=entry.filename)
-    if trusted_source:
+    if fresh:
         part.unlink(missing_ok=True)
     else:
         os.replace(part, final)

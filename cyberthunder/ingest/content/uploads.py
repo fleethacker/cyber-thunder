@@ -23,7 +23,7 @@ from xml.etree import ElementTree as ET
 from cyberthunder.audit.chain import file_lock
 from cyberthunder.control.identity import require_human
 from cyberthunder.findings.schema import utcnow
-from cyberthunder.ingest.content import fetch as fx
+from cyberthunder.ingest.content import fetch as fx, signatures as sig
 from cyberthunder.ingest.content import index as ix
 from cyberthunder.ingest.delta import safe_name
 
@@ -280,6 +280,7 @@ def import_content(svc: ContentService, data: bytes, filename: str, actor: str) 
         if len(data) > MAX_UPLOAD_BYTES:
             raise ContentUploadError("upload exceeds the 32 MiB size limit")
         digest = hashlib.sha256(data).hexdigest()
+        sig.acceptance(svc.ctx, actor, digest, len(data))
         details["sha256"] = digest
         staging = svc.store.root / "incoming"
         staging.mkdir(parents=True, exist_ok=True)
@@ -294,6 +295,7 @@ def import_content(svc: ContentService, data: bytes, filename: str, actor: str) 
                                  outcome="failed", subject=name)
                 raise
             with svc._job_lock, file_lock(svc.store.root / "upload.lock"):
+                sig.acceptance(svc.ctx, actor, digest, len(data))
                 svc.ctx.killswitch.guard("content.import", actor)
                 if svc._running:
                     raise ContentUploadError("a content pull is running; retry the upload after it finishes")

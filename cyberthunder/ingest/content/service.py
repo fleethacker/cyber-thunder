@@ -360,6 +360,7 @@ class ContentService:
     def _run_job(self, job: dict, items: list[dict], actor: str) -> dict:
         lock = threading.Lock()
         last = [0.0]
+        live_directory = None
 
         def save(force: bool = False) -> None:
             with lock:
@@ -375,7 +376,9 @@ class ContentService:
             trusted_live = sig.required(self.ctx)
             if trusted_live:
                 # A job-owned directory prevents uploads or earlier jobs supplying partial bytes.
-                staging = staging / ("live-" + job["id"])
+                staging.mkdir(parents=True, exist_ok=True)
+                live_directory = tempfile.TemporaryDirectory(prefix="live-", dir=staging)
+                staging = Path(live_directory.name)
             for f, item in zip(job["files"], items):
                 authorize(self.ctx, "admin", actor=actor)
                 if self.ctx.killswitch.is_engaged():
@@ -459,6 +462,7 @@ class ContentService:
                     else:
                         rec = self._accept(Path(res.path), entry, source="pulled", actor=actor, sha256=res.sha256,
                                            etag=res.etag, size=res.bytes)
+                        Path(res.path).unlink(missing_ok=True)
                 except Exception as e:  # noqa: BLE001 - record and keep going with the next file
                     f.update(state="failed", error=f"accepted but not ingested: {e}")
                     continue
@@ -479,6 +483,8 @@ class ContentService:
             save(True)
             with self._job_lock:
                 self._running = None
+            if live_directory is not None:
+                live_directory.cleanup()
         return job
 
     # -- accepting a verified file ----------------------------------------------------------------
@@ -501,29 +507,42 @@ class ContentService:
         from cyberthunder.audit.chain import file_lock
         with self._publication_lock, file_lock(self.store.root / "content-publish.lock"):
             authenticity = sig.acceptance(self.ctx, actor, sha256, size)
-            if path.stat().st_size != size or size > self.max_bytes or fx.sha256_file(path) != sha256:
-                raise sig.AuthenticityError("Content bytes changed before publication")
-            self.ctx.killswitch.guard("content.import", actor)
-            self._auth_event(actor, authenticity, subject=entry.filename)
-            return self._publish(path, entry, source=source, actor=actor, sha256=sha256, etag=etag,
-                                 size=size, authenticity=authenticity)
+            with tempfile.TemporaryDirectory(prefix=".publish-", dir=self.store.root) as temporary:
+                snapshot = Path(temporary) / fx.disk_name(entry.filename)
+                copied, length = sig.copy_checked(path, snapshot, maximum=min(self.max_bytes, sig.MAX_FILE_BYTES))
+                if (copied, length) != (sha256, size):
+                    raise sig.AuthenticityError("Content bytes changed before publication")
+                fx.check_file(snapshot, entry.kind, filename=entry.filename)
+                self._auth_event(actor, authenticity, subject=entry.filename)
+                authenticity = sig.acceptance(self.ctx, actor, sha256, size)
+                self.ctx.killswitch.guard("content.import", actor)
+                return self._publish(snapshot, entry, source=source, actor=actor, sha256=sha256, etag=etag,
+                                     size=size, authenticity=authenticity)
 
     def _publish(self, path, entry, *, source, actor, sha256, etag, size, authenticity):
         files = self.store.files_dir
         files.mkdir(parents=True, exist_ok=True)
         dest = files / fx.disk_name(entry.filename)
-        if path.resolve() != dest.resolve():
-            os.replace(path, dest)
         ingest: dict[str, Any] = {}
+        datastream = None
         if entry.kind in ("manual_stig", "srg"):
-            rep = self.ingest.ingest_stig(dest, actor=actor, receipt_source=source)
+            rep = self.ingest.ingest_stig(path, actor=actor, receipt_source=source)
             ingest.update(delta_id=rep["id"], catalog_path=rep.get("catalog_path"),
                           delta={"id": rep["id"], "benchmark_id": rep.get("benchmark_id"),
                                  "old_release": rep.get("old_release"), "new_release": rep.get("new_release"),
                                  "counts": rep.get("counts"), "rescan_rules": len(rep.get("rescan_rule_ids") or []),
                                  "full_import": rep.get("full_import"), "filename": entry.filename})
         elif entry.kind == "scap_benchmark":
-            ingest["datastream_path"] = str(self._extract_datastream(dest, entry))
+            datastream = self._extract_datastream(path, entry)
+            product = fx.disk_name(entry.product_key or "unknown")
+            stream_dest = self.store.scap_dir / product / (fx.disk_name(Path(entry.filename).stem) + ".xml")
+            ingest["datastream_path"] = str(stream_dest)
+        authenticity = sig.acceptance(self.ctx, actor, sha256, size)
+        self.ctx.killswitch.guard("content.import", actor)
+        os.replace(path, dest)
+        if datastream is not None:
+            stream_dest.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(datastream, stream_dest)
         rec = {"filename": entry.filename, "disk_name": dest.name, "product_key": entry.product_key, "kind": entry.kind,
                "version": list(entry.version) if entry.version else None, "version_label": entry.version_label,
                "upload_date": entry.upload_date, "sha256": sha256, "etag": etag, "bytes": size, "url": entry.url,
@@ -536,23 +555,15 @@ class ContentService:
         return saved
 
     def _extract_datastream(self, zpath: Path, entry: ix.Entry) -> Path:
+        # Stage beside the private source. Publication rechecks authority after extraction.
+        out = zpath.parent / ".datastream.xml"
         if not zipfile.is_zipfile(zpath):
-            product = fx.disk_name(entry.product_key or "unknown")
-            out = self.store.scap_dir / product / (fx.disk_name(Path(entry.filename).stem) + ".xml")
-            out.parent.mkdir(parents=True, exist_ok=True)
-            tmp = out.with_name(out.name + ".tmp")
-            shutil.copyfile(zpath, tmp)
-            os.replace(tmp, out)
+            shutil.copyfile(zpath, out)
             return out
         with zipfile.ZipFile(zpath) as zf:
             m = fx.find_datastream(zf)
-            product = fx.disk_name(entry.product_key or "unknown")
-            out = self.store.scap_dir / product / (fx.disk_name(Path(entry.filename).stem) + ".xml")
-            out.parent.mkdir(parents=True, exist_ok=True)
-            tmp = out.with_name(out.name + ".tmp")
-            with zf.open(m) as src, open(tmp, "wb") as dst:       # member name never used as a path
+            with zf.open(m) as src, open(out, "xb") as dst:       # member name never used as a path
                 shutil.copyfileobj(src, dst, 1024 * 1024)
-            os.replace(tmp, out)
         return out
 
     # -- held content -----------------------------------------------------------------------------
@@ -595,6 +606,8 @@ class ContentService:
         if sig.required(self.ctx) and config.signing_key is None:
             raise sig.AuthenticityError("A configured operator signing key is required")
         envelope = sig.sign_document(doc, "request", config) if config.signing_key else doc
+        authorize(self.ctx, "export", actor=actor)
+        self.ctx.killswitch.guard("content.manifest", actor)
         digest = sig.atomic_document(out, envelope)
         authenticity = {"status": "operator_signed" if config.signing_key else "unsigned_dev",
                         "operator_attested": bool(config.signing_key), "disa_signature": False,
@@ -863,7 +876,7 @@ def fetch_manifest(manifest_path: str | Path, out_dir: str | Path, opener: Any =
         limit = min(max_bytes, sig.MAX_FILE_BYTES, remaining)
         try:
             res = fx.download(client, entry, out, link=link, max_bytes=limit, pace=pace, progress=progress,
-                              quarantine_dir=out / "quarantine", timeout=timeout)
+                              quarantine_dir=out / "quarantine", timeout=timeout, fresh=bool(config.signing_key))
         except (fx.ContentError, ContentNetworkError, OSError) as e:
             failed.append({"filename": entry.filename, "url": entry.url, "reason": str(e)})
             received += limit  # Bound failed/quarantined downloads too; never reset the budget on failure.
@@ -880,6 +893,8 @@ def fetch_manifest(manifest_path: str | Path, out_dir: str | Path, opener: Any =
                                                    "sha256": request_digest},
             "files": files, "failed": failed}
     if config.signing_key and not failed:
+        if not sig.verify_document(raw, "request", config)[1]["operator_attested"]:
+            raise sig.AuthenticityError("Request trust changed before signing the bundle")
         envelope = sig.sign_document(lock, "lock", config)
         state = "operator_signed"
     else:

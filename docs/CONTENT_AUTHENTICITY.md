@@ -69,10 +69,14 @@ ACLs are never changed automatically. An otherwise private key beneath an untrus
 is refused; provision a protected location with the host administrator.
 
 There is no automatic trust discovery, embedded-key trust, URL key lookup or new dependency. The
-implementation uses the installed `cryptography==50.0.2` Ed25519 implementation. Runtime environment
+review used the installed `cryptography==50.0.2` Ed25519 implementation, already required transitively
+by `PyJWT[crypto]` and `paramiko`; this patch adds no package requirement. Runtime environment
 settings for this configuration are an integration responsibility. Never read trusted-key paths or
 signing credentials from an import request. Key-file changes are checked again on each verification;
 changes to the configured signer map require replacing the context configuration or restarting.
+Accepted attestations record the exact public-key SHA-256 fingerprint (DER SubjectPublicKeyInfo)
+as `key_sha256`, so replacing a key while retaining its ID does not make historical signer evidence
+ambiguous. Retained in-process attestations reverify their original signed bytes against current keys.
 
 ## Courier workflow
 
@@ -93,8 +97,10 @@ changes to the configured signer map require replacing the context configuration
    This standalone fetch utility uses the local development CLI profile; it does not establish an
    authenticated application session. Signing requires possession of the protected operator key.
    A request signature is checked before any network request. Failed downloads cannot produce an
-   importable signed lock. Signed fetches require a fresh directory; unsigned development fetches
-   retain the existing resumable-download workflow.
+   importable signed lock. Signed fetches require a fresh directory and a complete response on each
+   attempt; existing partial bytes cannot become operator-attested merely by matching an ETag. The
+   complete response hash must match the stable file used by the parser. Request trust is checked
+   again before signing the lock. Unsigned development fetches retain resumable downloads.
 3. Transfer the complete folder: `manifest.json`, `manifest.lock.json` and exactly the files listed in
    the lock. Import through `POST /api/v1/ingest/import-dir` with `{"path":"<folder on this node>"}`.
    Configure the request and courier public keys and the same scope on the receiver.
@@ -144,7 +150,16 @@ bytes. Verified live downloads start fresh instead of trusting an earlier partia
 checks the hash and authorization again. Caller-supplied metadata, serialized download results,
 injected transports or an unsigned folder cannot assert HTTPS provenance. Copying a previously
 downloaded file onto offline media still requires a trusted signed lock or the authorized human
-exception. Raw upload and legacy STIG routes authorize their exception before parsing content.
+exception. Evidence dictionaries, including ones placed into the internal receipt context, cannot
+claim either HTTPS provenance or a verified operator signature. Receipts bind their authorized
+hash/size pairs, context and actor. The trusted runtime is not a Python sandbox: arbitrary code
+execution or mutation of internal modules is outside this boundary.
+
+Raw upload and legacy STIG routes authorize their exception before parsing content. Final acceptance
+copies the source into a private bounded snapshot. Parsing, catalog updates and publication use those
+same bytes; changing the caller's source after its hash check cannot replace them. Session, policy,
+signer trust and kill state are rechecked after validation/audit and before publication. SCAP extraction
+is staged privately until that final check. Live job staging is removed when the job finishes.
 
 ## Wire format and bounds
 
@@ -170,17 +185,45 @@ archive duplicate/link paths are rejected. Lock publication uses an atomic tempo
 
 Public content routes and CLI imports call `ContentService.import_dir`, `import_upload` or
 `import_stig`. `_accept` refuses publication without matching verified bytes or an authorized exception.
-For direct internal `IngestService.ingest_stig()` callers, the core service must also invoke
-`signatures.acceptance(ctx, actor, sha256, size)` **before** parsing the same stable bytes. The content
-entry points carry the matching receipt in a ContextVar. The low-level ingest service is outside this
-module's integration boundary; callers must not bypass these entry points before that core guard is
-wired. Direct `uploads.import_content()` callers must likewise use `ContentService.import_upload`.
+Every direct `IngestService.ingest_stig()` call now invokes
+`signatures.acceptance(ctx, actor, sha256, size)` **before** parsing its bounded stable snapshot and
+again before catalog publication. Its delta and audit record include authenticity, hash and size.
+Direct `uploads.import_content()` calls also check acceptance before parsing and again before the
+duplicate shortcut or publication. The content entry points carry the matching receipt in a ContextVar;
+typed source labels do not confer authority. Without a receipt, a direct verified-mode import refuses
+unsigned bytes. Verified live pulls still use the existing admin permission, without an offline import
+override or a claim of publisher signature.
+
+Content publication holds a process/file writer lock shared by service instances; the STIG catalog
+also retains its shared writer lock. Each file replacement is atomic. Competing successful publishers
+leave matching held bytes, index hash and extracted datastream. This is **not** one crash transaction
+covering the held file, catalog, delta, audit and index: disk/process failure between replacements can
+leave an incomplete import requiring operator retry/reconciliation. State directories and the running
+application remain trusted. A bundle's signatures, listing and hashes are checked before any member
+is parsed, but successful earlier members are not rolled back if a later member fails parsing or loses
+authorization. No failed member is silently recorded as accepted.
 
 Tests use real Ed25519 signatures, an independent JWS decoder, isolated local media, loopback HTTPS
 with real certificate verification, real Windows fixture ACLs and both state backends. They cover
 tampering, wrong scope/algorithm/key ID, missing/duplicate paths, unauthorized overrides,
 role-versus-policy checks, revoked sessions/trust, forged transport metadata, unapproved redirects,
 untrusted TLS, stale partial bytes and changes before parsing/publication.
+The focused review also reproduces direct-entry bypasses, forged receipt dictionaries, injected
+courier partial bytes, revocation during parsing/extraction, same-ID key rotation and competing service
+publishers on JSON and SQLite. Windows ACL tests provision only disposable fixture directories;
+POSIX permission branches require a separate platform run. The TLS fixtures substitute only an exact
+loopback host and its temporary CA; production retains the fixed DoD host allow-list.
 These fixtures do not validate operational key custody, fleet Windows DACL rollout, organizational
 key distribution, key revocation procedures, FIPS suitability or a live DISA signing service. Signed
 content is not automatically fresh: this profile has no release monotonicity or anti-rollback ledger.
+
+Review validation on Windows, with the shared interpreter and this checkout on `PYTHONPATH`:
+
+- Ingest/content/CLI and related API regression selection: **481 passed in 173.21s**, zero skips.
+- Final `test_content_authenticity_review.py`, `test_content_signatures.py` and
+  `test_content_live_authenticity.py`: **133 passed in 59.64s**, zero skips.
+- Final fetch, service and ingest/CLI regression selection: **79 passed in 76.39s**, zero skips.
+
+Stateful cases exercised JSON and SQLite. The only warnings were existing framework deprecations.
+No external source, production key, live identity provider or host configuration was changed. Startup
+settings/context wiring and operational key distribution remain integration work; no full gate was run.
