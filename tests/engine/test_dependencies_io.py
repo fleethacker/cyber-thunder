@@ -84,8 +84,12 @@ class Protocol:
             def send_message(self, message):
                 return b"fixture"
 
+            def build_session(sender):
+                return self.transport.session
+
         self._sender = Sender()
         self.transport.send_message = self._sender.send_message
+        self.transport.build_session = self._sender.build_session
 
     def open_shell(self, **kwargs):
         self.calls.append(("open", kwargs))
@@ -120,6 +124,7 @@ def install_session(monkeypatch, transport, protocol):
         result = SimpleNamespace(protocol=protocol)
         # A fresh provider sender for each operation; never reuse the old guard.
         protocol.transport.send_message = protocol._sender.send_message
+        protocol.transport.build_session = protocol._sender.build_session
         bounded.attach(result)
         return result
     monkeypatch.setattr(transport, "_sess", session)

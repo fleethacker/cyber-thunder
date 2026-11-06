@@ -403,6 +403,8 @@ class _BoundedWinRMRead:
         self.collecting, self.cleaning = True, False
         self.cleanup_deadline, self.cleanup_sends = 0, 0
         self.cleanup_action = None
+        self.adapters = weakref.WeakKeyDictionary()
+        self.cleanup_wire_actions = set()
 
     def authorize(self):
         if time.monotonic() >= self.deadline:
@@ -423,17 +425,67 @@ class _BoundedWinRMRead:
 
     def attach(self, session):
         self.session = session
-        self.sender = weakref.WeakMethod(session.protocol.transport.send_message)
-        session.protocol.transport.send_message = self.send_message
+        provider = session.protocol.transport
+        self.sender = weakref.WeakMethod(provider.send_message)
+        provider.send_message = self.send_message
+        builder = weakref.WeakMethod(provider.build_session)
 
-    def send_message(self, *args, **kwargs):
+        def build_session():
+            if not self.collecting:
+                self._remaining()
+                # Cleanup must never invoke SDK authentication/session setup.
+                return self.http
+            self.check()
+            build = builder()
+            if build is None:
+                raise TransportError("WinRM session is closed")
+            http = build()
+            if self.http is not None and http is not self.http:
+                raise TransportError("WinRM bounded session changed")
+            self.http = http
+            # Requests authentication retries use adapter.send directly. Guard
+            # that boundary too, after preparation and on every retry. Fleet
+            # TLS hardening can replace adapters after the first build.
+            for adapter in set(http.adapters.values()):
+                if adapter in self.adapters:
+                    continue
+                sender = weakref.WeakMethod(adapter.send)
+
+                def send(request, _sender=sender, **kwargs):
+                    if request.url != self.owner.endpoint or request.method != "POST":
+                        raise TransportError("WinRM bounded request was refused")
+                    remaining = self._remaining()
+                    if not self.collecting:
+                        if self.cleanup_action in self.cleanup_wire_actions:
+                            raise TransportError("WinRM cleanup retry was refused")
+                        self.cleanup_wire_actions.add(self.cleanup_action)
+                    kwargs["timeout"] = min(1.5, remaining / 2)
+                    return _sender()(request, **kwargs)
+
+                adapter.send = send
+                self.adapters[adapter] = True
+            return http
+
+        provider.build_session = build_session
+
+    def _remaining(self):
         provider = self.session.protocol.transport
         if self.collecting:
             self.check()
-            remaining = self.deadline - time.monotonic()
-            if self.lease is not None:
-                remaining = min(remaining, self.lease.remaining())
+            lease_remaining = self.lease.remaining() if self.lease is not None else math.inf
+            # remaining() itself runs authorization; use the clock after it.
+            remaining = min(self.deadline - time.monotonic(), lease_remaining)
         else:
+            if (not self.cleaning or self.http is None or provider.session is not self.http):
+                raise TransportError("WinRM cleanup session is unavailable")
+            remaining = self.cleanup_deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("WinRM bounded operation deadline expired")
+        return remaining
+
+    def send_message(self, *args, **kwargs):
+        provider = self.session.protocol.transport
+        if not self.collecting:
             # Only cleanup()/the two SDK release methods enter this state. Never
             # acquire another lease or rebuild a missing/changed HTTP session.
             if (not self.cleaning or self.cleanup_sends >= 2 or self.http is None
@@ -441,9 +493,7 @@ class _BoundedWinRMRead:
                 raise TransportError("WinRM cleanup session is unavailable")
             self._validate_cleanup(args[0] if len(args) == 1 and not kwargs else None)
             self.cleanup_sends += 1
-            remaining = self.cleanup_deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("WinRM bounded operation deadline expired")
+        remaining = self._remaining()
         # Requests applies this per connect/read; leave room for both phases.
         provider.read_timeout_sec = min(1.5, remaining / 2)
         self.session.protocol.operation_timeout_sec = 1

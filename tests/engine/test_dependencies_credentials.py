@@ -521,3 +521,263 @@ def test_cleanup_failure_is_unknown_in_dependency_packet(peer, ctx, tmp_path, mo
     assert any("bounded dependency read failed" in text for text in packet["unknowns"])
     no_canary(json.dumps(packet) + ctx.audit.path.read_text(), p.account.canary)
     clean(p)
+
+
+@pytest.fixture
+def sdk_reader(account, certificates, monkeypatch):
+    """Exercise SDK preparation, Requests and response parsing; replace only wire I/O."""
+    a = account
+    p = SimpleNamespace(account=a, calls=[], made=[], leases=[], clock=[100.0],
+                        prepare_hook=lambda action: None, wire_hook=lambda action: None,
+                        response_hook=lambda response, action: None,
+                        timeouts=[], bodies=[])
+    clock = SimpleNamespace(monotonic=lambda: p.clock[0], time=time.time)
+    monkeypatch.setattr(io, "time", clock)
+    monkeypatch.setattr(sr, "time", clock)
+    monkeypatch.setattr("cyberthunder.transport.winrm.time", clock)
+    original_session, original_prepare, original_lease = winrm.Session, requests.Session.prepare_request, sr.CredentialUse.lease
+
+    def lease(use):
+        result = original_lease(use)
+        p.leases.append(result)
+        return result
+
+    def session(*args, **kwargs):
+        result = original_session(*args, **kwargs)
+        p.made.append(result)
+        return result
+
+    def action_of(body):
+        root = ET.fromstring(body)
+        return root, root.find(".//{http://schemas.xmlsoap.org/ws/2004/08/addressing}Action").text.rsplit("/", 1)[-1]
+
+    def prepare(session, request):
+        result = original_prepare(session, request)
+        p.prepare_hook(action_of(result.body)[1])
+        return result
+
+    def send(adapter, request, **kwargs):
+        root, action = action_of(request.body)
+        p.calls.append(action)
+        p.bodies.append(root)
+        p.timeouts.append(kwargs["timeout"])
+        p.wire_hook(action)
+        message_id = root.find(".//{http://schemas.xmlsoap.org/ws/2004/08/addressing}MessageID").text
+        body = {'Create': '<w:Selector Name="ShellId">owned-shell</w:Selector>',
+                'Command': '<rsp:CommandId>owned-command</rsp:CommandId>',
+                'Receive': '<rsp:Stream Name="stdout">ZmFjdHM=</rsp:Stream>'
+                           '<rsp:CommandState State="CommandState/Done"><rsp:ExitCode>0</rsp:ExitCode></rsp:CommandState>'}.get(action, '')
+        response = requests.Response()
+        response.status_code = 200
+        response.request, response.connection = request, adapter
+        response.url = request.url
+        response._content = ('<env:Envelope xmlns:env="http://www.w3.org/2003/05/soap-envelope" '
+            'xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing" '
+            'xmlns:w="http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd" '
+            'xmlns:rsp="http://schemas.microsoft.com/wbem/wsman/1/windows/shell">'
+            f'<env:Header><a:RelatesTo>{message_id}</a:RelatesTo></env:Header>'
+            f'<env:Body>{body}</env:Body></env:Envelope>').encode()
+        p.response_hook(response, action)
+        return response
+
+    monkeypatch.setattr(winrm, "Session", session)
+    monkeypatch.setattr(sr.CredentialUse, "lease", lease)
+    monkeypatch.setattr(requests.Session, "prepare_request", prepare)
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
+    target = replace(a.target, asset_type="windows", transport="winrm", options={
+        "ssl": True, "ca_trust_path": certificates["ca"], "transport": "ntlm"})
+    with principal_scope(a.person):
+        selected, use = selected_use(a, target)
+        p.transport = WinRMTransport.from_target(selected, a.ctx.settings, credential_use=use)
+    p.kind, p.sessions = "winrm", p.made
+    return p
+
+
+@pytest.mark.parametrize("stage", ["Create", "Command", "Receive"])
+def test_review_sdk_rechecks_kill_after_request_preparation(sdk_reader, stage):
+    p = sdk_reader
+    cancelled = []
+    p.prepare_hook = lambda action: cancelled.append(True) if action == stage else None
+
+    def guard():
+        if cancelled:
+            raise KillSwitchEngaged("cancelled during request preparation")
+
+    with pytest.raises(KillSwitchEngaged):
+        read(p, guard=guard)
+    assert stage not in p.calls
+    assert p.calls == {"Create": [], "Command": ["Create", "Delete"],
+                       "Receive": ["Create", "Command", "Signal", "Delete"]}[stage]
+    assert all(lease._closed and lease._secret is None for lease in p.leases)
+    provider = p.made[0].protocol.transport
+    assert provider.session is None and provider.password is None
+
+
+@pytest.mark.parametrize("stage", ["Create", "Command", "Receive"])
+def test_review_sdk_refreshes_timeout_after_request_preparation(sdk_reader, stage):
+    p = sdk_reader
+    p.prepare_hook = lambda action: p.clock.__setitem__(0, 109.0) if action == stage else None
+    assert read(p) == "facts"
+    assert 0 < p.timeouts[p.calls.index(stage)] <= 0.5
+
+
+def test_review_sdk_refreshes_deadline_after_lease_remaining(sdk_reader, monkeypatch):
+    p = sdk_reader
+    original = sr.Lease.remaining
+    advanced = []
+
+    def remaining(lease):
+        # The final lease check can spend time in the account/registry guard.
+        if p.calls == ["Create", "Command"] and not advanced:
+            advanced.append(True)
+            p.clock[0] = 109.0
+        return original(lease)
+
+    monkeypatch.setattr(sr.Lease, "remaining", remaining)
+    assert read(p) == "facts"
+    assert advanced and 0 < p.timeouts[2] <= 0.5
+
+
+@pytest.mark.parametrize("change", ["scope", "account", "principal", "generation"])
+def test_review_sdk_rechecks_authority_before_receive(sdk_reader, change):
+    p, a = sdk_reader, sdk_reader.account
+
+    def revoke(action):
+        if action != "Receive":
+            return
+        if change == "scope":
+            a.ctx.inventory.get(a.target.id).in_scope = False
+            a.ctx.inventory.save()
+        elif change == "account":
+            a.policy_path.write_text('{"version":1,"entries":[]}', encoding="utf-8")
+        elif change == "principal":
+            sr.time.time = lambda: a.person.expires_at + 1
+        else:
+            a.ctx.inventory.get(a.target.id).authorization_id = uuid.uuid4().hex
+            a.ctx.inventory.save()
+
+    p.prepare_hook = revoke
+    with pytest.raises(PermissionError):
+        read(p)
+    assert p.calls == ["Create", "Command", "Signal", "Delete"]
+    assert all(lease._closed and lease._secret is None for lease in p.leases)
+
+
+@pytest.mark.parametrize("failure", ["expired", "error", "interrupt"])
+def test_review_sdk_cleanup_uncertainty_discards_evidence(sdk_reader, failure):
+    p = sdk_reader
+
+    def prepare(action):
+        if action == "Signal" and failure == "expired":
+            p.clock[0] += 4
+
+    def wire(action):
+        if action == "Signal":
+            raise (KeyboardInterrupt if failure == "interrupt" else RuntimeError)(p.account.canary)
+
+    p.prepare_hook, p.wire_hook = prepare, wire
+    with pytest.raises(KeyboardInterrupt if failure == "interrupt" else TransportError) as error:
+        read(p)
+    if failure != "interrupt":
+        no_canary("".join(traceback.format_exception(error.value)), p.account.canary)
+    assert p.calls == (["Create", "Command", "Receive"] if failure == "expired" else
+                       ["Create", "Command", "Receive", "Signal"] if failure == "interrupt" else
+                       ["Create", "Command", "Receive", "Signal", "Delete"])
+    provider = p.made[0].protocol.transport
+    assert provider.session is None and provider.password is None and provider.encryption is None
+    assert p.made[0].protocol.password is None
+    assert all(lease._closed and lease._secret is None for lease in p.leases)
+
+
+def test_review_sdk_revoked_cleanup_never_reacquires_or_collects(sdk_reader, monkeypatch):
+    p = sdk_reader
+    held = []
+
+    def prepare(action):
+        if action != "Receive":
+            return
+        operation = p.made[0].protocol.transport.send_message.__self__
+        held.append(operation)
+        p.account.policy_path.write_text('{"version":1,"entries":[]}', encoding="utf-8")
+        monkeypatch.setattr(sr.Secret, "reveal", lambda *_: pytest.fail("cleanup revealed a credential"))
+        monkeypatch.setattr(sr.CredentialUse, "lease", lambda *_: pytest.fail("cleanup acquired a lease"))
+        monkeypatch.setattr("winrm.transport.Transport.build_session",
+                            lambda *_: pytest.fail("cleanup rebuilt SDK authentication"))
+
+    def wire(action):
+        if action not in {"Signal", "Delete"}:
+            return
+        operation = held[0]
+        with pytest.raises(TransportError):
+            operation.receive()
+        with pytest.raises(TransportError):
+            operation.session.protocol.get_command_output_raw(operation.shell, operation.command)
+        root = p.bodies[-1]
+        assert root.find(".//{http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd}Selector").text == "owned-shell"
+        if action == "Signal":
+            assert root.find(".//{http://schemas.microsoft.com/wbem/wsman/1/windows/shell}Signal").get("CommandId") == "owned-command"
+
+    p.prepare_hook, p.wire_hook = prepare, wire
+    with pytest.raises(PermissionError):
+        read(p)
+    assert p.calls == ["Create", "Command", "Signal", "Delete"]
+    with pytest.raises(TransportError):
+        held[0].receive()
+    assert len(p.leases) == 1 and p.leases[0]._closed
+
+
+@pytest.mark.parametrize("stage", ["Create", "Receive"])
+def test_review_sdk_blocks_ntlm_retry_after_revocation(sdk_reader, monkeypatch, stage):
+    from requests_ntlm import HttpNtlmAuth
+    p = sdk_reader
+    cancelled = []
+    monkeypatch.setattr(HttpNtlmAuth, "_get_server_cert", lambda *_: None)
+
+    def response(response, action):
+        if action == stage:
+            response.status_code = 401
+            response.headers["www-authenticate"] = "NTLM"
+            response.raw = SimpleNamespace(release_conn=lambda: None)
+            cancelled.append(True)
+
+    def guard():
+        if cancelled:
+            raise KillSwitchEngaged("revoked at authentication challenge")
+
+    p.response_hook = response
+    with pytest.raises(KillSwitchEngaged):
+        read(p, guard=guard)
+    assert p.calls == (["Create"] if stage == "Create" else
+                       ["Create", "Command", "Receive", "Signal", "Delete"])
+    assert p.made[0].protocol.transport.session is None
+    assert all(lease._closed and lease._secret is None for lease in p.leases)
+
+
+def test_review_failed_next_resolution_cannot_use_cache_or_environment(peer, monkeypatch):
+    p = peer
+    assert read(p) == p.output.decode()
+    p.account.path.write_bytes(b"")
+    monkeypatch.setenv("CT_CRED_SCOPED", "unused-fallback-" + uuid.uuid4().hex)
+    with pytest.raises(PermissionError):
+        read(p)
+    assert p.authenticated == [p.account.canary]
+    clean(p)
+
+
+def test_review_sdk_cleanup_does_not_retry_authentication(sdk_reader, monkeypatch):
+    from requests_ntlm import HttpNtlmAuth
+    p = sdk_reader
+    monkeypatch.setattr(HttpNtlmAuth, "_get_server_cert", lambda *_: None)
+
+    def response(response, action):
+        if action == "Signal":
+            response.status_code = 401
+            response.headers["www-authenticate"] = "NTLM"
+            response.raw = SimpleNamespace(release_conn=lambda: None)
+
+    p.response_hook = response
+    with pytest.raises(TransportError):
+        read(p)
+    assert p.calls == ["Create", "Command", "Receive", "Signal", "Delete"]
+    assert p.made[0].protocol.transport.password is None
+    assert p.made[0].protocol.transport.session is None

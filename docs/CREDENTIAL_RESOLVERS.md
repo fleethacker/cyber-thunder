@@ -594,3 +594,50 @@ Python 3.12.16 in `/home/joshua/dependency-resolver-followup-8367ed5` on ext4;
 source/receipt transfer alone uses `/mnt/c`. These are focused receipts, separate
 from the parent-owned full gate and CI allowances. No full gate or push is part
 of this follow-up.
+
+## Independent bounded-reader review
+
+Reviewed follow-up `40537cec60d6e12a24bb2458863be0885d06caf1`, integrated as
+`4535894`, from parent `ab10dfceb8a225900bb3d3b484ce97dbcc0db0e0`.
+
+The installed pywinrm 0.5.0 and Requests stack exposed two gaps below the
+previous tests' mocked `Transport.send_message` boundary. First, cancellation
+during authenticated request preparation still allowed Create, Command or
+Receive onto the wire. Requests-NTLM can also retry through the HTTP adapter
+without reentering that method. Second, request preparation and the final
+lease authorization check could consume the budget after the HTTP timeout had
+already been calculated. Fourteen JSON/SQLite cases reproduced these defects
+on the unchanged parent before the transport fix.
+
+Bounded operations now guard the actual HTTP adapters before each send and
+authentication retry. They recompute the timeout from the original absolute
+deadline after the lease check, including time spent preparing the request.
+The wrapper retains the fleet TLS adapter and its endpoint restrictions.
+Creation responses are still parsed before the post-operation guard so known
+owned identifiers remain available for cleanup after revocation.
+
+Cleanup returns only the existing owned HTTP session, without invoking the SDK
+session builder or acquiring another credential lease.
+The existing SOAP action, body and identifier checks still restrict release to
+the owned command and shell. Each release action admits at most one HTTP send;
+an authentication retry during cleanup fails the read rather than extending
+the two-request cleanup allowance. Cleanup deadlines are checked again after
+request preparation. Failure, expiry or interruption cannot return collected
+facts; known password, encryption and HTTP-auth references are still discarded.
+
+Focused tests use the installed SDK, Requests and NTLM retry code with fake
+HTTP-adapter responses. They cover fresh account, principal, scope, generation
+and kill checks; late preparation; cleanup failure/interruption; collection
+refusal after revocation; and refusal of cached or environment credentials
+after a source becomes unavailable. The focused regression selection and exact
+counts, skip lists, source hashes and calibrated failures are retained in
+`.build/dependency-reader-review/receipts.json` and `handoff.md` in the review
+worktree. These receipts are separate from the parent-owned final gate.
+
+This review changes no OS permission, process, SSH or native credential-store
+semantics. Native Linux validation was not repeated; the earlier follow-up's
+528-pass Linux receipt remains historical evidence, not validation of this
+patch. No live endpoint or vault was used. These checks cannot interrupt an
+already executing SDK/OS call, prove remote termination, securely erase Python
+copies, or isolate arbitrary code inside the process. Real deployed endpoints
+and service-account provisioning remain acceptance work.
