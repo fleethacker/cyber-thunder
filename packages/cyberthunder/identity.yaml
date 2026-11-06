@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cyberthunder-identity
+  namespace: cyberthunder
+data:
+  # This profile requires UDS TLS ingress and authenticated mesh transport.
+  CT_AUTH_MODE: mesh
+  CT_OIDC_ISSUER: https://sso.###ZARF_VAR_DOMAIN###/realms/uds
+  CT_OIDC_AUDIENCE: cyber-thunder-api
+  CT_OIDC_JWKS_URL: https://sso.###ZARF_VAR_DOMAIN###/realms/uds/protocol/openid-connect/certs
+  CT_OIDC_AUTHORIZED_PARTY: cyber-thunder-app
+  CT_OIDC_CLIENT_ID: cyber-thunder-app
+  CT_OIDC_ROLES_CLAIM: ct_roles
+  CT_OIDC_AUTHORIZATION_ENDPOINT: https://sso.###ZARF_VAR_DOMAIN###/realms/uds/protocol/openid-connect/auth
+  CT_OIDC_TOKEN_ENDPOINT: https://sso.###ZARF_VAR_DOMAIN###/realms/uds/protocol/openid-connect/token
+  CT_OIDC_REDIRECT_URI: https://cyberthunder.###ZARF_VAR_DOMAIN###/auth/callback
+  CT_OIDC_SCOPE: openid
+  CT_TLS_CERT: ""
+  CT_TLS_KEY: ""

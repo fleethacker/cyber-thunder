@@ -12,7 +12,8 @@ docker build -t registry.example.com/team/cyberthunder:0.2.6 .
 docker push registry.example.com/team/cyberthunder:0.2.6
 ```
 
-Change `image` in `deploy/kubernetes/cyberthunder.yaml` to that published image.
+Change both application and init-container `image` references in
+`deploy/kubernetes/cyberthunder.yaml` to that published image.
 For a private registry, configure an imagePullSecret in the namespace and
 reference it in the pod specification. Build for the cluster node architecture
 (use Docker buildx for a cluster with multiple architectures).
@@ -28,20 +29,49 @@ k3d image import cyberthunder:0.2.6 -c cyber-thunder
 
 Select the intended kubectl context first. The cluster needs a default storage
 class that supports ReadWriteOnce volumes; otherwise set `storageClassName` on
-the PVC. The storage driver must honor the pod's fsGroup so UID 10001 can write.
+the PVC. **This source deployment now requires verified identity configuration.**
+Follow [PACKAGE_IDENTITY.md](../../docs/PACKAGE_IDENTITY.md) to configure the
+issuer/client claims and provision a protected regular `auth/access.json` on
+the PVC as UID/GID 10001. `fsGroup` is deliberately absent because group-writable
+policy ancestors are rejected. Existing PVC ownership/modes must be reviewed
+before upgrade; do not replace or erase application state.
+
+Create the Namespace/PVC first so an administrator can provision storage. For
+example, with Zarf's bundled yq:
 
 ```sh
-kubectl apply -f deploy/kubernetes/cyberthunder.yaml
-kubectl -n cyberthunder rollout status deployment/cyberthunder
-kubectl -n cyberthunder port-forward service/cyberthunder 8000:80
+zarf tools yq 'select(.kind == "Namespace" or .kind == "PersistentVolumeClaim")' \
+  deploy/kubernetes/cyberthunder.yaml | kubectl apply -f -
 ```
 
-Open http://localhost:8000 (API status: `/api/v1/status`, docs: `/api/docs`).
-The Service is internal. Add your cluster's authenticated TLS ingress before
-exposing it to other users; these manifests do not configure authentication.
+Copy `identity-config.example.yaml` to a reviewed local file and fill every
+empty field. Register the confidential browser client and its distinct API
+audience with the issuer. Provision its secret and an application TLS certificate
+through your approved secret handling; the following commands reference files,
+not secret values on the command line:
+
+```sh
+kubectl apply -f /protected/reviewed-identity.yaml
+kubectl -n cyberthunder create secret generic cyberthunder-oidc-client \
+  --from-file=client-secret=/protected/client-secret
+kubectl -n cyberthunder create secret tls cyberthunder-tls \
+  --cert=/protected/console-chain.pem --key=/protected/console-key.pem
+kubectl apply -f deploy/kubernetes/identity-preflight.yaml
+kubectl apply -f deploy/kubernetes/cyberthunder.yaml
+kubectl -n cyberthunder rollout status deployment/cyberthunder
+```
+
+Open the configured HTTPS origin. The native profile runs TLS on backend port
+8000, reached through Service port 80; configure verified ingress re-encryption
+or TLS passthrough. Port-forwarding is only a diagnostic path and still needs
+HTTPS/correct certificate validation. `/auth/status` is public session status;
+`/api/v1/status` and API docs require authentication. Probes use TCP.
+An absent ConfigMap/client Secret prevents container creation; the read-only
+preflight rejects missing/invalid policy and incomplete identity settings.
+It never copies a Secret into a trusted policy file.
 For a UDS cluster, deploy the [Cyber Thunder Zarf package](../../packages/cyberthunder/README.md)
-instead. It includes authenticated ingress at `https://cyberthunder.<domain>`
-with Keycloak SSO and access restricted to `/UDS Core/Admin`.
+instead. Its native OIDC session profile uses UDS HTTPS ingress at
+`https://cyberthunder.<domain>` and the application's named-account policy.
 
 ## State and configuration
 
@@ -62,13 +92,14 @@ Credentials and local state are excluded from the Docker build context.
 Network policy must allow access to the targets and any configured model server.
 
 The optional `cyberthunder-target-credentials` Secret is mounted read-only at
-`/etc/cyberthunder/targets` with mode `0440`. An `id_ed25519` entry is available
+`/etc/cyberthunder/targets` with mode `0444` so the nonroot process can read it
+without `fsGroup`. An `id_ed25519` entry is available
 at `/etc/cyberthunder/targets/id_ed25519` for the asset's SSH key file setting.
 See [VM credentials and UDS egress](../../packages/cyberthunder/README.md#ssh-access-to-an-external-vm)
 for provisioning and package deployment variables.
 
 The image supports the Python SSH and WinRM transports and includes kubectl
-v1.36.4 and Trivy v0.56.2. The deployment mounts a local-cluster kubeconfig and
+v1.36.4 and digest-pinned Trivy v0.71.1. The deployment mounts a local-cluster kubeconfig and
 rotating service account token. Its RBAC permits only `get` and `list` of
 namespaces, nodes, workload resources, service accounts, services, RBAC bindings
 and network policies, plus `get /version`, for discovery, configuration scans
@@ -78,9 +109,11 @@ compatible with the target cluster (`--build-arg KUBECTL_VERSION=vX.Y.Z`).
 
 With an image rebuilt from this source, **Local Kubernetes cluster**
 (`local-cluster`) appears automatically in **Assets**, with the mounted
-in-cluster kubeconfig and **out of scope**. Enter your operator name in
-**Settings** and enable the asset's scope before using **Discover**; discovery
-returns HTTP 403 until scope is authorized. Existing names, options and scope
+in-cluster kubeconfig and **out of scope**. Sign in with a named account whose
+roles and server policy permit the inventory/scope operation before using
+**Discover**. A typed operator name cannot authorize verified operations;
+discovery also requires the account's delegated target credential binding.
+Existing names, options and scope
 choices survive restarts. The deployment sets
 `CT_BOOTSTRAP_CLUSTER_TARGET=true`; set it to `false` to disable registration.
 Register external clusters manually with their separately mounted kubeconfigs.
@@ -112,3 +145,6 @@ kubectl -n cyberthunder logs deployment/cyberthunder
 
 A pending PVC usually needs a storage class; ImagePullBackOff usually indicates
 an unpublished image, incorrect tag, or missing registry credentials.
+For `Init:Error`, inspect `kubectl -n cyberthunder logs deployment/cyberthunder -c identity-preflight`.
+Missing settings, a projected policy symlink, wrong ownership or group-writable
+ancestors require administrator correction, not a change to the guard.

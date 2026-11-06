@@ -16,6 +16,13 @@ spec:
       - direction: Egress
         selector:
           app: cyberthunder
+        remoteHost: "sso.###ZARF_VAR_DOMAIN###"
+        port: 443
+        remoteProtocol: TLS
+        description: Verified HTTPS token exchange and signing keys for the configured issuer.
+      - direction: Egress
+        selector:
+          app: cyberthunder
         remoteGenerated: KubeAPI
         description: Read cluster namespaces and workloads for the cluster survey.
       - direction: Egress
@@ -36,10 +43,50 @@ spec:
   sso:
     - name: Cyber Thunder
       clientId: cyber-thunder-app
+      protocol: openid-connect
+      publicClient: false
+      clientAuthenticatorType: client-secret
+      standardFlowEnabled: true
+      serviceAccountsEnabled: false
+      fullScopeAllowed: false
       redirectUris:
-        - https://cyberthunder.###ZARF_VAR_DOMAIN###/login
-      enableAuthserviceSelector:
-        app: cyberthunder
-      groups:
-        anyOf:
-          - /UDS Core/Admin
+        - https://cyberthunder.###ZARF_VAR_DOMAIN###/auth/callback
+      # Native application sessions validate tokens and enforce per-account ACLs.
+      # Do not also inject Authservice bearer credentials alongside session cookies.
+      defaultClientScopes: [openid, profile]
+      attributes:
+        pkce.code.challenge.method: S256
+        access.token.lifespan: "300"
+        use.refresh.tokens: "true"
+      secretConfig:
+        name: cyberthunder-oidc-client
+        template:
+          client-secret: "clientField(secret)"
+      protocolMappers:
+        - name: application-api-audience
+          protocol: openid-connect
+          protocolMapper: oidc-audience-mapper
+          config:
+            included.custom.audience: cyber-thunder-api
+            access.token.claim: "true"
+            id.token.claim: "false"
+        - name: application-roles
+          protocol: openid-connect
+          protocolMapper: oidc-usermodel-client-role-mapper
+          config:
+            usermodel.clientRoleMapping.clientId: cyber-thunder-app
+            claim.name: ct_roles
+            jsonType.label: String
+            multivalued: "true"
+            access.token.claim: "true"
+            id.token.claim: "false"
+        - name: account-kind
+          protocol: openid-connect
+          protocolMapper: oidc-usermodel-attribute-mapper
+          config:
+            user.attribute: ct_kind
+            claim.name: ct_kind
+            jsonType.label: String
+            multivalued: "false"
+            access.token.claim: "true"
+            id.token.claim: "false"

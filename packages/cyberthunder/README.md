@@ -6,6 +6,48 @@ read-only cluster survey RBAC, kubeconfig and 10 GiB PVC from `deploy/kubernetes
 `uds.yaml` configures Istio ingress and Keycloak SSO at
 `https://cyberthunder.uds.dev` (or `cyberthunder.<DOMAIN>`).
 
+**Source identity migration:** a rebuilt image/package now requires a protected
+PVC account policy and uses native application OIDC sessions. Read
+[PACKAGE_IDENTITY.md](../../docs/PACKAGE_IDENTITY.md) before deploying. The
+checked-in `0.2.6` archives below remain historical artifacts with the earlier
+gateway/typed-actor behavior; they have not been rebuilt by these source changes.
+The two source build definitions now share the guarded CLI entrypoint and
+digest-pinned Trivy 0.71.1.
+
+## Rebuilt-source identity configuration
+
+`zarf.yaml` includes `identity.yaml`, the read-only identity preflight, and the
+canonical UID/GID 10001 deployment. `DOMAIN` supplies the explicit UDS issuer,
+JWKS/auth/token endpoints and `/auth/callback` origin. `uds.yaml` registers the
+confidential `cyber-thunder-app` client with PKCE and a separate
+`cyber-thunder-api` access-token audience; its generated
+`cyberthunder-oidc-client` Secret supplies the app's client secret. The manifest
+also permits HTTPS egress to that issuer host. Private issuer PKI must be trusted
+inside the application runtime.
+
+The realm administrator must configure permitted application client roles and
+their scope mappings, an administrator-controlled `ct_kind` attribute for named
+human accounts, and refresh rotation. The storage administrator must provision
+the PVC root/auth directory and regular `auth/access.json` before deployment;
+see the exact ownership, policy example and migration steps in the linked
+document. There is no shared-admin seed or trust-copying init container.
+`fsGroup` is no longer used because it conflicts with protected policy paths.
+
+This source profile replaces the former Authservice `/login` flow with the
+application's native `/auth/callback`. The UI/login endpoints load before
+authentication; artifact APIs remain protected. Reconcile away the old
+Authservice injection and verify native login with two separately scoped
+accounts. Gateway SSO cookies alone do not establish an application session,
+and `/UDS Core/Admin` membership alone grants no application permissions.
+Keep UDS TLS ingress and authenticated mesh transport; `mesh` is not a setting
+for an ordinary plaintext deployment.
+
+The alternate `app.yaml` remains a UID 1000/5 GiB deployment for the teammate's
+Containerfile workflow and now consumes the same identity/preflight inputs.
+It is not selected by `zarf.yaml`; apply the shared preflight ConfigMap separately
+when using it. Its image source/context and delegated cluster/transport setup
+still require validation. Do not treat the old image tag as an identity update.
+
 ## Report history
 
 Version `0.2.6` adds searchable saved reports. Open **Reports → Report history**
@@ -63,10 +105,10 @@ and is not enabled by these RBAC changes.
 An image and package rebuilt from this source add **Local Kubernetes cluster**
 (`local-cluster`) to **Assets** at startup, using the mounted
 `/etc/cyberthunder/kubeconfig` and its `in-cluster` context. The asset is visible
-but **out of scope**. No manual registration or external kubeconfig is needed
-for the host cluster. Enter your operator name in **Settings**, enable the
-asset's scope, then use **Discover** to retrieve the Kubernetes version, node
-names and readiness. Discover returns HTTP 403 before scope is authorized.
+but **out of scope**. No manual registration is needed for this inventory record.
+Use a verified named account with the appropriate roles, server policy and
+delegated credential binding to enable scope and discover it. Typed actor names
+and the mounted service account alone do not authorize access in verified mode.
 
 The already-built `0.2.4`, `0.2.5` and `0.2.6` archives retain the earlier behavior:
 newly registered host-cluster assets start in scope. Those archives have not
@@ -88,7 +130,7 @@ and standalone server runs retain their existing explicit inventory setup.
 With an authenticated browser session, the cluster API provides:
 
 - `GET /api/v1/cluster/survey`: namespaces and workload images.
-- `POST /api/v1/cluster/baseline` with `{"use_openai": false}` and an `X-Actor` header naming the operator: scan images and save risk profiles.
+- `POST /api/v1/cluster/baseline` with `{"use_openai": false}`: scan images and save risk profiles for the authorized account (application session and CSRF headers required).
 - `GET /api/v1/cluster/risk`: the latest saved profiles.
 
 Trivy's vulnerability database and target images are not included in this app
@@ -116,7 +158,11 @@ them requires a key provided through a Kubernetes Secret and explicit egress to
 `api.openai.com:443`; the default package configures neither. The request sends
 the namespace risk profile to that external service.
 
-## Deploy to a remote cluster
+## Historical archive deployment
+
+These steps describe the existing split archives, not a rebuilt identity-aware
+source release. Do not publish them as containing the current startup guard or
+account isolation. Rebuilt deployments require the provisioning steps above.
 
 Copy these artifacts from `packages/` to the deployment machine:
 
@@ -186,7 +232,7 @@ from the scanner to that CIDR and SSH port, alongside existing Kubernetes API
 access. This rule does not enable external Kubernetes API or WinRM access.
 
 The Deployment also mounts the optional `cyberthunder-target-credentials`
-Secret read-only at `/etc/cyberthunder/targets`, with mode `0440`. Create it
+Secret read-only at `/etc/cyberthunder/targets`, with mode `0444`. Create it
 using an existing key authorized on the target and a verified known-hosts file:
 
 ```sh
@@ -199,6 +245,12 @@ Set the asset's SSH key file to `/etc/cyberthunder/targets/id_ed25519`. The
 Secret is optional so installations that only scan the local cluster still
 start without target credentials. No Secret-read permission is added to the
 scanner's service account.
+
+Verified transports additionally require per-account bindings and their own
+file-trust rules. A projected Secret path is not a substitute for a protected
+regular credential file when those rules reject symlinks. Provision credentials
+using the supported transport procedure; never copy untrusted paths automatically
+to make them pass validation.
 
 The existing archives are unchanged; rebuild to include these source changes.
 For an already deployed package, use the [local QEMU repair patches](../../range/README.md#qemu-ssh-from-a-uds-deployment).
@@ -214,10 +266,16 @@ From the repository root after deployment:
 ./scripts/verify-cyberthunder.sh CONTEXT DOMAIN
 ```
 
-The check requires a Ready UDS Package and Deployment, an injected Istio sidecar,
+For the historical Authservice archives, the check requires a Ready UDS Package and Deployment, an injected Istio sidecar,
 Keycloak redirects for the UI/API/assets, and rejection of invalid bearer tokens.
 Also sign in with an authorized user and confirm that the UI and `/api/v1/status`
 load. A user outside `/UDS Core/Admin` must be denied access.
+
+The existing verification script assumes the old gateway flow and is not an
+acceptance test for this native-session source profile. For a rebuilt release,
+check `/auth/status` (public 200), anonymous `/api/v1/status` (401), native browser
+login, CSRF, logout, and denial of a second account outside its assigned
+environment. Do not change the API to satisfy the obsolete anonymous probe.
 
 ## Rebuild
 
@@ -236,4 +294,6 @@ registry. Lint warns that this local image uses a tag rather than a registry
 and digest; the built archive carries the captured image and content checksums.
 The default kubectl matches Kubernetes 1.36; set `--build-arg KUBECTL_VERSION=vX.Y.Z`
 when rebuilding for a different cluster minor version. Bump the image tag and
-package version together for subsequent releases.
+package version together for subsequent releases, including the init-container
+image. The commands above are operator release steps; no image/package build or
+live realm acceptance was performed for this source integration.

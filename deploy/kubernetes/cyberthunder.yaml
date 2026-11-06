@@ -105,7 +105,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
-        fsGroup: 10001
+        # Administrators provision PVC ownership; fsGroup would make policy ancestors group-writable.
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -115,7 +115,25 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: cyberthunder-identity
+                optional: false
           env:
+            - name: CT_HOST
+              value: 0.0.0.0
+            - name: CT_PORT
+              value: "8000"
+            - name: CT_SECURITY_MODE
+              value: fleet
+            - name: CT_OIDC_CLIENT_SECRET_REF
+              value: BROWSER_LOGIN
+            - name: CT_CRED_BROWSER_LOGIN
+              valueFrom:
+                secretKeyRef:
+                  name: cyberthunder-oidc-client
+                  key: client-secret
+                  optional: false
             - name: CT_STATE_DIR
               value: /var/lib/cyberthunder
             - name: CT_LLM_BACKEND
@@ -141,14 +159,12 @@ spec:
               cpu: '2'
               memory: 2Gi
           startupProbe:
-            httpGet:
-              path: /api/v1/status
+            tcpSocket:
               port: http
             periodSeconds: 5
             failureThreshold: 30
           readinessProbe:
-            httpGet:
-              path: /api/v1/status
+            tcpSocket:
               port: http
             periodSeconds: 10
           livenessProbe:
@@ -156,6 +172,9 @@ spec:
               port: http
             periodSeconds: 20
           volumeMounts:
+            - name: application-tls
+              mountPath: /etc/cyberthunder-tls
+              readOnly: true
             - name: target-credentials
               mountPath: /etc/cyberthunder/targets
               readOnly: true
@@ -169,12 +188,51 @@ spec:
             - name: cluster-credentials
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
+      initContainers:
+        - name: identity-preflight
+          image: cyberthunder:0.2.6
+          imagePullPolicy: IfNotPresent
+          command: [python, /etc/package-identity/validate.py]
+          envFrom:
+            - configMapRef:
+                name: cyberthunder-identity
+                optional: false
+          env:
+            - name: CT_OIDC_CLIENT_SECRET_REF
+              value: BROWSER_LOGIN
+            - name: CT_STATE_DIR
+              value: /var/lib/cyberthunder
+            - name: CT_HOST
+              value: 0.0.0.0
+            - name: CT_SECURITY_MODE
+              value: fleet
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/cyberthunder
+              readOnly: true
+            - name: identity-preflight
+              mountPath: /etc/package-identity
+              readOnly: true
       volumes:
+        - name: identity-preflight
+          configMap:
+            name: cyberthunder-identity-preflight
+        - name: application-tls
+          secret:
+            secretName: cyberthunder-tls
+            # Native OIDC requires these files. The UDS mesh profile terminates TLS at its gateway.
+            optional: true
+            defaultMode: 0444
         - name: target-credentials
           secret:
             secretName: cyberthunder-target-credentials
             optional: true
-            defaultMode: 0440
+            defaultMode: 0444
         - name: state
           persistentVolumeClaim:
             claimName: cyberthunder-state

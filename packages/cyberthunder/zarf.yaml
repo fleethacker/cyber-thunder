@@ -36,6 +36,8 @@ components:
       - name: cyberthunder
         namespace: cyberthunder
         files:
+          - identity.yaml
+          - ../../deploy/kubernetes/identity-preflight.yaml
           - ../../deploy/kubernetes/cyberthunder.yaml
     images:
       - cyberthunder:0.2.6
