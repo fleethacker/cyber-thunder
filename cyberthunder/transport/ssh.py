@@ -179,18 +179,24 @@ class SSHTransport(TrustEvents, Transport):
                 password = lease.secret.reveal() if lease is not None else self._password
                 failure = None
                 try:
-                    client.connect(self.host, port=self.port, username=self.username, password=password,
-                                   key_filename=self._key, timeout=limit, banner_timeout=limit,
-                                   auth_timeout=limit, channel_timeout=limit, look_for_keys=False,
-                                   allow_agent=use_agent)
-                except paramiko.BadHostKeyException:
-                    failure = "host_key"
-                except paramiko.AuthenticationException:
-                    failure = "authentication"
-                except TrustError:
-                    raise
-                except Exception:
-                    failure = "connection"
+                    # Resolution and its audit/authorization callbacks can take
+                    # time or cancel the caller's separate bounded probe.
+                    check()
+                    if lease is not None:
+                        limit = min(limit, lease.remaining())
+                    try:
+                        client.connect(self.host, port=self.port, username=self.username, password=password,
+                                       key_filename=self._key, timeout=limit, banner_timeout=limit,
+                                       auth_timeout=limit, channel_timeout=limit, look_for_keys=False,
+                                       allow_agent=use_agent)
+                    except paramiko.BadHostKeyException:
+                        failure = "host_key"
+                    except paramiko.AuthenticationException:
+                        failure = "authentication"
+                    except TrustError:
+                        raise
+                    except Exception:
+                        failure = "connection"
                 finally:
                     password = None
                     if lease is not None:

@@ -177,19 +177,18 @@ def test_guard_failure_after_handshake_closes_client_without_translation(monkeyp
     class Revoked(RuntimeError):
         pass
 
-    calls, closed = [], []
+    connected, closed = [], []
 
     def guard():
-        calls.append(True)
-        if len(calls) == 4:
+        if connected:
             raise Revoked("killed after handshake")
 
-    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda *args, **kwargs: None)
+    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda *args, **kwargs: connected.append(True))
     monkeypatch.setattr(paramiko.SSHClient, "close", lambda *args: closed.append(True))
     tr = SSHTransport("localhost", password="p", allow_insecure_range=True, guard=guard)
     with pytest.raises(Revoked):
         tr.connect_client()
-    assert closed == [True]
+    assert connected == [True] and closed == [True]
 
 
 def test_exception_text_and_traceback_do_not_expose_credentials(monkeypatch):

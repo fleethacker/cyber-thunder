@@ -98,6 +98,31 @@ def test_ssh_authentication_failure_sanitizes_and_releases_lease(account, monkey
     no_canary("".join(traceback.format_exception(error.value)) + a.ctx.audit.path.read_text(), a.canary)
 
 
+def test_ssh_probe_guard_rechecks_after_credential_resolution(account, monkeypatch):
+    a = account
+    cancelled, connections, closed = [], [], []
+    original = sr._read_mounted
+
+    def read(source):
+        value = original(source)
+        cancelled.append(True)
+        return value
+
+    def guard():
+        if cancelled:
+            raise PermissionError("probe cancelled")
+
+    monkeypatch.setattr(sr, "_read_mounted", read)
+    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda *_a, **_kw: connections.append(True))
+    monkeypatch.setattr(paramiko.SSHClient, "close", lambda _: closed.append(True))
+    with principal_scope(a.person):
+        transport = SSHTransport.from_target(a.selected, a.ctx.settings, credential_use=a.use)
+        with pytest.raises((PermissionError, TransportError)):
+            transport.connect_client(guard=guard)
+    assert not connections, "cancelled probe reached SSH authentication"
+    assert closed and transport._client is None
+
+
 @pytest.fixture
 def winrm_case(account, certificates, monkeypatch):
     a = account
@@ -163,6 +188,20 @@ def test_winrm_per_operation_lease_closes_session_and_reads_rotation(winrm_case)
                and s.kwargs["operation_timeout_sec"] < s.kwargs["read_timeout_sec"] for s in made)
     no_canary(repr([s.commands + s.messages for s in made]) + a.ctx.audit.path.read_text(), a.canary)
     no_canary(a.ctx.audit.path.read_text(), rotated)
+
+
+def test_winrm_cleanup_interrupt_still_discards_sdk_password(winrm_case, monkeypatch):
+    a, transport, made, leases, Session = winrm_case
+
+    def interrupted(session):
+        session.http.close()
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(Session, "close", interrupted)
+    with principal_scope(a.person), pytest.raises(KeyboardInterrupt):
+        transport.run("safe-command")
+    assert leases[0]._closed and leases[0]._secret is None
+    assert made[0].protocol.transport.password is None and made[0].http.auth is None
 
 
 def test_winrm_logon_failure_sanitizes_audits_and_closes(winrm_case, monkeypatch):

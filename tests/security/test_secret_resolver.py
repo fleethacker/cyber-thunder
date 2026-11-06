@@ -210,6 +210,50 @@ def test_expiry_is_enforced_inside_a_live_lease(account, monkeypatch):
     assert not secret._buffer
 
 
+@pytest.mark.parametrize("boundary", ["acquire", "reveal"])
+@pytest.mark.parametrize("expiry", ["lease", "principal"])
+def test_guard_cannot_release_a_value_after_expiry(account, monkeypatch, boundary, expiry):
+    a = account
+    wall, monotonic = [time.time()], [time.monotonic()]
+    slow = [boundary == "acquire"]
+    monkeypatch.setattr(sr, "time", SimpleNamespace(time=lambda: wall[0], monotonic=lambda: monotonic[0]))
+
+    def guard():
+        a.guard()
+        if slow[0]:
+            if expiry == "lease":
+                monotonic[0] += 61
+            else:
+                wall[0] = a.person.expires_at + 1
+
+    use = replace(a.use, guard=guard)
+    reads = []
+    original = sr._read_mounted
+
+    def read(source):
+        reads.append(True)
+        return original(source)
+
+    monkeypatch.setattr(sr, "_read_mounted", read)
+    with principal_scope(a.person):
+        lease = use.lease()
+        try:
+            if boundary == "acquire":
+                with pytest.raises(sr.SecretResolutionError):
+                    lease.__enter__()
+                assert not reads, "expired acquisition reached the credential provider"
+            else:
+                lease.__enter__()
+                secret = lease.secret
+                slow[0] = True
+                with pytest.raises(sr.SecretResolutionError):
+                    secret.reveal()
+                assert not secret._buffer
+            assert lease._closed and lease._secret is None
+        finally:
+            lease.close()
+
+
 @pytest.mark.parametrize("change", ["subject", "purpose", "target", "generation", "reference", "username"])
 def test_binding_or_selected_target_cannot_be_substituted(account, change):
     a = account

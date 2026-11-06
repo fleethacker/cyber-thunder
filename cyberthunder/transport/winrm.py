@@ -317,17 +317,19 @@ class WinRMTransport(TrustEvents, Transport):
         tr = getattr(proto, "transport", None)
         closer = getattr(tr, "close_session", None)
         http_session = getattr(tr, "session", None)
-        if callable(closer):
-            try:
-                closer()
-            except Exception:  # noqa: BLE001
-                pass
-        if discard_password:
-            # Release known provider-owned references, without claiming that
-            # immutable copies or NTLM internals can be securely zeroized.
-            if tr is not None and hasattr(tr, "password"):
-                tr.password = None
-            if tr is not None and hasattr(tr, "encryption"):
-                tr.encryption = None
-            if http_session is not None:
-                http_session.auth = None
+        try:
+            if callable(closer):
+                try:
+                    closer()
+                except Exception:  # noqa: BLE001
+                    pass
+        finally:
+            if discard_password:
+                # Release known provider-owned references even if cancellation
+                # interrupts SDK cleanup. This cannot zeroize immutable copies.
+                if tr is not None and hasattr(tr, "password"):
+                    tr.password = None
+                if tr is not None and hasattr(tr, "encryption"):
+                    tr.encryption = None
+                if http_session is not None:
+                    http_session.auth = None

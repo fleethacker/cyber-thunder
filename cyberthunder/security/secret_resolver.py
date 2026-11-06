@@ -209,6 +209,10 @@ class Lease:
             raise SecretResolutionError("Credential lease is unavailable or expired")
         try:
             self._use.check()
+            # Authorization may involve blocking policy/registry I/O. Its
+            # return must not release a value after this lease's deadline.
+            if self._closed or time.monotonic() >= self._deadline:
+                raise SecretResolutionError("Credential lease is unavailable or expired")
         except BaseException:
             self.close()
             raise
@@ -273,6 +277,8 @@ class CredentialUse:
             if self.principal.expires_at is not None and self.principal.expires_at <= time.time():
                 raise ValueError
             self.guard()
+            if self.principal.expires_at is not None and self.principal.expires_at <= time.time():
+                raise ValueError
         except Exception:
             failed = True
         if failed:

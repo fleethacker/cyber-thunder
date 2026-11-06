@@ -2,6 +2,7 @@
 import ctypes as c
 from dataclasses import replace
 import os
+import traceback
 import uuid
 
 import pytest
@@ -144,3 +145,59 @@ def test_native_windows_abi_and_current_logon_with_mocked_credread(account, nati
     monkeypatch.setattr(wc, "_api", lambda: actual)
     assert wc.read_password(name, account.binding.username) == account.canary.encode()
     assert fake.calls == [(name, 1, 0)] and fake.freed == [True]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows thread impersonation with mocked credential data")
+def test_native_windows_rejects_thread_impersonation_before_credread(account, native, monkeypatch):
+    fake, name = native
+    actual = wc._Native()
+    monkeypatch.setattr(actual, "CredReadW", fake.CredReadW)
+    monkeypatch.setattr(actual, "CredFree", fake.CredFree)
+    monkeypatch.setattr(wc, "_api", lambda: actual)
+    impersonate, revert = actual.adv.ImpersonateSelf, actual.adv.RevertToSelf
+    impersonate.argtypes, impersonate.restype = [c.c_int], wc.w.BOOL
+    revert.argtypes, revert.restype = [], wc.w.BOOL
+    before = actual.logon()
+    assert impersonate(2)  # SecurityImpersonation, using only this process's identity.
+    try:
+        with pytest.raises(ValueError) as error:
+            wc.read_password(name, account.binding.username)
+        assert error.value.__context__ is None
+        assert not fake.calls and not fake.freed
+    finally:
+        assert revert()
+    assert actual.logon() == before
+
+
+@pytest.mark.parametrize("failure", ["read", "copy", "postread_token"])
+def test_native_exception_frees_canary_buffer_and_sanitizes(account, native, monkeypatch, failure):
+    fake, name = native
+
+    def broken(*args):
+        raise RuntimeError(account.canary)
+
+    if failure == "read":
+        original = fake.CredReadW
+
+        def read(*args):
+            original(*args)
+            broken()
+
+        monkeypatch.setattr(fake, "CredReadW", read)
+    elif failure == "copy":
+        monkeypatch.setattr(wc.c, "string_at", broken)
+    else:
+        calls = []
+
+        def logon():
+            if calls:
+                broken()
+            calls.append(True)
+            return fake.identity
+
+        monkeypatch.setattr(fake, "logon", logon)
+    with pytest.raises(ValueError) as error:
+        wc.read_password(name, account.binding.username)
+    assert fake.freed == [True]
+    assert error.value.__context__ is None and error.value.__cause__ is None
+    no_canary("".join(traceback.format_exception(error.value)), account.canary)

@@ -310,11 +310,12 @@ CT_STATE_BACKENDS=json,sqlite PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest 
   tests/transport/test_bound_accounts.py -o addopts= -q --tb=short -p no:cacheprovider
 ```
 
-The focused runs did not invoke the full release gate. Parent CI integration
-must add only the 44 Windows and 4 Linux node IDs below, with their exact reasons,
-to `scripts/ci_pytest.py` and update its count regression. The existing allowlist
-at this branch's base does not include these new modules. No broad module skip
-or production-coverage waiver is needed.
+The focused runs did not invoke the full release gate. Their platform skips are
+the 44 Windows and 4 Linux node IDs below, with their exact reasons. The independent
+review below adds two Windows-only cases, making six Linux skips for its run.
+Parent CI integration owns the exact allowlist and count regression updates in
+`scripts/ci_pytest.py`; this branch does not change that policy. No broad module
+skip or production-coverage waiver is needed.
 
 ### Exact platform skip receipts
 
@@ -405,3 +406,102 @@ No native credential entry was provisioned or accessed. Real service-logon vault
 provisioning, deployed read-only projected mounts/UID/GID assignments, real
 SSH/WinRM endpoints and operator UI execution provenance remain external
 acceptance. Linux Secret Service, Vault and CyberArk are not implemented.
+
+## Independent security review of 307328a
+
+Review base: `307328a2c5713221659c1ef2a8c4d7fb13a3eefd`. The review branch is
+`codex/credential-resolver-review`, created directly from that commit in the
+`scope-recipes` worktree. The prior `codex/control-map-review` branch is preserved.
+Review changes stay within the original 16-file diff; no access-policy V2,
+person mapping, CLI token-store, global CI policy or backlog changes are included.
+
+### Reproduced defects and fixes
+
+| Severity | Reproduction at the reviewed base | Fix |
+| --- | --- | --- |
+| P2 | A guard that finished after lease or principal expiry could still reach the credential provider during acquisition, or return plaintext from `Secret.reveal()`. Eight JSON/SQLite cases failed. | Recheck principal expiry after the guard and the lease deadline after authorization returns. Failure permanently closes the lease and clears its buffer. |
+| P2 | Cancellation in the caller's separate SSH probe guard during credential resolution was observed only after `SSHClient.connect`, allowing authentication first. Two cases failed. | Recheck both connection guards after resolution and refresh the remaining lease timeout before connecting. Preserve guard exceptions while sanitizing provider exceptions and releasing the password reference. |
+| P2 | An interrupt from WinRM SDK session cleanup skipped removal of its known password/authentication references even though the resolver lease closed. Two cases failed. | Drop the provider password, encryption and HTTP authentication references in `finally`, retaining interrupt propagation. This is reference cleanup, not secure memory erasure. |
+
+The SSH trust regression now triggers revocation when the mocked handshake
+actually completes, rather than counting guard calls. An intermediate review
+run exposed translation of a guard exception; the final fix preserves that
+existing exception contract. No failure was waived or changed into a skip.
+
+Additional review cases use real Windows token APIs to impersonate only the
+test process's own identity, verify refusal before any CredRead call, and restore
+the thread token in `finally`. CredRead/CredFree are replaced before the operation.
+Separate fake-buffer cases verify native allocation release and sanitized errors
+when reading, copying, or the post-read token check raises. All credential values
+are unique disposable canaries; no user credential entry is accessed or changed.
+
+### Review validation receipts
+
+The review reruns the focused command above with JSON and SQLite. It adds 20
+cases to the original 423-case selection. Windows Python 3.12.10: **399 passed,
+44 skipped**; Linux Python 3.12.16: **437 passed, 6 skipped**. Both collect 443
+cases with zero failures/errors. The exact machine-readable skip list and JUnit
+receipts are retained with the handoff under `.build/credential-resolver-review-*`.
+
+Linux source and permission fixtures run on `/dev/sdd` ext4 from a copied tree at
+`/home/joshua/credential-resolver-review-307328a-e345f095`, using
+`/home/joshua/cyber-thunder-linux-validation-20261105-f7018959/venv312/bin/python`.
+`/mnt/c` is used only to transfer source archives and receipts. There are no live
+target, vault, kubelet or broker checks. SSH integration uses disposable loopback
+peers; WinRM uses fake sessions and the installed SDK with networking blocked.
+The full release gate is separate from these review receipts.
+
+Windows retains exactly the 44 node IDs and their reason in the original
+platform receipt above. Linux retains the original four node IDs and reasons,
+and adds only these two:
+
+```text
+tests/security/test_wincred_resolver.py::test_native_windows_rejects_thread_impersonation_before_credread[json]
+tests/security/test_wincred_resolver.py::test_native_windows_rejects_thread_impersonation_before_credread[sqlite]
+```
+
+Their exact reason is `native Windows thread impersonation with mocked credential data`.
+The handoff's skip list is generated from JUnit and contains every platform
+node ID and reason, not a module-wide allowance.
+
+### Interfaces and limits retained by the review
+
+- `CT_CREDENTIAL_SOURCES` / `Settings.credential_sources` select the protected
+  registry. `None` alone is unconfigured. Duplicate/unknown declarations, byte
+  bounds, owner/handle trust, canonical fingerprints and fresh reloads remain
+  fail-closed. A configured missing alias never falls back to the environment.
+- `SecretResolver.bind` / `resolve`, `CredentialUse`, `Lease`, `Secret` and
+  `windows_target_name` keep their existing signatures. Binding covers issuer,
+  subject, action, target endpoint and generation; the raising guard owns fresh
+  application authorization. A caller-created `Principal` or use object is not
+  an authentication boundary against arbitrary code inside the process.
+- `make_transport(..., credential_use=...)` forwards only to SSH/WinRM.
+  `credential.use` records the actual backend and registry fingerprint;
+  resolve/failure events retain bound allowlisted metadata. The selected target's
+  legacy `environment` marker describes its alias shape, not its selected backend.
+- Native Windows lookup uses the current process logon's credential set, with
+  thread impersonation rejected. Application subjects do not each receive a
+  separate Windows vault. Shared remote accounts are not eliminated by this
+  resolver, and this review makes no zero-trust compliance claim.
+- POSIX regular-file and opt-in Kubernetes projection checks cover descriptor
+  traversal, links, ownership, modes and mid-read replacement. Real kubelet
+  read-only flags, UID/GID provisioning and dedicated-group exclusivity remain
+  deployment acceptance work. Windows requires native DACL protection.
+- Lease deadlines are checked at use boundaries. They cannot forcibly interrupt
+  a blocking callback or already executing remote operation. Python and SDK
+  copies cannot be reliably zeroized. An authenticated SSH connection keeps
+  operation guards and reads a rotated password on its next connection.
+- **Bounded dependency collection is not integrated with these leases.** The
+  existing `remediation/dependencies_io.py::_ssh` requires `_password` or `_key`,
+  so it refuses resolver-backed SSH with `explicit_ssh_credential_required`.
+  Its `_winrm` calls `_sess()` without an operation lease, which also refuses.
+  These paths fail closed before networking; do not count dependency probes as
+  working resolver integration. That module is outside the requested diff and
+  is unchanged. The SSH `connect_client(guard=...)` interface itself now checks
+  its caller's guard after credential resolution.
+
+Parent integration must retain the registry validation in `AppContext.__init__`
+alongside independently developed callbacks, and retain transport forwarding,
+registry reload guards and backend audit attribution. The parent CLI token
+store and person/access-policy changes belong to their own contexts. No push,
+live provisioning or additional work is part of this review handoff.
