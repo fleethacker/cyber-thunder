@@ -161,10 +161,13 @@ rollback verify review risk.accept maintenance.override admin policy audit expor
 kill.engage kill.release
 ```
 
-`risk.accept` and `maintenance.override` require separate exact subject, target
-and environment grants. Group grants, wildcards, node grants and permissions on
-another account associated with the same person cannot supply either action.
-Both also require a verified human and fresh authentication. See
+In verified modes, `risk.accept` and `maintenance.override` each require an exact
+issuer/subject grant with explicit target and environment selectors. Group grants,
+wildcards, node grants and permissions on another account associated with the same
+person cannot supply either action.
+Both also require a verified human and fresh authentication. Development-mode risk
+decisions remain unverified fixtures; maintenance overrides are unavailable in
+development mode. See
 [risk acceptance](RISK_ACCEPTANCE.md) and [maintenance windows](MAINTENANCE_WINDOWS.md)
 for their separate decision and execution boundaries. Neither permission grants
 ordinary approval, application or target-connection authority.
