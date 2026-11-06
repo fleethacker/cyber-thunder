@@ -201,8 +201,8 @@ try {
   assert.equal(revocation.current.identity_verified, false);
   assert.deepEqual(revocation.history, [...acceptance.history, revocation.current]);
   await drawer.getByText('Risk acceptance revoked', { exact: true }).first().waitFor();
-  await drawer.getByText(revokeReason, { exact: true }).waitFor();
-  await drawer.getByText(acceptReason, { exact: true }).waitFor();
+  await drawer.getByRole('paragraph').filter({ hasText: revokeReason }).waitFor();
+  await drawer.getByRole('paragraph').filter({ hasText: acceptReason }).waitFor();
   await drawer.getByText('Review history', { exact: true }).scrollIntoViewIfNeeded();
   await screenshot('risk-revoked-history');
   await closeDrawer();
