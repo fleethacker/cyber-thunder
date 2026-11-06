@@ -3,15 +3,18 @@
 Verified changes require a proposer and independent human approval. CAT I
 (`high`) requires two distinct human approvers; medium, low and informational
 findings require one. Unknown severity conservatively requires two. The proposer
-cannot count toward either requirement. Identity means the exact verified issuer
+cannot count toward either requirement. Policy v1 counts exact verified issuer
 and subject, independent of display name, role changes, session ID or login method.
+Policy v2 uses [explicit person associations](PERSON_ASSOCIATION.md) for quorum
+counting while preserving each acting account's separate grants and credentials.
 An application administrator has no implicit approval authority or target grant.
 
 The server reads severity from the persisted finding and binds the requirement to
 the current vetted fix, finding contents and target generation. Caller metadata,
 request bodies and typed actor headers cannot choose the count or severity.
 Internal proposal workers record the initiating principal even when using a
-service label. Workload principals can propose when authorized, but cannot approve.
+service label. In v1, workload principals can propose when authorized but cannot
+approve. Person mode requires a verified human proposer with an explicit mapping.
 
 ## Records and decisions
 
@@ -141,8 +144,10 @@ tampering, real stored assessment receipts and legacy behavior. They use isolate
 fixtures and no target connections. Actual multi-person enclave acceptance remains
 open, including the realm's mapping of distinct people to stable accounts.
 
-The rule counts distinct verified human principals, not biometric people. It
-does not correlate one person's separate accounts across issuers. Each approver
+Policy v1 counts distinct verified accounts and does not correlate one person's
+separate accounts. Policy v2 rejects explicitly mapped aliases as independent
+votes; assigning those mappings correctly remains an organizational responsibility.
+Neither policy infers a person from a name, email or group. Each approver
 must be authorized at decision time; recorded votes do not perform later IdP
 introspection or step-up. The current caller must still pass session, role and
 target authorization for every new decision and apply.

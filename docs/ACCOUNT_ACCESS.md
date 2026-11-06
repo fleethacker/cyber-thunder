@@ -137,10 +137,15 @@ second person's grant. Automatic post-scan proposals likewise need their own
 
 ## Exact policy schema and administration boundaries
 
-The root contains exactly integer `version: 1` and an `entries` array. Each entry
+Version 1 contains exactly integer `version: 1` and an `entries` array. Each entry
 requires `issuer`, exactly one of `subject` or `group`, `node_actions`, and `grants`.
 Empty arrays grant nothing. A subject and a group with the same name are distinct
 selectors. Comparison is case-sensitive, including issuer trailing slashes.
+
+[Version 2](PERSON_ASSOCIATION.md) adds explicitly provisioned person associations
+for independent approval counting. It preserves these account grant and credential
+rules; linking accounts never combines their privileges. Use the complete v2
+schema and migration instructions there rather than adding person fields to v1.
 
 Each resource grant requires a nonempty `actions` array and at least one nonempty
 `target_ids` or `environments` array. If both dimensions appear, **both must match**.
