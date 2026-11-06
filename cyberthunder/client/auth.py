@@ -236,7 +236,9 @@ class ClientAuth:
         acknowledged = session is None
         if session is not None and self.profile["revocation_endpoint"] is not None:
             acknowledged = True
-            for key in ("refresh_token", "access_token"):
+            # Refresh revocation may remove the provider session needed to
+            # validate access revocation. Still try both if either request fails.
+            for key in ("access_token", "refresh_token"):
                 token = session.get(key)
                 if token is None:
                     continue

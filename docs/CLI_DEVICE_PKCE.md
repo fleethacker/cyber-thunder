@@ -39,6 +39,14 @@ Logout completed during a polling wait prevents further redemption. PKCE does
 not cancel the provider's pending grant or alter the existing local/provider
 logout distinction and copied-JWT expiry limitation.
 
+Actual-provider testing also exposed a logout ordering issue. Keycloak's
+[revocation endpoint](https://github.com/keycloak/keycloak/blob/26.7.4/services/src/main/java/org/keycloak/protocol/oidc/endpoints/TokenRevocationEndpoint.java)
+validates the session for both token types and removes it on refresh revocation.
+Revoking refresh first can make the later access request return `invalid_token`.
+The client now revokes access first, then refresh. It still attempts the second
+request after a failure and requires both acknowledgements; HTTP 200 with an
+error remains unconfirmed. No revocation policy or API bearer checks are relaxed.
+
 ## Evidence and acceptance boundaries
 
 Focused tests cover the RFC example, random verifier size and attempt separation,

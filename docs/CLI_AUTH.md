@@ -214,7 +214,10 @@ risky action remains rejected. Configure the realm's device flow appropriately;
 see [Step-up](STEP_UP.md). No assurance fabrication or automatic retry occurs.
 
 Logout atomically clears local credentials before making bounded provider
-revocation requests. `local_cleared: true` is separate from
+revocation requests. Access revocation precedes refresh revocation, which can
+remove the provider session needed to validate the access request. Both are
+attempted even if the first fails; acknowledgement requires HTTP 200 without an
+error from every attempted request. `local_cleared: true` is separate from
 `provider_revocation: acknowledged|unconfirmed|not_needed`. A configured endpoint
 is required if the provider issues a refresh token. A 200 response acknowledges
 the revocation request; it does not prove immediate API rejection. See
