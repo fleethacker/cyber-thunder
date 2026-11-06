@@ -45,12 +45,13 @@ function ActorCard() {
 
 function ModelCard() {
   const { status } = useAppState();
-  const llm = status?.llm;
+  const restricted = status?.global_details === false;
+  const llm = restricted ? null : status?.llm;
   return (
     <Card withBorder radius="md">
       <Stack gap="xs">
         <Text fw={700}>Local model</Text>
-        {!llm ? <Loading /> : (
+        {!llm ? <Text size="sm" c="dimmed">{restricted ? 'Model status is restricted for this account.' : 'Model status is unknown.'}</Text> : (
           <>
             <Group gap="xs">
               <Badge color={llm.available ? 'blue' : 'yellow'} variant="light">{llm.available ? 'available' : 'fallback: template'}</Badge>
@@ -115,6 +116,8 @@ function DemoControls() {
 }
 
 export default function Settings() {
+  const { status } = useAppState();
+  const restricted = status?.global_details === false;
   return (
     <Stack gap="lg">
       <PageTitle title="Settings" />
@@ -122,8 +125,10 @@ export default function Settings() {
         <ActorCard />
         <ModelCard />
       </SimpleGrid>
-      <Paper withBorder p="md" radius="md"><PolicyEditor /></Paper>
-      <LinkControls />
+      {restricted || status?.policy.enabled == null
+        ? <UnavailableSetting title="Standing approval policy" restricted={restricted} />
+        : <Paper withBorder p="md" radius="md"><PolicyEditor /></Paper>}
+      {restricted || !status?.link ? <UnavailableSetting title="Link observations and controls" restricted={restricted} /> : <LinkControls />}
       <Card withBorder radius="md">
         <Group justify="space-between">
           <Stack gap={4}>
@@ -133,7 +138,14 @@ export default function Settings() {
           <Button component={Link} to="/content" variant="light">Open STIG Library</Button>
         </Group>
       </Card>
-      <DemoControls />
+      {restricted || !status ? <UnavailableSetting title="Demonstration controls" restricted={restricted} /> : <DemoControls />}
     </Stack>
   );
+}
+
+function UnavailableSetting({ title, restricted }: { title: string; restricted: boolean }) {
+  return <Paper withBorder p="md" radius="md"><Stack gap="xs">
+    <Group><Text fw={700}>{title}</Text><Badge color="gray" variant="light">{restricted ? 'Restricted' : 'Unknown'}</Badge></Group>
+    <Text size="sm" c="dimmed">{restricted ? 'Node-wide details are not available to this account.' : 'Node status did not report these details.'}</Text>
+  </Stack></Paper>;
 }

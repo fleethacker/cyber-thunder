@@ -63,7 +63,7 @@ export default function Vulnerabilities() {
     : actorProblem(actor) ? 'Set a valid acting name in the header to update, import, export, or save a schedule.'
     : readError || jobsError ? 'Refresh the local status and update history before making changes.' : null;
   const disabled = !!gateReason || !data || !!busy || refreshing;
-  const online = !!status?.link.connected;
+  const online = status?.global_details === false || status?.link === null ? null : !!status?.link?.connected;
   const canUpdate = online && !!data?.engine.available && !!data.engine.supported;
   const canExport = !!data?.generation && data.databases.some((db) => db.kind === 'main' && db.present);
   const fileError = file && (!/\.zip$/i.test(file.name) || file.size === 0) ? 'Choose a nonempty ZIP file.' : null;
@@ -146,7 +146,9 @@ export default function Vulnerabilities() {
         <Text component="h2" size="lg" fw={700} m={0}>Update databases</Text>
         <Text size="sm">Download the main database from the official repositories. The existing databases stay available until the new set passes checks.</Text>
         <Checkbox label="Include Java database in this update" checked={includeJava} disabled={disabled || running} onChange={(e) => setIncludeJava(e.currentTarget.checked)} />
-        {!online && <Text size="sm" c="orange">The node is offline. Online updates are unavailable; you can upload an offline ZIP.</Text>}
+        {!online && <Text size="sm" c={online === null ? 'dimmed' : 'orange'}>{online === null
+          ? 'Link status is restricted or unknown. Online update availability cannot be determined.'
+          : 'The node is offline. Online updates are unavailable; you can upload an offline ZIP.'}</Text>}
         {running && <Text size="sm" role="status">An update is active. Wait for it to finish before starting another update or import.</Text>}
         <Group><Button leftSection={<IconCloudDownload size={16} />} loading={busy === 'update'} disabled={disabled || running || !canUpdate} onClick={() => void update()}>Update databases</Button></Group>
       </Stack></Paper>

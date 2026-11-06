@@ -90,6 +90,27 @@ test('local freshness, import times and scanner limitations stay explicit', asyn
   assert.ok(panel.nodes().some((node) => node.type === 'Alert' && text(node).includes('do not confirm scan coverage')));
 });
 
+test('restricted and null link status do not fall back to a cached connected library or permit live checks', async (t) => {
+  const panel = await setup(t);
+  panel.library.connected = true;
+  for (const change of [
+    { global_details: false, link: null },
+    { global_details: true, link: null },
+    { global_details: false, link: { connected: true, reachability: 'reachable' } },
+  ]) {
+    Object.assign(panel.context.status, change);
+    await panel.rerender();
+    const badge = panel.nodes().find((node) => node.type === 'Badge' && /Link restricted|Reachability unknown/.test(text(node)));
+    assert.ok(badge);
+    assert.equal(badge.props.color, 'gray');
+    const button = panel.button('Check cyber.mil for updates');
+    assert.equal(button.props.disabled, true);
+    button.props.onClick(); await panel.settle();
+    assert.equal(panel.button('Refresh local view').props.disabled, false);
+  }
+  assert.ok(!panel.calls.includes('check'));
+});
+
 test('unavailable live index keeps saved catalog provenance and offers an explicit offline snapshot check', async (t) => {
   const panel = await setup(t);
   Object.assign(panel.library.catalog, { source: 'live', saved_at: '2026-01-01T00:00:00Z', live_status: 'unavailable', live_error: 'Changed download page' });

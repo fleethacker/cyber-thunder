@@ -431,16 +431,18 @@ export interface Status {
   product: string;
   version: string;
   node: string;
+  /** False means node-wide details are withheld; omitted by older full-status fixtures. */
+  global_details?: boolean;
   kill: KillStatus;
-  audit: { count: number; head: string; verified: boolean; detail: string };
-  policy: { enabled: boolean; signed_by: string | null; rules: number };
+  audit: { count: number | null; head: string | null; verified: boolean | null; detail: string };
+  policy: { enabled: boolean | null; signed_by: string | null; rules: number | null };
   adapters: string[];
   targets: number;
   fixes: number;
   demo: boolean;
-  llm: LlmStatus;
-  link: LinkState;
-  outbox: { pending: number };
+  llm: LlmStatus | null;
+  link: LinkState | null;
+  outbox: { pending: number | null };
 }
 
 export interface PolicyRule {

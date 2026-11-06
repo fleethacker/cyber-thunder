@@ -95,7 +95,8 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
   const jobs = newJob && !library.jobs.some((j) => j.id === newJob.id) ? [newJob, ...library.jobs].slice(0, 20) : library.jobs;
   const running = jobs.some(jobRunning);
   const runningIds = JSON.stringify(jobs.filter(jobRunning).map((job) => job.id));
-  const connected = status?.link.connected ?? library.connected;
+  const link = status?.global_details === false ? null : status?.link;
+  const connected = link === null ? null : link?.connected ?? library.connected;
   const blocked = disabled || !!busy;
   const selectionBlocked = blocked || dirty || running;
   const uploadBlocked = useRef(disabled);
@@ -155,7 +156,7 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
     {view !== 'transfers' && <>
     <Paper withBorder p="md" radius="md">
       <Stack gap="sm">
-        <Group justify="space-between"><Text fw={700}>Downloads for maintained products ({updates.length})</Text><Badge variant="light" color={connected ? 'teal' : 'orange'}>{linkLabel(status?.link)}</Badge></Group>
+        <Group justify="space-between"><Text fw={700}>Downloads for maintained products ({updates.length})</Text><Badge variant="light" color={connected === null ? 'gray' : connected ? 'teal' : 'orange'}>{status?.global_details === false ? 'Link restricted' : linkLabel(link)}</Badge></Group>
         <Text size="sm" c="dimmed">New releases and missing downloads for saved products and content types, compared with the {library.catalog.source === 'snapshot' ? 'snapshot' : 'last live index'}. Select files explicitly to download. A listed update does not establish scanner readiness.</Text>
         <Group>{onMaintained && <Button variant="light" onClick={onMaintained}>Change maintained products</Button>}{onTransfers && <Button variant="light" onClick={onTransfers}>Import or view transfers{running ? ' · active' : ''}</Button>}</Group>
         <LibraryTable rows={updates} label="matching updates" empty={library.selection.wanted.length ? 'No newer or missing releases are listed for your saved selections. This does not establish freshness beyond the index shown above.' : 'No files match your saved selections. Choose products and content types in Maintained.'}
@@ -171,13 +172,14 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
           </Table.Tr>} />
         <Group>
           <Button loading={busy === 'pull'} disabled={selectionBlocked || !connected || !selected.length} onClick={() => void act('pull', async () => {
-            setNewJob(await api.pullUpdates({ filenames: selected.filter((name) => updates.some((r) => r.filename === name)), pace: pace && status?.link.mode === 'test' }));
+            setNewJob(await api.pullUpdates({ filenames: selected.filter((name) => updates.some((r) => r.filename === name)), pace: pace && link?.mode === 'test' }));
             onTransfers?.();
             await onRefresh();
           })}>Download selected ({selected.length})</Button>
-          <Switch label="Pace downloads to the configured TEST rate" checked={pace && status?.link.mode === 'test'} disabled={blocked || status?.link.mode !== 'test'} onChange={(e) => setPace(e.currentTarget.checked)} />
+          <Switch label="Pace downloads to the configured TEST rate" checked={pace && link?.mode === 'test'} disabled={blocked || link?.mode !== 'test'} onChange={(e) => setPace(e.currentTarget.checked)} />
         </Group>
-        {!connected && <Text size="sm" c="orange">Use a manifest and local import while disconnected.</Text>}
+        {!connected && <Text size="sm" c={connected === null ? 'dimmed' : 'orange'}>{connected === null
+          ? 'Link status is restricted or unknown. Download availability cannot be determined.' : 'Use a manifest and local import while disconnected.'}</Text>}
         {library.selection.skipped.length > 0 && <Accordion variant="contained"><Accordion.Item value="skipped"><Accordion.Control>Unmatched or skipped ({library.selection.skipped.length})</Accordion.Control><Accordion.Panel>
           <LibraryTable rows={library.selection.skipped} label="skipped entries" empty="No skipped entries." searchText={(s) => `${s.target_id} ${s.filename} ${s.product_key} ${s.reason}`}
             headings={<><Table.Th>Item</Table.Th><Table.Th>Reason</Table.Th></>}

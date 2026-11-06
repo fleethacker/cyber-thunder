@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { browser, errorText, evaluate, format, libraryFixture, linkPresentation, mount, tableStubs, ui } from '../lib/contentTestSupport.mjs';
+import { browser, errorText, evaluate, format, libraryFixture, linkPresentation, mount, tableStubs, text, ui } from '../lib/contentTestSupport.mjs';
 
 async function setup(t, overrides = {}) {
   const env = browser(t), calls = [];
@@ -77,6 +77,35 @@ test('transfer polling errors remain visible and do not imply completion', async
   panel.failRead(); panel.env.tick(); await panel.settle();
   assert.ok(panel.nodes().some((node) => node.props?.error === 'Transfer status unavailable'));
   assert.equal(panel.button('Download selected (1)').props.disabled, true);
+});
+
+test('restricted and unknown link status preserve selection but block download handlers and stale test pacing', async (t) => {
+  const panel = await setup(t);
+  panel.props.library.connected = true;
+  Object.assign(panel.context.status.link, { mode: 'test', test_connected: true });
+  await panel.rerender();
+  await panel.change('Pace downloads to the configured TEST rate', true);
+  await panel.change('Download tracked.zip', true);
+  for (const change of [
+    { global_details: false, link: null },
+    { global_details: true, link: null },
+    { global_details: false, link: { connected: true, mode: 'test', test_connected: true } },
+  ]) {
+    Object.assign(panel.context.status, change);
+    await panel.rerender();
+    assert.equal(panel.control('Download tracked.zip').props.checked, true);
+    const button = panel.button('Download selected (1)');
+    assert.equal(button.props.disabled, true);
+    button.props.onClick(); await panel.settle();
+    const pace = panel.control('Pace downloads to the configured TEST rate');
+    assert.equal(pace.props.disabled, true);
+    assert.equal(pace.props.checked, false);
+    const message = panel.nodes().find((node) => node.type === 'Text' && text(node).includes('Download availability cannot be determined'));
+    assert.ok(message);
+    assert.equal(message.props.c, 'dimmed');
+    assert.ok(!panel.nodes().some((node) => node.type === 'Text' && text(node).includes('while disconnected')));
+  }
+  assert.deepEqual(panel.calls, []);
 });
 test('offline upload and folder import remain explicit local operations', async (t) => {
   const panel = await setup(t, { view: 'transfers' });

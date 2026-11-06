@@ -147,6 +147,25 @@ test('offline ZIP requires an explicit upload and preserves the selected file af
   assert.deepEqual(writes(panel), [['import', file], ['import', file]]);
 });
 
+test('restricted or unknown links do not claim offline or permit online update handlers', async (t) => {
+  const panel = await setup(t);
+  for (const change of [
+    { global_details: false, link: null },
+    { global_details: true, link: null },
+    { global_details: false, link: { connected: true } },
+  ]) {
+    Object.assign(panel.context.status, change);
+    await panel.rerender();
+    assert.equal(panel.button('Update databases').props.disabled, true);
+    await panel.click('Update databases', true);
+    const textNodes = panel.nodes().filter((node) => node.type === 'Text' && typeof node.props.children === 'string');
+    assert.ok(textNodes.some((node) => node.props.children.includes('Online update availability cannot be determined')));
+    assert.ok(!textNodes.some((node) => node.props.children.includes('The node is offline')));
+    assert.equal(panel.button('Refresh local status').props.disabled, false);
+  }
+  assert.deepEqual(writes(panel), []);
+});
+
 test('export creates a browser ZIP download only after an explicit click', async (t) => {
   const previousDocument = globalThis.document;
   const previousCreate = URL.createObjectURL, previousRevoke = URL.revokeObjectURL;

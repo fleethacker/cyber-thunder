@@ -38,7 +38,8 @@ export default function Content() {
   const library: CatalogLibrary | undefined = state.data;
   const running = library?.jobs.some(jobRunning) ?? false;
   useInterval(() => { if (!state.loading && !checking && !refreshRequest.current) void refresh().catch(() => {}); }, running ? 1500 : 10000, !!library);
-  const connected = status?.link.connected ?? library?.connected ?? false;
+  const link = status?.global_details === false ? null : status?.link;
+  const connected = link === null ? null : link?.connected ?? library?.connected ?? false;
   const blocked = !status || !!statusError || status.kill.engaged || !!actorProblem(actor) || !!refreshError;
   const productKey = params.get('product');
   const tab = contentTask(params.get('tab'), productKey);
@@ -74,7 +75,7 @@ export default function Content() {
         <Stack gap="sm">
           <Group justify="space-between">
             <Group gap="xs"><Badge variant="light" color={library.catalog.source === 'live' ? 'blue' : 'orange'}>{library.catalog.source === 'live' ? 'Last live index' : 'Snapshot index'}</Badge><Text size="sm">{library.catalog.total_entries.toLocaleString()} index entries · {library.products.length.toLocaleString()} products</Text></Group>
-            <Badge variant="light" color={connected ? 'teal' : 'orange'}>{linkLabel(status?.link)}</Badge>
+            <Badge variant="light" color={connected === null ? 'gray' : connected ? 'teal' : 'orange'}>{status?.global_details === false ? 'Link restricted' : linkLabel(link)}</Badge>
           </Group>
           <Text size="xs" c="dimmed">Index saved: {fmtZonedTime(library.catalog.saved_at)}. Publisher dates are shown as supplied; local event times include the timezone offset.</Text>
           <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
