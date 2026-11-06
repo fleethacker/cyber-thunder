@@ -323,8 +323,14 @@ class DiscoveryService:
 
     def _execute(self, run: DiscoveryRun, scopes: list[DiscoveryScope], actor: str, raise_stop: bool = False) -> None:
         try:
+            publication_guards = {
+                target.id: vsphere.source_guard(self.ctx, target, scopes, actor,
+                                                lambda scope: self._guard_scope(scope, actor))
+                for target in self.ctx.inventory.all()
+                if run.mode != "simulated" and target.in_scope and (target.options or {}).get("hypervisor") == "vsphere"
+            }
             observed, baseline, incomplete = self._collect(run, scopes, actor)
-            self._finish(run, scopes, observed, baseline, actor, incomplete)
+            self._finish(run, scopes, observed, baseline, actor, incomplete, publication_guards=publication_guards)
         except KillSwitchEngaged as e:
             self._stopped(run, actor, str(e))
             if raise_stop:
@@ -652,7 +658,7 @@ class DiscoveryService:
                     del previous[pid]
 
     def _finish(self, run: DiscoveryRun, scopes, observed, baseline, actor: str,
-                incomplete: dict[str, str] | None = None) -> None:
+                incomplete: dict[str, str] | None = None, *, publication_guards=None) -> None:
         incomplete = incomplete or {}
         unswept = {c for c, state in incomplete.items() if state == SCOPE_FAILED}
         with self._lock:
@@ -661,6 +667,14 @@ class DiscoveryService:
             self._retire_stale(previous, assets)
             for a in assets:
                 previous[a.id] = a
+            # Other sources and reconciliation can outlast a vSphere request.
+            # Recheck the captured grants at the actual publication boundary.
+            if publication_guards is not None:
+                reporters = {a.facts.get("reported_by") for a in assets if vsphere.is_observation(a)}
+                if not reporters.issubset(publication_guards):
+                    raise PermissionError("vsphere:source_configuration_changed")
+                for guard in publication_guards.values():
+                    guard()
             self._save_assets(previous)
         for k, v in counts.items():
             setattr(run, k, v)

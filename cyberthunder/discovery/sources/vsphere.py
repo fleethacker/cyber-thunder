@@ -90,8 +90,8 @@ def observations(instance, api_type, rows, *, endpoint, reported_by, scopes):
     return out
 
 
-def collect(ctx, target, scopes, actor, scope_guard):
-    """Use only an explicit dev account until vSphere has a delegated credential binding."""
+def source_guard(ctx, target, scopes, actor, scope_guard):
+    """Capture the source grant for both requests and later candidate publication."""
     snapshot = copy.deepcopy({k: v for k, v in target.to_dict().items()
                               if k not in {"last_scan", "notes", "added_at"}})
 
@@ -113,6 +113,12 @@ def collect(ctx, target, scopes, actor, scope_guard):
         for scope in scopes:
             scope_guard(scope)
 
+    return guard
+
+
+def collect(ctx, target, scopes, actor, scope_guard):
+    """Use only an explicit dev account until vSphere has a delegated credential binding."""
+    guard = source_guard(ctx, target, scopes, actor, scope_guard)
     guard()
     options = (target.options or {}).get("vsphere")
     if not isinstance(options, dict) or options.keys() - _OPTIONS:
@@ -140,6 +146,7 @@ def collect(ctx, target, scopes, actor, scope_guard):
     instance, api_type, rows = client.inventory(credentials)
     guard()
     assets = observations(instance, api_type, rows, endpoint=endpoint.url, reported_by=target.id, scopes=scopes)
+    guard()
     ctx.audit.append("discovery.vsphere.finish", actor,
                      {"target": target.id, "objects_received": len(rows), "candidates": len(assets),
                       "auto_accepted": 0}, subject=target.id)

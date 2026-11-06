@@ -47,9 +47,33 @@ def text(value, limit=1024):
 
 
 def reference(node, kind):
-    if node is None or node.get("type") != kind or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", node.text or ""):
+    if (node is None or len(node) or node.get("type") != kind
+            or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", node.text or "")):
         raise VsphereError("vsphere:invalid_reference")
     return node.text
+
+
+def _members(node, allowed, repeated=()):
+    """Reject unknown or duplicate fields instead of silently truncating a snapshot."""
+    seen = set()
+    if node.text and node.text.strip():
+        raise VsphereError("vsphere:invalid_xml_structure")
+    for child in node:
+        if (child.tag not in allowed or (child.tag in seen and child.tag not in repeated)
+                or (child.tail and child.tail.strip())):
+            raise VsphereError("vsphere:invalid_xml_structure")
+        seen.add(child.tag)
+
+
+def _nil(node):
+    value = node.get(f"{{{XSI}}}nil")
+    if value not in {None, "false", "0", "true", "1"}:
+        raise VsphereError("vsphere:invalid_property")
+    if value in {"true", "1"}:
+        if len(node) or (node.text and node.text.strip()):
+            raise VsphereError("vsphere:invalid_property")
+        return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -87,7 +111,10 @@ class Endpoint:
                 if ca_file is not None:
                     raise ValueError
             elif tls_trust == "ca_file":
-                if not isinstance(ca_file, str) or not Path(ca_file).is_absolute() or not Path(ca_file).is_file():
+                # Even is_file() on a Windows UNC path can open an SMB session
+                # with ambient OS credentials before the HTTPS endpoint is used.
+                if (not isinstance(ca_file, str) or ca_file.replace("\\", "/").startswith("//")
+                        or not Path(ca_file).is_absolute() or not Path(ca_file).is_file()):
                     raise ValueError
             else:
                 raise ValueError
@@ -160,6 +187,7 @@ def _xml(body, method):
         if "\x00" in decoded or re.search(r"<!\s*(?:DOCTYPE|ENTITY)", decoded, re.I):
             raise ValueError
         root = ET.fromstring(decoded)
+        _members(root, {f"{{{SOAP}}}Header", f"{{{SOAP}}}Body"})
         envelope_body = root.find(f"{{{SOAP}}}Body") if root.tag == f"{{{SOAP}}}Envelope" else None
         if envelope_body is None or len(envelope_body) != 1:
             raise ValueError
@@ -168,6 +196,7 @@ def _xml(body, method):
             raise VsphereError("vsphere:api_fault")
         if response.tag != f"{{{VIM}}}{method}Response":
             raise ValueError
+        _members(response, {f"{{{VIM}}}returnval"})
         return response
     except (UnicodeError, ValueError, ET.ParseError):
         raise VsphereError("vsphere:invalid_xml_response") from None
@@ -180,6 +209,7 @@ class InventoryClient:
         self.deadline = time.monotonic() + TOTAL_TIMEOUT
         self.total_body = 0
         self.cookie = None
+        self._secrets = ()
 
     def _exchange(self, payload, method):
         self.guard()
@@ -188,7 +218,13 @@ class InventoryClient:
             raise VsphereError("vsphere:deadline")
         connection = _Connection(self.endpoint, remaining, self.context, self.guard)
         timer_started = time.monotonic()
-        timer = threading.Timer(remaining, connection.interrupt)
+        expired = threading.Event()
+
+        def interrupt():
+            expired.set()
+            connection.interrupt()
+
+        timer = threading.Timer(remaining, interrupt)
         timer.daemon = True
         timer.start()
         try:
@@ -218,7 +254,8 @@ class InventoryClient:
             if (len(body) > MAX_BODY or self.total_body > MAX_TOTAL_BODY
                     or (lengths and len(body) != int(lengths[0]))):
                 raise VsphereError("vsphere:body_limit")
-            if time.monotonic() >= self.deadline or time.monotonic() >= timer_started + remaining:
+            if (expired.is_set() or time.monotonic() >= self.deadline
+                    or time.monotonic() >= timer_started + remaining):
                 raise VsphereError("vsphere:deadline")
             self.guard()
             if method == "Login":
@@ -231,6 +268,7 @@ class InventoryClient:
                 if session is None or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,4096}", session.value):
                     raise VsphereError("vsphere:invalid_session")
                 self.cookie = session.OutputString(attrs=[])
+                self._secrets += (session.value,)
             return body
         except PermissionError:
             raise
@@ -254,6 +292,12 @@ class InventoryClient:
         self.guard()
         return result.find(f"{{{VIM}}}returnval")
 
+    def _check_export(self, *values):
+        # Check decoded values, so XML escaping cannot turn a password or session
+        # token into persisted display metadata. Refuse the whole snapshot.
+        if any(secret in value for value in values if isinstance(value, str) for secret in self._secrets):
+            raise VsphereError("vsphere:sensitive_response")
+
     def inventory(self, credentials):
         """A complete bounded snapshot or an exception; incomplete pages never become candidates."""
         manager = collector = view = token = None
@@ -275,10 +319,16 @@ class InventoryClient:
             username, password = credentials()
             text(username, 256)
             text(password, 16384)
-            self._call("Login", "SessionManager", manager, lambda r: (
+            self._secrets = (password,)
+            session = self._call("Login", "SessionManager", manager, lambda r: (
                 _element(r, "userName", username), _element(r, "password", password)))
             del username, password
             logged_in = True
+            if session is not None:
+                key = session.findtext(f"{{{VIM}}}key")
+                if key:
+                    self._secrets += (text(key, 4096),)
+            self._check_export(instance)
             view_node = self._call("CreateContainerView", "ViewManager", views, lambda r: (
                 _element(r, "container", root, type="Folder"),
                 *(_element(r, "type", kind) for kind in PROPERTIES), _element(r, "recursive", "true")))
@@ -303,21 +353,33 @@ class InventoryClient:
 
             result = self._call("RetrievePropertiesEx", "PropertyCollector", collector, query)
             records, seen_tokens = {}, set()
+            # The initial method explicitly permits a null result for no objects.
+            # A promised continuation must still contain a result (checked below).
+            if result is None:
+                self.guard()
+                return instance, api_type, []
             for _ in range(MAX_PAGES):
                 if result is None:
                     raise VsphereError("vsphere:missing_page")
+                _members(result, {f"{{{VIM}}}objects", f"{{{VIM}}}token"}, {f"{{{VIM}}}objects"})
                 rows = result.findall(f"{{{VIM}}}objects")
                 if len(rows) > PAGE_SIZE:
                     raise VsphereError("vsphere:page_limit")
                 for row in rows:
                     record = _record(row)
+                    self._check_export(record["ref"])
+                    for value in record["properties"].values():
+                        self._check_export(*(value if isinstance(value, list) else [value]))
                     key = record["kind"], record["ref"]
                     if key in records and records[key] != record:
                         raise VsphereError("vsphere:inconsistent_inventory")
                     records[key] = record
                     if len(records) > MAX_OBJECTS:
                         raise VsphereError("vsphere:object_limit")
-                token = result.findtext(f"{{{VIM}}}token") or None
+                token_node = result.find(f"{{{VIM}}}token")
+                if token_node is not None and (len(token_node) or _nil(token_node)):
+                    raise VsphereError("vsphere:invalid_page_token")
+                token = token_node.text if token_node is not None else None
                 if not token:
                     self.guard()
                     return instance, api_type, list(records.values())
@@ -351,18 +413,27 @@ class InventoryClient:
                         continue
             finally:
                 self.cookie = None
+                self._secrets = ()
 
 
 def _record(row):
+    _members(row, {f"{{{VIM}}}obj", f"{{{VIM}}}propSet", f"{{{VIM}}}missingSet"},
+             {f"{{{VIM}}}propSet", f"{{{VIM}}}missingSet"})
     obj = row.find(f"{{{VIM}}}obj")
     kind = obj.get("type") if obj is not None else None
     if kind not in PROPERTIES or row.find(f"{{{VIM}}}missingSet") is not None:
         raise VsphereError("vsphere:incomplete_object")
     record = {"kind": kind, "ref": reference(obj, kind), "properties": {}}
+    seen = set()
     for prop in row.findall(f"{{{VIM}}}propSet"):
+        _members(prop, {f"{{{VIM}}}name", f"{{{VIM}}}val"})
         name, val = prop.findtext(f"{{{VIM}}}name"), prop.find(f"{{{VIM}}}val")
-        if name not in PROPERTIES[kind] or name in record["properties"] or val is None:
+        name_node = prop.find(f"{{{VIM}}}name")
+        if name not in PROPERTIES[kind] or name in seen or val is None or len(name_node):
             raise VsphereError("vsphere:invalid_property")
+        seen.add(name)
+        if _nil(val):
+            continue
         if name == "config.network.vnic":
             value = [text(n.text, 64) for n in val.findall(f".//{{{VIM}}}ipAddress") if n.text and not len(n)]
         elif name == "runtime.host":
