@@ -149,17 +149,16 @@ def _keys(document: dict) -> tuple[dict, dict]:
     values = document.get("keys")
     if not isinstance(values, list) or not 1 <= len(values) <= MAX_KEYS:
         raise ValueError("Invalid key set")
-    result, public = {}, []
+    result, public, seen = {}, [], set()
     for value in values:
         if not isinstance(value, dict) or not _text(value.get("kid"), 128):
             raise ValueError("Invalid key identifier")
         kid = value["kid"]
-        if kid in result:
+        if kid in seen:
             raise ValueError("Duplicate key identifier")
+        seen.add(kid)
         if any(name in value for name in ("d", "p", "q", "dp", "dq", "qi", "oth", "k", "jku", "x5u")):
             raise ValueError("Nonpublic or remote key")
-        if value.get("use", "sig") != "sig" or value.get("key_ops", ["verify"]) != ["verify"]:
-            raise ValueError("Invalid key usage")
         kty = value.get("kty")
         if kty == "RSA":
             algorithm = "RS256"
@@ -177,13 +176,28 @@ def _keys(document: dict) -> tuple[dict, dict]:
             fields = ("kty", "kid", "crv", "x", "y")
         else:
             raise ValueError("Invalid key type")
-        if value.get("alg", algorithm) != algorithm:
-            raise ValueError("Key algorithm mismatch")
         normalized = {name: value[name] for name in fields}
         normalized.update(alg=algorithm, use="sig", key_ops=["verify"])
+        # Validate public parameters even for keys that cannot verify tokens.
         parsed = jwt.PyJWK.from_dict(normalized, algorithm=algorithm)
+        if value.get("use") == "enc":
+            operations = value.get("key_ops", ["encrypt"])
+            if (kty != "RSA" or value.get("alg", "RSA-OAEP") not in {"RSA-OAEP", "RSA-OAEP-256", "RSA1_5"}
+                    or not isinstance(operations, list) or not 1 <= len(operations) <= 2
+                    or any(op not in ("encrypt", "wrapKey") for op in operations)
+                    or len(set(operations)) != len(operations)):
+                raise ValueError("Invalid encryption key metadata")
+            # Mixed provider JWKS commonly include public RSA encryption keys.
+            # Never index or cache them as signature-verification candidates.
+            continue
+        if value.get("use", "sig") != "sig" or value.get("key_ops", ["verify"]) != ["verify"]:
+            raise ValueError("Invalid key usage")
+        if value.get("alg", algorithm) != algorithm:
+            raise ValueError("Key algorithm mismatch")
         result[kid] = (algorithm, parsed.key)
         public.append(normalized)
+    if not result:
+        raise ValueError("No eligible verification keys")
     return result, {"keys": public}
 
 

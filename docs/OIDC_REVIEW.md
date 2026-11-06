@@ -1,5 +1,98 @@
 # Independent OIDC verifier review
 
+## Local Keycloak interoperability acceptance
+
+Source baseline: `9359efb8e991e5162ba56234423bdc272205cc35`. The unmodified
+baseline failed against the default JWKS of the official Keycloak **26.7.4**
+image, digest
+`sha256:3d911baa186f352563854039b95f21a7e2c01c76b527fdc64f24a0885b927bdf`.
+The disposable provider ran in WSL Ubuntu Docker, published only on
+`127.0.0.1:38443`; the native Windows application used HTTPS loopback port 38444.
+The following results apply to that baseline plus the narrow verifier correction
+described here, not to the unmodified frozen candidate.
+
+### Mixed public encryption and signing keys
+
+The actual provider returned one public RSA-OAEP key marked `use=enc` and one
+RS256 key marked `use=sig`, both without `key_ops`. The original `_keys` rejected
+the complete set with `Invalid key usage`, preventing browser authentication.
+[RFC 7517 section 4.2](https://www.rfc-editor.org/rfc/rfc7517.html#section-4.2)
+distinguishes encryption and signature uses; an encryption key must not become
+a token-verification candidate.
+
+The verifier now validates identifiers, duplicate identifiers across **all**
+entries, public-only material, RSA parameters and encryption metadata before
+excluding a public RSA encryption key. Supported excluded metadata is `use=enc`
+with absent `alg` or `RSA-OAEP`, `RSA-OAEP-256`, or `RSA1_5`; explicit operations
+must be unique `encrypt`/`wrapKey` entries. Other unsupported or contradictory
+metadata still rejects the set. This does not implement encryption or authorize
+any additional token-signing algorithm. RS256 and ES256 remain the only accepted
+token algorithms, and a set with no eligible verification key fails closed.
+
+Excluded keys never enter the verification index or persisted signing-key cache.
+A correctly signed RS256 token using the excluded key is rejected. Malformed,
+private, remote, duplicate and contradictory excluded entries cannot be hidden
+behind a valid signing key. Existing wrong-key, malformed JSON, algorithm,
+claim, TLS, cache-provenance and rotation checks remain active.
+
+### Explicit provider scope configuration
+
+A second real callback refusal came from the token-response scope check: the
+realm's default granted scopes exceeded an application configured for only
+`openid`. Configuring `CT_OIDC_SCOPE="openid profile email"` made the actual
+request and granted scope profile compatible. The strict subset check in
+`sessions.py` was preserved. Operators must explicitly configure the intended
+realm/client scope profile; provider defaults do not silently expand it.
+
+The fixture used a public browser client `ct-browser`, required PKCE S256,
+separate API audience `ct-api`, and `CT_OIDC_AUTHORIZED_PARTY=ct-browser`.
+The application used the exact HTTPS issuer and fixed provider authorization,
+token and JWKS endpoints, with its registered `/auth/callback` redirect. The
+realm mapped realm roles to the `ct_roles` string array, added the API audience
+only to the access token, and asserted `ct_kind=human` for this human-only client.
+Four random-password fixture accounts had distinct viewer, analyst, approver
+and admin roles. A protected application account policy bound each exact issuer
+and subject to target `alpha`; target `beta` was intentionally inaccessible.
+Realm authentication and application grants were both required.
+
+### Measured acceptance and remaining limits
+
+The normal, unmodified application authentication/session routes were exercised
+through the frozen production UI in installed Microsoft Edge, driven by
+Playwright. No token, signature, principal or authorization adapter was replaced.
+Synthetic inventory/findings/proposals were provisioned offline before starting
+the verified app. The provider's fixture certificate was trusted only through
+the application's child-process `SSL_CERT_FILE`; Edge used an exact certificate
+public-key pin. No system trust store was modified. Access logging was disabled
+and receipts omit passwords, JWTs, cookie values and authorization URLs.
+
+- **JSON: 54 browser checks passed. SQLite: 70 browser checks passed.** Both
+  backends completed actual provider login for all four accounts, verified
+  signed roles and account identity, filtered targets/findings, refused hidden
+  target/finding/proposal access, and enforced role restrictions. The approver
+  canceled a seeded proposal, the admin edited only its granted target, and the
+  analyst's scoped simulated scan was accepted while a cross-target scan was
+  refused. All four logouts invalidated API access. The additional SQLite checks
+  explicitly inspected S256/state/nonce requests, protected cookie flags and
+  callback replay refusal. Scan acceptance is not a full remediation rehearsal;
+  logout may revoke a still-running worker, as intended.
+- **279 tests passed, 2 expected POSIX-only skips in 82.73s**, using the shared
+  Windows Python interpreter and this checkout's `PYTHONPATH`:
+  `pytest tests/security/test_oidc.py tests/security/test_oidc_review.py tests/security/test_oidc_interop.py --tb=short --disable-warnings`.
+  This includes 51 new mixed-JWKS cases using real signed fixture tokens and
+  isolated HTTPS endpoints. The Windows junction case ran; the existing POSIX
+  permissions/symlink cases account for the skips.
+- Production scope: `cyberthunder/security/oidc.py` only. Added regression file:
+  `tests/security/test_oidc_interop.py`. No session/API, package, UI bundle, issuer
+  policy, existing cluster or shared backlog change is included.
+
+This acceptance establishes interoperability with a disposable local Keycloak
+password realm. CAC/PIV, real enclave/realm configuration, production CA
+deployment, live provider rotation/refresh, and multi-person operational
+acceptance remain open. No full application gate was run for this correction.
+
+## Earlier independent review
+
 Reviewed base: `a91171937aebc4ae401ed4bc50d452673ae34e10`.
 Scope: `security/oidc.py`, `_oidc_cache.py`, `_oidc_fetch.py` and verifier tests.
 Browser sessions, principal policy and application middleware are outside this
