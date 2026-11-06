@@ -21,6 +21,7 @@ class _Ownership:
     ctx: object
     scopes: list = field(default_factory=list)
     complete: bool = True
+    audit_required: bool = False
 
 
 def verified_mode(ctx):
@@ -90,6 +91,17 @@ def scan(ctx, run, *, target=None):
 def audit(ctx):
     # Audit is an explicit global permission; node export does not imply it.
     authorize(ctx, "audit")
+    active = _collection.get()
+    if active is not None and active.ctx is ctx:
+        active.audit_required = True
+
+
+def publication(ctx):
+    """Recheck every node permission consumed by this render, including audit evidence."""
+    authorize(ctx, "export")
+    active = _collection.get()
+    if active is not None and active.ctx is ctx and active.audit_required:
+        authorize(ctx, "audit")
 
 
 def lifecycle(ctx, *, associations=None):
@@ -127,6 +139,7 @@ def current_scopes(ctx):
 
 def finish(ctx, scopes):
     """Recheck before publishing; capture only after every historic scope matched."""
+    publication(ctx)
     if not verified_mode(ctx):
         return scopes
     from cyberthunder.security.resources import capture
@@ -160,6 +173,6 @@ def rendered(method):
             scopes = current_scopes(self.ctx)
             if scopes:
                 finish(self.ctx, scopes)
-            authorize(self.ctx, "export")
+            publication(self.ctx)
             return result
     return wrapped
