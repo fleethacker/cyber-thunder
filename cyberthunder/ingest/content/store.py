@@ -22,7 +22,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 RECORD_KEYS = ("filename", "product_key", "kind", "version", "version_label", "sha256", "etag", "bytes", "url",
                "fetched_at", "fetched_by", "source", "ingest", "upload_date", "disk_name", "title",
-               "benchmark_id", "benchmark_release")
+               "benchmark_id", "benchmark_release", "authenticity")
 
 
 class ContentStore:
@@ -67,7 +67,9 @@ class ContentStore:
     def records(self) -> list[dict]:
         doc = self.state.read_json(self.index_path, {}) or {}
         recs = doc.get("files", {}) if isinstance(doc, dict) else {}
-        return sorted(recs.values(), key=lambda r: (r.get("product_key") or "", r.get("kind") or "",
+        records = [dict(r, authenticity=r.get("authenticity") or {
+            "status": "legacy_unverified", "operator_attested": False, "disa_signature": False}) for r in recs.values()]
+        return sorted(records, key=lambda r: (r.get("product_key") or "", r.get("kind") or "",
                                                     r.get("filename") or ""))
 
     def get(self, filename: str) -> dict | None:

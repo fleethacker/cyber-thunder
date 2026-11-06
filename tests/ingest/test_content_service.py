@@ -51,7 +51,7 @@ def node(ctx, served):
 
 
 def _strip(records):
-    drop = {"fetched_at", "fetched_by", "source", "ingest", "url", "etag", "upload_date"}
+    drop = {"fetched_at", "fetched_by", "source", "ingest", "url", "etag", "upload_date", "authenticity"}
     return sorted(({k: v for k, v in r.items() if k not in drop} for r in records), key=lambda r: r["filename"])
 
 
@@ -166,6 +166,8 @@ def test_manifest_round_trip_equals_a_pull(node, served, tmp_path):
     assert res["refused"] == [] and res["verified_by"] == "manifest.lock.json" and len(res["imported"]) == 2
     assert len(res["deltas"]) == 1
     imported = node.ingest.held_content()["files"]
+    assert all(r["authenticity"]["status"] == "unsigned_dev" for r in imported)
+    assert all(not r["authenticity"]["operator_attested"] for r in imported)
     assert {r["source"] for r in imported} == {"imported"}
 
     # a pull on a fresh node holds the same content index

@@ -29,7 +29,24 @@ def _service(a: argparse.Namespace):
     from cyberthunder.context import AppContext
     from cyberthunder.ingest.service import IngestService
     ctx = AppContext(Settings.from_env(state_dir=a.state_dir))
+    if (any(getattr(a, name, None) for name in ("trusted_key", "signing_key", "signing_key_id", "signing_password_ref"))
+            or getattr(a, "content_scope", "disa-content") != "disa-content"):
+        ctx.content_signature_config = _signature_config(a)
     return ctx.ingest if isinstance(ctx.ingest, IngestService) else IngestService(ctx)
+
+
+def _signature_config(a):
+    from cyberthunder.ingest.content.signatures import ContentSignatureConfig, AuthenticityError
+    trusted = {}
+    for value in getattr(a, "trusted_key", None) or []:
+        kid, sep, path = value.partition("=")
+        if not sep or kid in trusted:
+            raise AuthenticityError("Trusted keys require unique KID=PATH entries")
+        trusted[kid] = Path(path).absolute()
+    key = getattr(a, "signing_key", None)
+    return ContentSignatureConfig(trusted_keys=trusted, scope=getattr(a, "content_scope", "disa-content"),
+        signing_key=Path(key).absolute() if key else None, signing_key_id=getattr(a, "signing_key_id", None),
+        signing_password_ref=getattr(a, "signing_password_ref", None))
 
 
 def _print(obj) -> None:
@@ -48,7 +65,8 @@ def cmd_ingest(a: argparse.Namespace) -> int:
     svc = _service(a)
     try:
         if a.sub == "stig":
-            rep = svc.ingest_stig(Path(a.file), old=a.old, actor=a.actor)
+            rep = svc.content.import_stig(Path(a.file), a.actor, old=a.old,
+                                          override_reason=getattr(a, "override_reason", None))
             s, t = rep["sizes"], rep["transfer"]
             print(f"{rep['benchmark_id']}: {rep['old_release'] or '(none)'} -> {rep['new_release']}  "
                   f"added {rep['counts']['added']}, changed {rep['counts']['changed']}, removed {rep['counts']['removed']}")
@@ -57,6 +75,7 @@ def cmd_ingest(a: argparse.Namespace) -> int:
             print(f"full {s['full_bytes']} B vs delta {s['compressed_bytes']} B "
                   f"{s['method']}; {s['ratio']}x smaller; {timing}")
             print(f"delta id: {rep['id']}")
+            print(f"authenticity: {rep['authenticity']['status']}")
             if a.rescan and rep["rescan_rule_ids"]:
                 run = svc.rescan_for_delta(rep["id"], a.actor)
                 print(f"rescan started: {run.id}")
@@ -157,14 +176,16 @@ def _fetch_manifest_cmd(a: argparse.Namespace) -> int:
     if not a.out:
         return _fail("fetch-manifest needs --out DIR")
     try:
-        lock = fetch_manifest(Path(a.file), Path(a.out), link=LinkState(), pace=a.pace)
-    except (IngestError, OSError) as e:
+        lock = fetch_manifest(Path(a.file), Path(a.out), link=LinkState(), pace=a.pace,
+                              signature_config=_signature_config(a), require_signed=a.require_signed)
+    except (IngestError, OSError, ValueError) as e:
         return _fail(str(e))
     _table([[f["filename"], _fmt_bytes(f["bytes"]), f["sha256"][:16]] for f in lock["files"]],
            ["file", "size", "sha256"])
     for f in lock["failed"]:
         print(f"  failed: {f.get('filename')}: {f['reason']}")
     print(f"lock file: {lock['path']}")
+    print(f"authenticity: {lock['authenticity']['status']} (operator attestation, not a DISA signature)")
     return 0 if not lock["failed"] else 1
 
 
@@ -199,8 +220,9 @@ def cmd_content(a: argparse.Namespace) -> int:
             for r in c["files"]:
                 ing = r.get("ingest") or {}
                 rows.append([r["filename"], r.get("product_key"), r.get("kind"), r.get("version_label"),
-                             r.get("upload_date"), r.get("source"), ing.get("datastream_path") or ing.get("delta_id") or ""])
-            _table(rows, ["file", "product", "kind", "version", "date", "source", "ingest"])
+                             r.get("upload_date"), r.get("source"), (r.get("authenticity") or {}).get("status", "legacy_unverified"),
+                             ing.get("datastream_path") or ing.get("delta_id") or ""])
+            _table(rows, ["file", "product", "kind", "version", "date", "source", "authenticity", "ingest"])
             for q in c["quarantine"]:
                 print(f"  quarantined: {q.get('filename')}: {q.get('reason')}")
         elif a.sub == "manifest":
@@ -208,9 +230,10 @@ def cmd_content(a: argparse.Namespace) -> int:
             _table([[i["filename"], i.get("product_key"), i.get("version_label")] for i in m["items"]],
                    ["file", "product", "version"])
             print(f"manifest: {m['path']} ({len(m['items'])} items)")
+            print(f"authenticity: {m['authenticity']['status']}")
             print(f"on a connected machine: cyberthunder ingest fetch-manifest {m['path']} --out <DIR>")
         elif a.sub == "import-dir":
-            res = svc.import_dir(Path(a.file), a.actor)
+            res = svc.content.import_dir(Path(a.file), a.actor, override_reason=a.override_reason)
             rows = []
             for r in res["imported"]:
                 ing = r.get("ingest") or {}
@@ -222,6 +245,7 @@ def cmd_content(a: argparse.Namespace) -> int:
             for m in res["missing"]:
                 print(f"  missing from the folder: {m}")
             print(f"verified by {res['verified_by']}")
+            print(f"authenticity: {res['authenticity']['status']}")
             if res["refused"]:
                 return 1
     except LinkDisconnected as e:
@@ -238,11 +262,14 @@ NEEDS_FILE = ("stig", "bulletin", "rescan", "fetch-manifest", "import-dir", "sca
 def _dispatch_ingest(a: argparse.Namespace) -> int:
     if a.sub in NEEDS_FILE and not a.file:
         return _fail(f"ingest {a.sub} needs a {'folder' if a.sub == 'import-dir' else 'file'}")
-    if a.sub in CONTENT_SUBS:
-        return cmd_content(a)
-    if a.sub == "scanner":
-        return cmd_scanner_import(a)
-    return cmd_ingest(a)
+    try:
+        if a.sub in CONTENT_SUBS:
+            return cmd_content(a)
+        if a.sub == "scanner":
+            return cmd_scanner_import(a)
+        return cmd_ingest(a)
+    except (ValueError, PermissionError):
+        return _fail("content request refused; check signing configuration and current authorization")
 
 
 def cmd_link(a: argparse.Namespace) -> int:
@@ -293,6 +320,13 @@ def register_cli(subparsers) -> None:
     p.add_argument("--pace", action="store_true", help="pull: hold the transfer to the emulated link rate")
     p.add_argument("--wait", action="store_true", help="pull: run in the foreground and wait for the result")
     p.add_argument("--out", help="manifest: file to write; fetch-manifest: folder to download into")
+    p.add_argument("--trusted-key", action="append", metavar="KID=PATH", help="explicit trusted Ed25519 public PEM (repeat)")
+    p.add_argument("--content-scope", default="disa-content", help="exact expected operator attestation scope")
+    p.add_argument("--signing-key", help="protected operator Ed25519 private PEM path")
+    p.add_argument("--signing-key-id", help="operator signing key identifier")
+    p.add_argument("--signing-password-ref", help="CT_CRED reference for an encrypted signing key; never the password")
+    p.add_argument("--require-signed", action="store_true", help="fetch-manifest: refuse an untrusted request before network I/O")
+    p.add_argument("--override-reason", help="import: reason for a current verified human's authorized exception")
     p.set_defaults(fn=_dispatch_ingest)
 
     p = subparsers.add_parser("link", help="observed link state and explicit test controls")

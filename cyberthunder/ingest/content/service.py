@@ -10,10 +10,12 @@ from contextvars import copy_context
 from cyberthunder.control.principal import authorize
 
 import copy
+import hashlib
 import json
 import logging
 import os
 import shutil
+import tempfile
 import threading
 import time
 import zipfile
@@ -23,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 from cyberthunder.findings.schema import utcnow
 from cyberthunder.ingest.content import fetch as fx
 from cyberthunder.ingest.content import index as ix
+from cyberthunder.ingest.content import signatures as sig
 from cyberthunder.ingest.content.http import ContentClient, ContentNetworkError
 from cyberthunder.ingest.content.select import select
 from cyberthunder.ingest.content.store import ContentStore
@@ -57,6 +60,7 @@ class ContentService:
         self.audit = ingest.audit
         self._client: ContentClient | None = None
         self._job_lock = threading.Lock()
+        self._publication_lock = threading.RLock()
         self._running: str | None = None
         self.threads: list[threading.Thread] = []      # background jobs, kept so callers can join them
 
@@ -368,6 +372,10 @@ class ContentService:
             job.update(state="running", started_at=utcnow())
             save(True)
             staging = self.store.root / "incoming"
+            trusted_live = sig.required(self.ctx)
+            if trusted_live:
+                # A job-owned directory prevents uploads or earlier jobs supplying partial bytes.
+                staging = staging / ("live-" + job["id"])
             for f, item in zip(job["files"], items):
                 authorize(self.ctx, "admin", actor=actor)
                 if self.ctx.killswitch.is_engaged():
@@ -415,7 +423,7 @@ class ContentService:
                 try:
                     res = fx.download(self.client, entry, staging, link=self._link(), max_bytes=self.max_bytes,
                                       pace=job["pace"], progress=progress, quarantine_dir=self.store.quarantine_dir,
-                                      timeout=self.timeout, stop=stop)
+                                      timeout=self.timeout, stop=stop, trusted_source=trusted_live)
                 except fx.Stopped as e:
                     f.update(state="stopped", error=str(e))
                     job["state"] = "stopped"
@@ -440,13 +448,23 @@ class ContentService:
                 self.audit.append("content.fetch", actor, {"url": res.url, "bytes": res.bytes, "seconds": res.seconds,
                                                            "sha256": res.sha256}, subject=entry.filename)
                 try:
-                    rec = self._accept(Path(res.path), entry, source="pulled", actor=actor, sha256=res.sha256,
-                                       etag=res.etag, size=res.bytes)
+                    if trusted_live:
+                        def source_check():
+                            self._network_guard()
+                            return fx.live_evidence(res, self.client)
+                        evidence = source_check()
+                        with sig.receipt(self.ctx, actor, [(res.sha256, res.bytes)], evidence, recheck=source_check):
+                            rec = self._accept(Path(res.path), entry, source="pulled", actor=actor, sha256=res.sha256,
+                                               etag=res.etag, size=res.bytes)
+                    else:
+                        rec = self._accept(Path(res.path), entry, source="pulled", actor=actor, sha256=res.sha256,
+                                           etag=res.etag, size=res.bytes)
                 except Exception as e:  # noqa: BLE001 - record and keep going with the next file
                     f.update(state="failed", error=f"accepted but not ingested: {e}")
                     continue
                 f.update(state="done", bytes=res.bytes, total=res.bytes, sha256=res.sha256,
-                         delta=rec["ingest"].get("delta"), datastream_path=rec["ingest"].get("datastream_path"))
+                         delta=rec["ingest"].get("delta"), datastream_path=rec["ingest"].get("datastream_path"),
+                         authenticity=rec["authenticity"])
                 if rec["ingest"].get("delta"):
                     job["deltas"].append(rec["ingest"]["delta"])
                 save(True)
@@ -464,9 +482,33 @@ class ContentService:
         return job
 
     # -- accepting a verified file ----------------------------------------------------------------
+    def _auth_event(self, actor, details, **kwargs):
+        from cyberthunder.control.principal import current_principal
+        principal = current_principal()
+        who = principal.actor if principal is not None else "unverified" if sig.required(self.ctx) else actor
+        self.audit.append("content.authenticity", who, details, **kwargs)
+
+    def _decision(self, evidence, actor, reason=None):
+        try:
+            return sig.decide(self.ctx, evidence, actor, reason)
+        except (sig.AuthenticityError, PermissionError):
+            self._auth_event(actor, {"status": "refused"}, outcome="blocked")
+            raise
+
     def _accept(self, path: Path, entry: ix.Entry, *, source: str, actor: str, sha256: str, etag: str | None,
                 size: int) -> dict:
-        """Move a verified file into files/, run the same ingest as a hand import, and index it."""
+        """Authorize before publication, parsing or extraction; never trust caller provenance."""
+        from cyberthunder.audit.chain import file_lock
+        with self._publication_lock, file_lock(self.store.root / "content-publish.lock"):
+            authenticity = sig.acceptance(self.ctx, actor, sha256, size)
+            if path.stat().st_size != size or size > self.max_bytes or fx.sha256_file(path) != sha256:
+                raise sig.AuthenticityError("Content bytes changed before publication")
+            self.ctx.killswitch.guard("content.import", actor)
+            self._auth_event(actor, authenticity, subject=entry.filename)
+            return self._publish(path, entry, source=source, actor=actor, sha256=sha256, etag=etag,
+                                 size=size, authenticity=authenticity)
+
+    def _publish(self, path, entry, *, source, actor, sha256, etag, size, authenticity):
         files = self.store.files_dir
         files.mkdir(parents=True, exist_ok=True)
         dest = files / fx.disk_name(entry.filename)
@@ -485,7 +527,8 @@ class ContentService:
         rec = {"filename": entry.filename, "disk_name": dest.name, "product_key": entry.product_key, "kind": entry.kind,
                "version": list(entry.version) if entry.version else None, "version_label": entry.version_label,
                "upload_date": entry.upload_date, "sha256": sha256, "etag": etag, "bytes": size, "url": entry.url,
-               "fetched_at": utcnow(), "fetched_by": actor, "source": source, "ingest": ingest}
+               "fetched_at": utcnow(), "fetched_by": actor, "source": source, "ingest": ingest,
+               "authenticity": authenticity}
         rec["title"] = entry.title
         saved = self.store.put(rec)
         from cyberthunder.ingest.content.library import ContentLibrary
@@ -530,6 +573,7 @@ class ContentService:
 
     # -- disconnected path ------------------------------------------------------------------------
     def write_manifest(self, actor: str, path: str | Path | None = None) -> dict:
+        authorize(self.ctx, "export", actor=actor)
         entries, source = self.catalog_entries()
         sel = self._select(entries)
         lc = self.store.last_check() or {}
@@ -546,13 +590,130 @@ class ContentService:
         doc = {"generated_at": utcnow(), "generated_by": actor, "node": getattr(self.settings, "node", None),
                "index_source": source, "items": items}
         out = Path(path) if path else self.default_manifest_path
-        self.store.state.write_json(out, doc)
-        digest = fx.sha256_file(out)
+        config = sig.config_for(self.ctx)
+        sig.validate_document(doc, "request")
+        if sig.required(self.ctx) and config.signing_key is None:
+            raise sig.AuthenticityError("A configured operator signing key is required")
+        envelope = sig.sign_document(doc, "request", config) if config.signing_key else doc
+        digest = sig.atomic_document(out, envelope)
+        authenticity = {"status": "operator_signed" if config.signing_key else "unsigned_dev",
+                        "operator_attested": bool(config.signing_key), "disa_signature": False,
+                        "scope": config.scope}
         self.audit.append("content.manifest", actor, {"url": str(out), "bytes": out.stat().st_size, "sha256": digest,
                                                       "items": len(items)})
-        return dict(doc, path=str(out), sha256=digest)
+        return dict(doc, path=str(out), sha256=digest, authenticity=authenticity)
 
-    def import_dir(self, path: str | Path, actor: str) -> dict:
+    def import_dir(self, path: str | Path, actor: str, *, override_reason: str | None = None) -> dict:
+        """Verify the complete bundle before parsing a single archive or publishing content."""
+        from itertools import islice
+        from cyberthunder.control.identity import require_human
+        actor = require_human(actor)
+        self.ctx.killswitch.guard("content.import", actor)
+        src = Path(path).absolute()
+        staging = self.store.root / "incoming"
+        staging.mkdir(parents=True, exist_ok=True)
+        try:
+            sig._node(src.lstat(), directory=True)
+            sig._parents(src)
+            paths = list(islice(src.iterdir(), sig.MAX_FILES + 3))
+            if len(paths) > sig.MAX_FILES + 2 or len({p.name.casefold() for p in paths}) != len(paths):
+                sig._fail()
+            for p in paths:
+                sig._node(p.lstat())
+            config = sig.config_for(self.ctx)
+            lock, raw_lock, evidence = None, None, {"status": "unsigned", "operator_attested": False, "disa_signature": False}
+            lp = src / LOCK_NAME
+            if lp.exists():
+                raw_lock = sig.read_document_file(lp)
+                lock, evidence = sig.verify_document(raw_lock, "lock", config)
+            strict_bundle = sig.required(self.ctx) or evidence["status"] != "unsigned"
+            expected = {f["disk_name"]: f for f in (lock or {}).get("files", [])}
+            actual = {p.name for p in paths if p.name not in {LOCK_NAME, MANIFEST_NAME}}
+            if lock and strict_bundle and actual != set(expected):
+                raise sig.AuthenticityError("Content bundle has missing or unlisted paths")
+            if lock and any(name not in actual for name in expected):
+                raise sig.AuthenticityError("Content bundle has missing paths")
+            manifest = (lock or {}).get("manifest")
+            request_raw = None
+            if manifest is not None:
+                request_raw = sig.read_document_file(src / MANIFEST_NAME)
+                request, request_evidence = sig.verify_document(request_raw, "request", config)
+                if manifest["sha256"] != hashlib.sha256(request_raw).hexdigest():
+                    raise sig.AuthenticityError("Content request digest mismatch")
+                if strict_bundle:
+                    # An override must explicitly cover an untrusted request as well.
+                    sig.decide(self.ctx, request_evidence, actor, override_reason)
+                    requested = {r["filename"]: r for r in request["items"]}
+                    if set(requested) != {r["filename"] for r in expected.values()}:
+                        raise sig.AuthenticityError("Content lock does not match the request scope")
+                    for row in expected.values():
+                        if any(row.get(k) != requested[row["filename"]].get(k)
+                               for k in ("url", "kind", "product_key", "version", "version_label")):
+                            raise sig.AuthenticityError("Content metadata does not match the request")
+            decision = sig.decide(self.ctx, evidence, actor, override_reason)
+            with tempfile.TemporaryDirectory(prefix="bundle-", dir=staging) as temporary:
+                work = Path(temporary)
+                digests, total = [], 0
+                for p in paths:
+                    if p.name in {LOCK_NAME, MANIFEST_NAME}:
+                        continue
+                    name = sig.filename(p.name)
+                    digest, size = sig.copy_checked(p, work / name, maximum=min(self.max_bytes, sig.MAX_FILE_BYTES))
+                    total += size
+                    if total > sig.MAX_BUNDLE_BYTES:
+                        sig._fail()
+                    info = expected.get(name)
+                    if info and strict_bundle and (digest != info["sha256"] or size != info["bytes"]):
+                        raise sig.AuthenticityError("Content file size or SHA-256 mismatch")
+                    digests.append((digest, size))
+                if lock is not None:
+                    sig.atomic_document(work / LOCK_NAME, lock)
+                self._auth_event(actor, decision)
+                def recheck():
+                    current = sig.config_for(self.ctx)
+                    if request_raw is not None and strict_bundle:
+                        sig.decide(self.ctx, sig.verify_document(request_raw, "request", current)[1], actor, override_reason)
+                    return sig.verify_document(raw_lock, "lock", current)[1] if raw_lock else evidence
+                with sig.receipt(self.ctx, actor, digests, evidence, override_reason, recheck=recheck):
+                    result = self._import_directory_contents(work, actor)
+                result["authenticity"] = decision
+                return result
+        except (sig.AuthenticityError, PermissionError, OSError):
+            self._auth_event(actor, {"status": "refused"}, outcome="blocked")
+            raise sig.AuthenticityError("Content bundle refused: check attestation, scope, paths and file hashes") from None
+
+    def import_upload(self, data: bytes, filename: str, actor: str, *, override_reason=None):
+        """Gate raw uploads before the parser; signed packages use import_dir."""
+        import hashlib
+        from cyberthunder.ingest.content.uploads import import_content, MAX_UPLOAD_BYTES
+        if not isinstance(data, bytes) or not 0 < len(data) <= MAX_UPLOAD_BYTES:
+            raise sig.AuthenticityError("Invalid content upload size")
+        evidence = {"status": "unsigned", "operator_attested": False, "disa_signature": False}
+        decision = self._decision(evidence, actor, override_reason)
+        digest = hashlib.sha256(data).hexdigest()
+        self._auth_event(actor, dict(decision, sha256=digest))
+        with sig.receipt(self.ctx, actor, [(digest, len(data))], evidence, override_reason):
+            result = import_content(self, data, filename, actor)
+        result["authenticity"] = decision
+        return result
+
+    def import_stig(self, path, actor, *, override_reason=None, **kwargs):
+        """Compatibility entry for the legacy release route/CLI, with explicit provenance."""
+        evidence = {"status": "unsigned", "operator_attested": False, "disa_signature": False}
+        decision = self._decision(evidence, actor, override_reason)
+        staging = self.store.root / "incoming"
+        staging.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="stig-", dir=staging) as temporary:
+            copied = Path(temporary) / sig.filename(Path(path).name)
+            digest, size = sig.copy_checked(path, copied, maximum=min(self.max_bytes, sig.MAX_FILE_BYTES))
+            self.ctx.killswitch.guard("content.import", actor)
+            self._auth_event(actor, dict(decision, sha256=digest))
+            self._decision(evidence, actor, override_reason)
+            with sig.receipt(self.ctx, actor, [(digest, size)], evidence, override_reason):
+                result = self.ingest.ingest_stig(copied, actor=actor, **kwargs)
+        return dict(result, authenticity=decision)
+
+    def _import_directory_contents(self, path: str | Path, actor: str) -> dict:
         from cyberthunder.control.identity import require_human
         actor = require_human(actor)
         self.ctx.killswitch.guard("content.import", actor)
@@ -595,13 +756,17 @@ class ContentService:
                 try:
                     with p.open("rb") as source:
                         data = source.read(MAX_UPLOAD_BYTES + 1)
+                    sig.acceptance(self.ctx, actor, hashlib.sha256(data).hexdigest(), len(data))
                     imported.append(import_content(self, data, p.name, actor)["record"])
                 except ValueError as exc:
                     refused.append({"filename": p.name, "reason": str(exc)})
                 continue
-            work = staging / fx.disk_name(entry.filename)
+            # The outer private bundle directory owns cleanup. A separate exclusive
+            # directory keeps working names from colliding with signed input names.
+            work = Path(tempfile.mkdtemp(prefix=".accept-", dir=src)) / fx.disk_name(entry.filename)
             shutil.copyfile(p, work)
             digest = fx.sha256_file(work)
+            sig.acceptance(self.ctx, actor, digest, work.stat().st_size)
             reason = None
             if info and info.get("sha256") and info["sha256"].lower() != digest:
                 reason = f"SHA-256 {digest} does not match {LOCK_NAME} ({info['sha256']})"
@@ -660,36 +825,50 @@ class ContentService:
 
 def fetch_manifest(manifest_path: str | Path, out_dir: str | Path, opener: Any = None, *,
                    link: LinkState | None = None, pace: bool = False, max_bytes: int = fx.DEFAULT_MAX_BYTES,
-                   progress: Callable[[dict], None] | None = None, timeout: float = 30.0) -> dict:
+                   progress: Callable[[dict], None] | None = None, timeout: float = 30.0,
+                   signature_config: sig.ContentSignatureConfig | None = None, require_signed: bool = False) -> dict:
     """Download every item of a manifest into out_dir and write out_dir/manifest.lock.json.
 
     Runs on a connected machine with no Cyber Thunder state. The lock file carries the SHA-256 of each file;
     the node checks it on import. Items that fail are listed with the reason and left out of the lock."""
-    mp = Path(manifest_path)
-    try:
-        doc = json.loads(mp.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        raise _ingest_error(f"cannot read manifest {mp}: {e}") from None
+    config = signature_config or sig.ContentSignatureConfig()
+    raw = sig.read_document_file(manifest_path)
+    doc, authenticity = sig.verify_document(raw, "request", config)
+    if (require_signed or config.signing_key or authenticity["status"] != "unsigned") and not authenticity["operator_attested"]:
+        raise sig.AuthenticityError("A trusted operator request is required before fetching")
     items = doc.get("items")
     if not isinstance(items, list):
         raise _ingest_error("manifest has no items list")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    sig._parents(out.absolute())
+    sig._node(out.lstat(), directory=True)
+    if config.signing_key and any(out.iterdir()):
+        raise sig.AuthenticityError("Signing a fetched bundle requires an empty output directory")
+    request_digest = sig.atomic_document(out / MANIFEST_NAME, sig.parse(raw))
     client = opener if isinstance(opener, ContentClient) else (ContentClient(opener=opener, timeout=timeout)
                                                                 if opener is not None else ContentClient(timeout=timeout))
     files, failed = [], []
+    received = 0
     for item in items:
         if not isinstance(item, dict) or not item.get("url"):
             failed.append({"filename": (item or {}).get("filename") if isinstance(item, dict) else None,
                            "reason": "item has no url"})
             continue
         entry = fx.entry_from_item(item)
+        remaining = sig.MAX_BUNDLE_BYTES - received
+        if remaining <= 0:
+            failed.append({"filename": entry.filename, "reason": "bundle byte limit reached"})
+            break
+        limit = min(max_bytes, sig.MAX_FILE_BYTES, remaining)
         try:
-            res = fx.download(client, entry, out, link=link, max_bytes=max_bytes, pace=pace, progress=progress,
+            res = fx.download(client, entry, out, link=link, max_bytes=limit, pace=pace, progress=progress,
                               quarantine_dir=out / "quarantine", timeout=timeout)
         except (fx.ContentError, ContentNetworkError, OSError) as e:
             failed.append({"filename": entry.filename, "url": entry.url, "reason": str(e)})
+            received += limit  # Bound failed/quarantined downloads too; never reset the budget on failure.
             continue
+        received += res.bytes
         note = None
         if item.get("expected_etag") and res.etag and item["expected_etag"] != res.etag:
             note = "newer than the manifest (ETag changed since the node checked)"
@@ -698,9 +877,13 @@ def fetch_manifest(manifest_path: str | Path, out_dir: str | Path, opener: Any =
                       "product_key": entry.product_key, "version": list(entry.version) if entry.version else None,
                       "version_label": entry.version_label, "fetched_at": res.fetched_at, "note": note})
     lock = {"generated_at": utcnow(), "manifest": {"node": doc.get("node"), "generated_at": doc.get("generated_at"),
-                                                   "sha256": fx.sha256_file(mp)},
+                                                   "sha256": request_digest},
             "files": files, "failed": failed}
-    tmp = out / (LOCK_NAME + ".tmp")
-    tmp.write_text(json.dumps(lock, indent=2), encoding="utf-8")
-    os.replace(tmp, out / LOCK_NAME)
-    return dict(lock, path=str(out / LOCK_NAME))
+    if config.signing_key and not failed:
+        envelope = sig.sign_document(lock, "lock", config)
+        state = "operator_signed"
+    else:
+        envelope, state = lock, "incomplete" if failed else "unsigned_dev"
+    sig.atomic_document(out / LOCK_NAME, envelope)
+    return dict(lock, path=str(out / LOCK_NAME), authenticity={"status": state,
+                "operator_attested": state == "operator_signed", "disa_signature": False})

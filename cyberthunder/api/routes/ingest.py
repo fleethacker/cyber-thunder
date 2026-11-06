@@ -137,7 +137,8 @@ async def ingest_stig(request: Request, ctx=CtxDep, actor: str = ActorDep) -> di
         if not path.is_file():
             raise ValueError(f"no such file on this node: {path}")
     with feature("STIG ingest"):
-        return to_plain(call_first(svc, ("ingest_stig", "stig_delta", "ingest_stig_release"), path, actor=actor))
+        reason = data.get("override_reason") if isinstance(data, dict) else None
+        return to_plain(svc.content.import_stig(path, actor, override_reason=reason))
 
 
 def _find_delta(svc, delta_id: str) -> dict:
@@ -257,7 +258,9 @@ class PullBody(BaseModel):
 
 
 class ImportDirBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     path: str
+    override_reason: str | None = Field(default=None, min_length=1, max_length=512, strict=True)
 
 
 class ContentPreferencesBody(BaseModel):
@@ -296,7 +299,7 @@ async def upload_content(request: Request, ctx=CtxDep, actor: str = ActorDep) ->
     from email import policy
     from email.parser import BytesParser
     from starlette.concurrency import run_in_threadpool
-    from cyberthunder.ingest.content.uploads import MAX_UPLOAD_BYTES, import_content
+    from cyberthunder.ingest.content.uploads import MAX_UPLOAD_BYTES
     svc = _content_svc(ctx)
     ctx.killswitch.guard("content.upload", actor)
     limit = MAX_UPLOAD_BYTES + 65536
@@ -320,9 +323,28 @@ async def upload_content(request: Request, ctx=CtxDep, actor: str = ActorDep) ->
             raise HTTPException(413, "content upload exceeds 32 MiB")
     message = BytesParser(policy=policy.default).parsebytes(prefix + body)
     parts = list(message.iter_parts())
-    if message.defects or len(parts) != 1 or parts[0].is_multipart() or parts[0].defects:
-        raise ValueError("upload exactly one file in a valid multipart body")
-    part = parts[0]
+    if message.defects or not 1 <= len(parts) <= 2 or any(p.is_multipart() or p.defects for p in parts):
+        raise ValueError("upload one file and an optional override_reason")
+    fields = {}
+    for part in parts:
+        name = part.get_param("name", header="content-disposition")
+        if name not in {"file", "override_reason"} or name in fields:
+            raise ValueError("duplicate or unsupported content upload field")
+        fields[name] = part
+    reason = None
+    if "override_reason" in fields:
+        raw_reason = fields["override_reason"].get_payload(decode=True)
+        if fields["override_reason"].get_filename() or not raw_reason or len(raw_reason) > 2048:
+            raise ValueError("invalid content override reason")
+        try:
+            reason = raw_reason.decode("utf-8")
+        except UnicodeError:
+            raise ValueError("invalid content override reason") from None
+        if len(reason) > 512:
+            raise ValueError("invalid content override reason")
+    if "file" not in fields:
+        raise ValueError("a content file is required")
+    part = fields["file"]
     filename = part.get_filename()
     if part.get_param("name", header="content-disposition") != "file" or not filename:
         raise ValueError("the upload must use a file field with a filename")
@@ -331,7 +353,7 @@ async def upload_content(request: Request, ctx=CtxDep, actor: str = ActorDep) ->
         raise ValueError("the uploaded file is empty")
     if len(payload) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "content upload exceeds 32 MiB")
-    return to_plain(await run_in_threadpool(import_content, svc.content, payload, filename, actor))
+    return to_plain(await run_in_threadpool(svc.content.import_upload, payload, filename, actor, override_reason=reason))
 
 
 @router.get("/ingest/updates")
@@ -387,4 +409,4 @@ def import_dir(body: ImportDirBody | None = None, ctx=CtxDep, actor: str = Actor
     p = Path(body.path.strip()).expanduser()
     if not p.is_dir():
         raise ValueError(f"no such folder on this node: {p}")
-    return to_plain(svc.import_dir(p, actor))
+    return to_plain(svc.content.import_dir(p, actor, override_reason=body.override_reason))

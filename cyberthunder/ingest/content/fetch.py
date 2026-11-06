@@ -18,9 +18,11 @@ import json
 import os
 import re
 import shutil
+import ssl
 import tempfile
 import time
 import urllib.parse
+import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -28,8 +30,8 @@ from typing import Any, Callable
 from xml.etree import ElementTree as ET
 
 from cyberthunder.findings.schema import utcnow
-from cyberthunder.ingest.content.http import ContentClient, ContentNetworkError, HostNotAllowed, ObservedResponse, as_client
-from cyberthunder.ingest.content.index import Entry, parse_filename
+from cyberthunder.ingest.content.http import ContentClient, ContentNetworkError, HostNotAllowed, ObservedResponse, as_client, _AllowListRedirects
+from cyberthunder.ingest.content.index import ALLOWED_HOSTS, Entry, parse_filename
 from cyberthunder.ingest.delta import BenchmarkError, _pick_member
 from cyberthunder.ingest.link import LinkState, transfer_seconds
 from cyberthunder.parsers.xccdf import parse_xccdf
@@ -39,6 +41,60 @@ DEFAULT_MAX_BYTES = 512 * 1024 * 1024          # the quarterly library is about 
 MAX_MEMBER_BYTES = 256 * 1024 * 1024
 MAX_TOTAL_UNCOMPRESSED = 2 * 1024 * 1024 * 1024
 MAX_MEMBERS = 20000
+_LIVE_HOSTS = frozenset(ALLOWED_HOSTS)
+_HTTP_SEAL = object()
+
+
+@dataclass(frozen=True)
+class _HTTPProof:
+    client: object = field(repr=False)
+    path: str = field(repr=False)
+    sha256: str
+    size: int
+    final_url: str
+    seal: object = field(repr=False)
+
+
+def _trusted_client(client):
+    """Recognize the fixed-host, certificate-verifying production transport only."""
+    allowed_handlers = {urllib.request.ProxyHandler, urllib.request.UnknownHandler,
+                        urllib.request.HTTPHandler, urllib.request.HTTPDefaultErrorHandler,
+                        urllib.request.FTPHandler, urllib.request.FileHandler, urllib.request.DataHandler,
+                        urllib.request.HTTPSHandler, urllib.request.HTTPErrorProcessor, _AllowListRedirects}
+    if (type(client) is not ContentClient or client.allow_http or client.allowed_hosts != _LIVE_HOSTS
+            or type(client.opener) is not urllib.request.OpenerDirector
+            or any(type(h) not in allowed_handlers for h in client.opener.handlers)):
+        raise ContentError("Trusted live content requires the fixed-host verified HTTPS client")
+    tls = [h for h in client.opener.handlers if type(h) is urllib.request.HTTPSHandler]
+    redirects = [h for h in client.opener.handlers if type(h) is _AllowListRedirects]
+    if (len(tls) != 1 or len(redirects) != 1 or redirects[0].client is not client
+            or tls[0]._context is None or not tls[0]._context.check_hostname
+            or tls[0]._context.verify_mode != ssl.CERT_REQUIRED):
+        raise ContentError("Trusted live content requires certificate and hostname verification")
+
+
+def _live_url(client, url):
+    _trusted_client(client)
+    if not isinstance(url, str) or not 0 < len(url) <= 4096:
+        raise ContentError("Trusted live response is missing its final URL")
+    parsed = urllib.parse.urlsplit(url)
+    if (parsed.scheme != "https" or parsed.hostname not in _LIVE_HOSTS or parsed.username is not None
+            or parsed.password is not None or parsed.fragment or any(ord(c) < 32 for c in url)):
+        raise ContentError("Trusted live response has an unapproved final URL")
+    client.check_url(url)
+    return url
+
+
+def live_evidence(result, client):
+    """A non-serializable receipt minted by download, bound to its actual response bytes."""
+    proof = getattr(result, "_source_proof", None)
+    if (not isinstance(proof, _HTTPProof) or proof.seal is not _HTTP_SEAL or proof.client is not client
+            or proof.path != str(Path(result.path).absolute()) or proof.sha256 != result.sha256
+            or proof.size != result.bytes):
+        raise ContentError("No verified live-download receipt is available")
+    _live_url(client, proof.final_url)
+    return {"status": "trusted_https_source", "operator_attested": False, "disa_signature": False,
+            "final_url": proof.final_url, "sha256": proof.sha256, "bytes": proof.size}
 
 
 class ContentError(RuntimeError):
@@ -159,11 +215,19 @@ def check_file(path: str | Path, kind: str | None = None, *, filename: str | Non
             if len(infos) > MAX_MEMBERS:
                 raise ValueError(f"zip has {len(infos)} members; refusing")
             total = 0
+            names = set()
             for m in infos:
+                from cyberthunder.ingest.content.uploads import _member_name
+                identity = _member_name(m)
+                if identity in names:
+                    raise ValueError("zip has duplicate member paths")
+                names.add(identity)
                 n = m.filename.replace("\\", "/")
                 if n.startswith("/") or re.match(r"^[A-Za-z]:", n) or ".." in n.split("/"):
                     raise ValueError(f"zip member has an unsafe path: {m.filename!r}")
                 total += m.file_size
+                if m.file_size > MAX_MEMBER_BYTES:
+                    raise ValueError("zip member exceeds the size limit")
             if total > MAX_TOTAL_UNCOMPRESSED:
                 raise ValueError(f"zip expands to {total} bytes; refusing")
             bad = zf.testzip()
@@ -251,13 +315,15 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
              progress: Callable[[dict], None] | None = None, quarantine_dir: str | Path | None = None,
              retries: int = 2, timeout: float | None = None, expected_sha256: str | None = None,
              sleep: Callable[[float], None] = time.sleep,
-             stop: Callable[[], str | None] | None = None) -> FetchResult:
+             stop: Callable[[], str | None] | None = None, trusted_source: bool = False) -> FetchResult:
     """Fetch entry.url into dest_dir and verify it. See the module docstring for the steps.
 
     `stop` is polled between chunks; a non-empty answer ends the download with Stopped and keeps the .part."""
     if pace and (link is None or link.mode != "test"):
         raise ContentError("pacing requires explicit link test mode")
     client = as_client(opener)
+    if trusted_source:
+        _trusted_client(client)
     if isinstance(entry, dict):
         entry = Entry.from_dict(entry) if "host" in entry else _entry_from_item(entry)
     if not entry.format_supported:
@@ -300,6 +366,10 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
     attempt = 0
     while True:
         attempt += 1
+        if trusted_source:
+            # Unauthenticated pre-existing partial bytes cannot inherit HTTPS provenance.
+            part.unlink(missing_ok=True)
+            meta_p.unlink(missing_ok=True)
         have = part.stat().st_size if part.exists() else 0
         saved = {}
         if have and meta_p.exists():
@@ -322,7 +392,7 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
         _write_meta(meta_p, url, etag, total)
         try:
             n = _get(client, url, part, headers, have=have, total=total, max_bytes=max_bytes, link=link, pace=pace,
-                     report=report, timeout=timeout, sleep=sleep, stop=stop)
+                     report=report, timeout=timeout, sleep=sleep, stop=stop, trusted_source=trusted_source)
             requests += 1
             if n.get("resumed"):
                 resumed = True
@@ -351,10 +421,26 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
     if total is not None and got != total:
         raise ContentError(f"{entry.filename}: got {got} of {total} bytes", resumable=True, filename=entry.filename)
     digest = sha256_file(part)
+    if trusted_source and (digest != n["source_sha256"] or got != n["source_bytes"]):
+        raise ContentError("Downloaded bytes changed before integrity checking")
     report(state="verifying", bytes=got, total=total)
     reason = None
     if expected_sha256 and digest.lower() != expected_sha256.lower():
         reason = f"SHA-256 {digest} does not match the expected {expected_sha256}"
+    elif trusted_source:
+        # Parse a private, stable snapshot of exactly the authenticated response.
+        # Progress callbacks and unrelated staging files cannot supply parser input.
+        from .signatures import copy_checked, AuthenticityError
+        with tempfile.TemporaryDirectory(prefix=".verified-", dir=dest_dir) as directory:
+            snapshot = Path(directory) / name
+            try:
+                copied, size = copy_checked(part, snapshot, maximum=max_bytes)
+                if copied != digest or size != got:
+                    raise AuthenticityError("Downloaded bytes changed before integrity checking")
+                check_file(snapshot, entry.kind, filename=entry.filename)
+                os.replace(snapshot, final)
+            except ValueError as e:
+                reason = str(e)
     else:
         try:
             check_file(part, entry.kind, filename=entry.filename)
@@ -365,12 +451,18 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
         qpath = quarantine(part, qdir, reason, filename=entry.filename, url=url)
         report(state="quarantined", bytes=got, total=total, error=reason)
         raise Quarantined(f"{entry.filename}: {reason}", path=qpath, filename=entry.filename)
-    os.replace(part, final)
+    if trusted_source:
+        part.unlink(missing_ok=True)
+    else:
+        os.replace(part, final)
     secs = round(time.monotonic() - started, 3)
     report(state="done", bytes=got, total=total)
-    return FetchResult(filename=entry.filename, path=str(final), url=url, bytes=got, sha256=digest, etag=etag,
-                       last_modified=last_mod, seconds=secs, estimate_seconds=estimate, resumed=resumed,
-                       restarted=restarted, requests=requests)
+    result = FetchResult(filename=entry.filename, path=str(final), url=url, bytes=got, sha256=digest, etag=etag,
+                         last_modified=last_mod, seconds=secs, estimate_seconds=estimate, resumed=resumed,
+                         restarted=restarted, requests=requests)
+    if trusted_source:
+        result._source_proof = _HTTPProof(client, str(final.absolute()), digest, got, n["final_url"], _HTTP_SEAL)
+    return result
 
 
 def _write_meta(p: Path, url: str, etag: str | None, total: int | None) -> None:
@@ -378,7 +470,7 @@ def _write_meta(p: Path, url: str, etag: str | None, total: int | None) -> None:
 
 
 def _get(client: ContentClient, url: str, part: Path, headers: dict, *, have: int, total: int | None, max_bytes: int,
-         link: LinkState | None, pace: bool, report, timeout, sleep, stop=None) -> dict:
+         link: LinkState | None, pace: bool, report, timeout, sleep, stop=None, trusted_source=False) -> dict:
     try:
         status, h, resp = client.open("GET", url, headers=headers, timeout=timeout)
     except ContentNetworkError as e:
@@ -387,6 +479,12 @@ def _get(client: ContentClient, url: str, part: Path, headers: dict, *, have: in
         raise ContentError(str(e), resumable=True) from None
     info: dict[str, Any] = {"etag": h.get("etag")}
     try:
+        if trusted_source:
+            final = getattr(resp, "url", None) or (resp.geturl() if hasattr(resp, "geturl") else None)
+            info["final_url"] = _live_url(client, final)
+            if have:
+                raise ContentError("Trusted live downloads cannot inherit partial bytes")
+        source_hash = hashlib.sha256()
         if status == 206 and have:
             m = re.match(r"bytes\s+(\d+)-", h.get("content-range", ""))
             if not m or int(m.group(1)) != have:
@@ -441,6 +539,7 @@ def _get(client: ContentClient, url: str, part: Path, headers: dict, *, have: in
                     fh.write(chunk[: max(0, max_bytes - (done - len(chunk)))])
                     raise SizeCapExceeded(f"{url}: more than {max_bytes} bytes")
                 fh.write(chunk)
+                source_hash.update(chunk)
                 if stop is not None:
                     why = stop()
                     if why:
@@ -459,6 +558,7 @@ def _get(client: ContentClient, url: str, part: Path, headers: dict, *, have: in
                     report(state="downloading", bytes=done, total=expect_total)
         if expect_total is not None and done < expect_total:
             raise ContentError(f"{url}: connection closed after {done} of {expect_total} bytes", resumable=True)
+        info.update(source_sha256=source_hash.hexdigest(), source_bytes=done)
         return info
     except Exception as exc:
         if isinstance(resp, ObservedResponse):

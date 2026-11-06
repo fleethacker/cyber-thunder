@@ -134,6 +134,7 @@ def test_cli_smoke(state_dir, bench_pair, capsys, monkeypatch):
     assert _cli(state_dir, "ingest", "stig", str(new), "--old", str(old)) == 0
     out = capsys.readouterr().out
     assert "added 1, changed 2, removed 1" in out and "transfer time unknown" in out
+    assert "authenticity: unsigned_dev" in out
     assert _cli(state_dir, "ingest", "history") == 0
     assert json.loads(capsys.readouterr().out)["deltas"]
 
