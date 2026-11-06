@@ -342,6 +342,9 @@ def expected_skips(platform: str) -> dict[str, str]:
     allowed.update(NATIVE_OPERATOR_SKIPS[platform])
     allowed.update(SCAP_IMPORT_SKIPS[platform])
     allowed.update(SSH_KEY_SKIPS[platform])
+    allowed["tests/scan_workers/test_review.py::test_sqlite_writer_admission_rechecks_authority[json]"] = (
+        "SQLite writer admission is specific to the SQLite backend"
+    )
     if platform == "linux":
         # The native Windows command boundary runs on the Windows matrix leg.
         allowed["tests/ops/test_wsl_keepalive.py::test_keepalive_operator_and_task_boundaries"] = "native Windows PowerShell task-boundary fixture"

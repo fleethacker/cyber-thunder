@@ -268,6 +268,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/KUBERNETES_FIX_SAFETY.md](docs/KUBERNETES_FIX_SAFETY.md) | investigation-first Kubernetes guidance, retired deletion actions and recovery limits |
 | [docs/KUBERNETES_NAMESPACE_SCOPE.md](docs/KUBERNETES_NAMESPACE_SCOPE.md) | explicit namespace collection, unavailable cluster evidence and read-only limits |
 | [docs/SCAN_WORKERS.md](docs/SCAN_WORKERS.md) | bounded parallel collection, account isolation, retained observations and cooperative timeout limits |
+| [docs/SCAN_WORKERS_REVIEW.md](docs/SCAN_WORKERS_REVIEW.md) | publication authority, partial-evidence preservation and remaining recovery limits |
 | [docs/HOST_SCOPE.md](docs/HOST_SCOPE.md) | container-host setup, explicit host access and reviewed IP/range scope |
 | [docs/WSL_KEEPALIVE.md](docs/WSL_KEEPALIVE.md) | optional per-user startup task for the Windows test environment, status and removal |
 | [docs/SCAN_CONTENT.md](docs/SCAN_CONTENT.md) | missing content, scanner configuration, applicability and incomplete scan coverage |

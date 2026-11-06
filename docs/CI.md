@@ -197,7 +197,14 @@ literal node IDs, reasons and opposite-platform XML hashes. The independent
 [key review](SSH_KEY_REVIEW.md) added no further platform exceptions. Changed
 reasons, new parameters, wrong-platform skips and teardown skips remain refused.
 
-That permits at most **109 skipped cases on Linux and 101 on Windows**, with every
+The scan-publication review adds one exact JSON-only omission on both runners:
+`tests/scan_workers/test_review.py::test_sqlite_writer_admission_rechecks_authority[json]`,
+with reason `SQLite writer admission is specific to the SQLite backend`. Its
+SQLite counterpart passed on native Windows and Linux; it cannot be skipped.
+The [independent review](SCAN_WORKERS_REVIEW.md) records the scope and receipts.
+Policy tests reject changed names/reasons, the SQLite case and teardown skips.
+
+That permits at most **110 skipped cases on Linux and 102 on Windows**, with every
 case individually constrained. Missing Git or Bash is not an allowed skip on
 either runner. Windows runs the command-shell and file-sharing tests that
 Linux skips.

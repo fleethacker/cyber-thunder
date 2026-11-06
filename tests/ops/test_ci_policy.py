@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 109 and len(windows) == 101
+    assert len(linux) == 110 and len(windows) == 102
     native_acl = {node: reason for node, reason in linux.items()
                   if node.startswith("tests/security/test_windows_file_trust.py::")}
     assert len(native_acl) == 46
@@ -433,3 +433,24 @@ def test_ssh_key_skip_policy_matches_opposite_platform_evidence(platform, count)
             ))
             assert policy.skips[0]["allowed"] is accepted
             assert bool(policy.errors) is not accepted
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_scan_writer_skip_does_not_allow_sqlite_or_changed_cases(platform):
+    node = "tests/scan_workers/test_review.py::test_sqlite_writer_admission_rechecks_authority[json]"
+    reason = "SQLite writer admission is specific to the SQLite backend"
+    assert expected_skips(platform)[node] == reason
+    for candidate, explanation, phase, accepted in (
+        (node, reason, "call", True),
+        (node.replace("[json]", "[sqlite]"), reason, "call", False),
+        (node + "[new]", reason, "call", False),
+        (node, reason + " changed", "call", False),
+        (node, reason, "teardown", False),
+    ):
+        policy = RegressionPolicy(ROOT, platform)
+        policy.pytest_runtest_logreport(SimpleNamespace(
+            nodeid=candidate, when=phase, outcome="skipped", skipped=True,
+            longrepr=("file.py", 1, "Skipped: " + explanation),
+        ))
+        assert policy.skips[0]["allowed"] is accepted
+        assert bool(policy.errors) is not accepted
