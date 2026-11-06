@@ -8,7 +8,7 @@ import type {
   ReportHistory, SavedReportContent, TargetOutcome, TargetReport, UpdateCheck,
   ContentUploadResult, LibraryPreferences, LibraryPreferencesInput, StigLibrary, FindingReviewHistory, FindingReviewInput, ImpactReceipt,
   VulnerabilityJob, VulnerabilitySettings, VulnerabilitySettingsInput, VulnerabilityStatus,
-  HostRegistration, RuntimeContext, TargetReadiness, ScopeRangeInput, ScopeRangePreview, SavedScopeRanges,
+  HostRegistration, RuntimeContext, TargetReadiness, ScopeRangeInput, ScopeRangePreview, SavedScopeRanges, VsphereRun, VsphereRunSummary,
 } from './types';
 import { sessionIdentity, sessionHeaders, sessionExpired, authorityRevision, parseStepUpChallenge, stepUpRequired, type StepUpChallenge } from './identity';
 
@@ -181,6 +181,9 @@ export const api = {
     post<DiscoveryRun>('/discovery/sweep', scopes && scopes.length ? { mode, scopes } : { mode }),
   discoveryRuns: () => get<DiscoveryRun[]>('/discovery/runs'),
   discoveryRun: (id: string) => get<DiscoveryRun & { assets: DiscoveredAsset[] }>(`/discovery/runs/${enc(id)}`),
+  vsphereCollect: (id: string) => post<VsphereRun>(`/discovery/vsphere/${enc(id)}/collect`),
+  vsphereRuns: (id: string) => get<VsphereRunSummary[]>(`/discovery/vsphere/${enc(id)}/runs`, { limit: 20 }),
+  vsphereRun: (id: string, run: string) => get<VsphereRun>(`/discovery/vsphere/${enc(id)}/runs/${enc(run)}`),
   discoveredAssets: (status?: DiscoveryStatus) => get<DiscoveredAsset[]>('/discovery/assets', { status }),
   discoveredAsset: (id: string) => get<DiscoveredAsset>(`/discovery/assets/${enc(id)}`),
   acceptAsset: (id: string, body: DiscoveryAccept) => post<Target>(`/discovery/assets/${enc(id)}/accept`, body),

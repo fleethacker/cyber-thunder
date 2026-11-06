@@ -327,6 +327,7 @@ export interface Target {
   id: string;
   name: string;
   environment?: string;
+  authorization_id?: string;
   asset_type: AssetType;
   transport: string;
   address: string | null;
@@ -601,6 +602,28 @@ export interface DiscoveryOverview {
   last_run: DiscoveryRun | null;
   counts: Partial<Record<DiscoveryStatus, number>>;
 }
+
+export interface VsphereRunSummary {
+  version: 1;
+  id: string;
+  source: 'vsphere';
+  target_id: string;
+  authorization_scope: { version: 1; target_id: string; environment: string; authorization_id: string };
+  requested_by: string;
+  requested_principal: null | {
+    kind: 'human' | 'workload' | 'dev'; iss: string; sub: string; name: string;
+    roles: string[]; via: 'oidc' | 'mesh' | 'dev'; verified: boolean;
+  };
+  started_at: string;
+  finished_at: string | null;
+  status: 'running' | 'finished' | 'failed' | 'stopped';
+  collection_started: boolean;
+  complete: boolean;
+  observation_count: number;
+  error: string | null;
+}
+
+export interface VsphereRun extends VsphereRunSummary { observations: DiscoveredAsset[] }
 
 export interface OpenPort { port: number; proto: string; service: string; product: string; version: string; banner: string }
 

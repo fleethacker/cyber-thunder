@@ -4,12 +4,14 @@ import { notifications } from '@mantine/notifications';
 import { IconDots, IconPencil, IconPlus, IconTrash, IconZoomScan } from '@tabler/icons-react';
 import { useMemo, useRef, useState } from 'react';
 import { api, errorText } from '../api/client';
+import { authorityRevision } from '../api/identity';
 import type { AssetFacts, Severity, Target } from '../api/types';
 import { PermissionButton, PermissionConfirm, PermissionGate, usePermissions } from '../components/PermissionGate';
 import { DiscoveryPanel } from '../components/DiscoveryPanel';
 import { AssetIcon, AsyncView, Empty, ErrorBox, JsonView, Loading, Mono, PageTitle, SeverityBadge, SimulatedBadge } from '../components/common';
 import { TargetForm } from '../components/TargetForm';
 import { HostSetup } from '../components/HostSetup';
+import { isVsphereTarget, VsphereInventory } from '../components/VsphereInventory';
 import { useSetupAccess } from '../components/setupAccess';
 import { fmtAgo } from '../lib/format';
 import { useAsync } from '../lib/hooks';
@@ -26,9 +28,11 @@ export default function Assets() {
   const [modalError, setModalError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [facts, setFacts] = useState<{ target: Target; data?: AssetFacts; error?: string } | null>(null);
+  const [vsphereFor, setVsphereFor] = useState<{ id: string; authority: number } | null>(null);
   const [loadingDemo, setLoadingDemo] = useState(false);
   const blocked = useSetupAccess();
   const permission = usePermissions();
+  const viewAuthority = authorityRevision();
   const inFlight = useRef(false);
 
   const counts = useMemo(() => {
@@ -164,7 +168,10 @@ export default function Assets() {
                         </Table.Td>
                         <Table.Td>
                           <Group gap={4} wrap="nowrap">
-                            <PermissionButton action="discover" size="xs" variant="light" leftSection={<IconZoomScan size={14} />} disabled={!!blocked || !t.in_scope} onClick={() => void discover(t)}>Read asset facts</PermissionButton>
+                            {isVsphereTarget(t) ? <PermissionButton action="read" size="xs" variant="light" onClick={() => {
+                              if (permission.can('read') && viewAuthority === authorityRevision()) setVsphereFor({ id: t.id, authority: viewAuthority });
+                            }}>View vSphere inventory</PermissionButton> :
+                              <PermissionButton action="discover" size="xs" variant="light" leftSection={<IconZoomScan size={14} />} disabled={!!blocked || !t.in_scope} onClick={() => void discover(t)}>Read asset facts</PermissionButton>}
                             {permission.can('admin') ? <Menu position="bottom-end">
                               <Menu.Target><ActionIcon variant="subtle" aria-label="More"><IconDots size={16} /></ActionIcon></Menu.Target>
                               <Menu.Dropdown>
@@ -188,6 +195,9 @@ export default function Assets() {
       {open.error && <ErrorBox error={`Open finding counts unavailable: ${open.error}`} />}
 
       <DiscoveryPanel onInventoryChanged={() => void st.reload()} />
+      <VsphereInventory target={vsphereFor?.authority === authorityRevision()
+        ? st.data?.find(t => t.id === vsphereFor.id && isVsphereTarget(t)) ?? null : null}
+        blocked={blocked} onClose={() => setVsphereFor(null)} />
 
       <HostSetup opened={hostSetup && permission.can('admin')} onClose={() => setHostSetup(false)} onSaved={() => void st.reload()}
         onUseLocal={(defaults) => { setHostSetup(false); setForm({ open: true, target: null, defaults }); }} />
