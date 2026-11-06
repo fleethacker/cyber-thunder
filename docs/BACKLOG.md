@@ -362,7 +362,7 @@ Device identity at acceptance is ZT-30.
 |---|---|---|---|---|---|
 | DEP-01 | Linux, fresh-cluster and existing-cluster paths marked untested (`docs/DEPLOYMENT.md:26`); only the WSL2 path has a recorded run | Run and record each, rewrite the status line | Each path has a dated result | days | before fleet |
 | DEP-02 | WSL keep-alive is manual (`docs/DEPLOYMENT.md:215-224`) | `scripts/wsl-keepalive.ps1` sets `.wslconfig` and a logon task; bootstrap prints status | After logout and login the cluster is up with no manual step | hours | now |
-| DEP-03 | Podinfo pinned by tag, not digest (`docs/DEPLOYMENT.md:381`) | Pin the digest | The package lists the digest | hours | before fleet |
+| DEP-03 | Implemented: Podinfo's package image and chart values use the same verified multi-platform digest ([package evidence](../packages/podinfo/README.md)); actual chart rendering and package lint passed | Rebuild existing packages before deployment; review later image/chart updates separately | The rendered Deployment and package image list match the downloaded registry manifest digest | complete | 2026-11-06 UTC |
 | DEP-04 | DADMS entries for the app and each dependency, and no approved offline model runtime (friction F1, F2) | Open registration and evaluation requests; keep the template path as the fielded default | A sponsor and ticket numbers appear in `docs/fleet.yaml` | week+ | before fleet |
 
 Packaging the app itself is ZT-01.
