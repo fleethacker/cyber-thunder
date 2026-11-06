@@ -21,7 +21,7 @@ from cyberthunder.state.json_files import read_text_retry, replace_file
 ASSET_TYPES = ("linux", "windows", "cisco_ios", "kubernetes", "containers")
 # generic transports are implemented in cyberthunder.transport; adapter-specific ones (simulated, file,
 # kubeconfig) are provided by the adapter for that asset type via Adapter.make_transport().
-TRANSPORTS = ("ssh", "winrm", "local", "fixture", "simulated", "file", "kubeconfig")
+TRANSPORTS = ("ssh", "winrm", "local", "fixture", "simulated", "file", "kubeconfig", "vsphere")
 
 
 class ScopeViolation(PermissionError):

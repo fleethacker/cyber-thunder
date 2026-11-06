@@ -6,6 +6,8 @@ No redirect, proxy, ambient credential, guest operation or inventory mutation.
 from __future__ import annotations
 
 import http.client
+import base64
+import binascii
 import ipaddress
 import re
 import socket
@@ -16,7 +18,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 SOAP = "http://schemas.xmlsoap.org/soap/envelope/"
 VIM = "urn:vim25"
@@ -123,12 +125,15 @@ class Endpoint:
         except (ValueError, TypeError, OSError):
             raise VsphereError("vsphere:invalid_endpoint_or_trust") from None
 
-    def tls_context(self):
+    def tls_context(self, *, ca_data=None):
         try:
-            context = ssl.create_default_context(cafile=self.ca_file)
+            # A caller that captures CA bytes can construct trust from precisely
+            # that snapshot, without reopening a replaceable path during setup.
+            context = (ssl.create_default_context(cadata=ca_data.decode("ascii")) if ca_data is not None
+                       else ssl.create_default_context(cafile=self.ca_file))
             context.minimum_version = ssl.TLSVersion.TLSv1_2
             return context
-        except (OSError, ssl.SSLError):
+        except (OSError, ValueError, ssl.SSLError):
             raise VsphereError("vsphere:invalid_tls_trust") from None
 
 
@@ -203,9 +208,9 @@ def _xml(body, method):
 
 
 class InventoryClient:
-    def __init__(self, endpoint: Endpoint, guard):
+    def __init__(self, endpoint: Endpoint, guard, *, context=None):
         self.endpoint, self.guard = endpoint, guard
-        self.context = endpoint.tls_context()
+        self.context = endpoint.tls_context() if context is None else context
         self.deadline = time.monotonic() + TOTAL_TIMEOUT
         self.total_body = 0
         self.cookie = None
@@ -236,6 +241,7 @@ class InventoryClient:
             self.guard()  # Immediately before transmitting session credentials or the next page token.
             connection.request("POST", "/sdk", payload, headers)
             response = connection.getresponse()
+            self.guard()
             if response.status != 200:
                 raise VsphereError("vsphere:http_failure")
             if response.getheader("Content-Encoding", "identity").lower() != "identity":
@@ -295,8 +301,28 @@ class InventoryClient:
     def _check_export(self, *values):
         # Check decoded values, so XML escaping cannot turn a password or session
         # token into persisted display metadata. Refuse the whole snapshot.
-        if any(secret in value for value in values if isinstance(value, str) for secret in self._secrets):
+        if any(self._sensitive(value) for value in values if isinstance(value, str)):
             raise VsphereError("vsphere:sensitive_response")
+
+    def _sensitive(self, value, depth=0):
+        if any(secret in value for secret in self._secrets):
+            return True
+        if depth == 2:
+            return False
+        decoded = unquote(value)
+        if decoded != value and self._sensitive(decoded, depth + 1):
+            return True
+        # Bounded exported fields may contain an encoded envelope, not just an
+        # encoding of the secret alone. Reject common encoded credential echoes.
+        for token in re.findall(r"[A-Za-z0-9+/_-]{16,}={0,2}", value):
+            try:
+                raw = base64.b64decode(token + "=" * (-len(token) % 4), altchars=b"-_", validate=True)
+            except (ValueError, binascii.Error):
+                continue
+            if any(self._sensitive(raw.decode(encoding, "replace"), depth + 1)
+                   for encoding in ("utf-8", "utf-16le")):
+                return True
+        return False
 
     def inventory(self, credentials):
         """A complete bounded snapshot or an exception; incomplete pages never become candidates."""

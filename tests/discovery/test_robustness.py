@@ -154,7 +154,7 @@ def test_run_left_running_by_a_dead_process_is_closed_as_interrupted(ctx):
 def test_cli_sweep_without_wait_runs_to_completion(ctx, state_dir, monkeypatch, capsys):
     from cyberthunder.discovery.cli import register_cli
 
-    def slow_collect(self, run, scopes, actor):
+    def slow_collect(self, run, scopes, actor, *, vsphere_access=None):
         time.sleep(0.3)
         return [], None, {}
     monkeypatch.setattr(DiscoveryService, "_collect", slow_collect)

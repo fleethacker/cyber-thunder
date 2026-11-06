@@ -1,14 +1,15 @@
 import copy
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from cyberthunder.control.killswitch import KillSwitchEngaged
-from cyberthunder.control.principal import operation_scope
+from cyberthunder.control.principal import Principal, operation_scope, principal_scope
 from cyberthunder.discovery.models import DiscoveredAsset, DiscoveryRun, DiscoveryScope
 from cyberthunder.discovery.service import DiscoveryService, SCOPE_COMPLETE
-from cyberthunder.discovery.sources import vsphere, vsphere_client as wire
+from cyberthunder.discovery.sources import vsphere, vsphere_access, vsphere_client as wire
 from cyberthunder.inventory.targets import Target
 from .vsphere_support import PASSWORD, Response, Server, endpoint
 
@@ -141,7 +142,7 @@ def test_guard_revocation_after_page_prevents_next_call_and_persistence(ctx, mon
 
 
 @pytest.mark.parametrize("operation", [None, "scan", "discover"])
-def test_verified_mode_has_no_vSphere_credential_binding_and_never_uses_shared_secret(ctx, monkeypatch, operation):
+def test_legacy_ssh_source_never_uses_shared_secret_in_verified_mode(ctx, monkeypatch, operation):
     svc, target, server = configured(ctx, monkeypatch)
     monkeypatch.setattr(ctx.settings, "auth_mode", "oidc")
     authorized = []
@@ -150,8 +151,10 @@ def test_verified_mode_has_no_vSphere_credential_binding_and_never_uses_shared_s
         def get(self, *args):
             pytest.fail("Verified discovery must fail before reading shared credentials")
 
-    monkeypatch.setattr(vsphere, "os", SimpleNamespace(environ=NoCredentials()))
-    with operation_scope(operation), pytest.raises((PermissionError, wire.VsphereError)) as error:
+    monkeypatch.setattr(vsphere_access, "os", SimpleNamespace(environ=NoCredentials()))
+    principal = Principal("https://identity.example.test", "fixture", "Fixture", kind="human",
+                          roles=("analyst",), expires_at=time.time() + 60)
+    with principal_scope(principal), operation_scope(operation), pytest.raises((PermissionError, wire.VsphereError)) as error:
         vsphere.collect(ctx, target, svc.scopes(), "IT1 Reviewer", lambda _: None)
     assert str(error.value) == ("vsphere:verified_binding_unavailable" if operation == "discover"
                                 else "vsphere:discover_operation_required")

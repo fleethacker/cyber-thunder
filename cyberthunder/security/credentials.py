@@ -71,7 +71,25 @@ def target_identity(target) -> tuple:
         raise ValueError("invalid endpoint port")
     if type(target.simulated) is not bool or type(target.in_scope) is not bool:
         raise ValueError("invalid endpoint flags")
-    return tid, environment, asset_type, transport, address, port, target.simulated, target.in_scope
+    identity = tid, environment, asset_type, transport, address, port, target.simulated, target.in_scope
+    if transport == "vsphere":
+        generation = _text(target.authorization_id)
+        if not re.fullmatch(r"[a-f0-9]{32,64}", generation):
+            raise ValueError("invalid target authorization identity")
+        options = target.options
+        source = options.get("vsphere") if isinstance(options, dict) else None
+        if (options.get("hypervisor") != "vsphere" or not isinstance(source, dict)
+                or source.keys() - {"endpoint", "tls_trust", "ca_file", "username", "credential_ref"}):
+            raise ValueError("invalid vSphere source declaration")
+        # Pure selection: no file, network or secret lookup. The source validates
+        # the URL and CA material before use. Pin the exact declaration and owner.
+        trust = {key: source.get(key) for key in ("endpoint", "tls_trust", "ca_file")}
+        for key, value in trust.items():
+            if value is not None:
+                _text(value, 2048 if key == "ca_file" else 512)
+        digest = hashlib.sha256(json.dumps(trust, sort_keys=True).encode()).hexdigest()
+        return (*identity, generation, digest)
+    return identity
 
 
 @dataclass(frozen=True)
@@ -107,8 +125,8 @@ class CredentialBinding:
                 _absolute_path(value)
             else:
                 _text(value)
-        if "transport" in options and options["transport"] != "ntlm":
-            raise ValueError("only explicit NTLM account bindings are supported for WinRM")
+        if "transport" in options and options["transport"] not in {"ntlm", "vsphere"}:
+            raise ValueError("unsupported account transport")
         if "kubeconfig" in options:
             if (set(options) != {"kubeconfig", "context"} or self.username is not None
                     or self.credential_ref is not None or self.sudo):
@@ -120,7 +138,7 @@ class CredentialBinding:
             if self.username is None or options.keys() - {"transport"}:
                 raise ValueError("account and credential source must be explicit")
             if "transport" in options and (not _REF.fullmatch(self.credential_ref) or self.sudo):
-                raise ValueError("invalid WinRM credential fields")
+                raise ValueError("invalid account transport credential fields")
         elif self.username is not None or self.sudo or options:
             raise ValueError("missing credential source")
         object.__setattr__(self, "options", MappingProxyType(options))
@@ -134,7 +152,7 @@ class CredentialBinding:
         result = {"username": self.username, "sudo": self.sudo, "credential_source": source,
                   "credential_fingerprint": hashlib.sha256(reference).hexdigest()}
         if p is not None:
-            tid, environment, asset_type, transport, address, port, simulated, in_scope = p.target
+            tid, environment, asset_type, transport, address, port, simulated, in_scope = p.target[:8]
             result.update({"issuer": p.issuer, "subject": p.subject, "action": p.action,
                            "policy_sha256": p.policy_sha256,
                            "target": {"id": tid, "environment": environment, "asset_type": asset_type,
@@ -142,6 +160,8 @@ class CredentialBinding:
                                       "simulated": simulated, "in_scope": in_scope},
                            "selectors": [{"issuer": issuer, kind: value}
                                          for issuer, kind, value in p.selectors]})
+            if transport == "vsphere":
+                result["target"].update(authorization_id=p.target[8], source_sha256=p.target[9])
         return result
 
 
@@ -173,7 +193,7 @@ def _bind_target(target, binding):
     if identity != binding.provenance.target or not target.in_scope:
         raise CredentialError("credential binding does not match the current target")
     kind = target.transport
-    if kind not in {"ssh", "winrm", "kubeconfig", "simulated"}:
+    if kind not in {"ssh", "winrm", "kubeconfig", "simulated", "vsphere"}:
         raise CredentialError("this transport has no delegated account design")
     # The simulated flag on a real transport never disables account validation.
     options = dict(binding.options)
@@ -187,9 +207,14 @@ def _bind_target(target, binding):
             options["key_file"], ref = ref, None
     elif kind == "winrm":
         if (binding.username is None or ref is None or not _REF.fullmatch(ref)
-                or options.keys() - {"transport"} or binding.sudo):
+                or options.keys() - {"transport"} or options.get("transport", "ntlm") != "ntlm" or binding.sudo):
             raise CredentialError("WinRM requires an explicit environment credential and account")
         options["transport"] = "ntlm"
+    elif kind == "vsphere":
+        if (binding.provenance.action != "discover" or binding.username is None or ref is None
+                or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}", ref)
+                or options != {"transport": "vsphere"} or binding.sudo or target.simulated):
+            raise CredentialError("vSphere requires an explicit discover-only environment account")
     elif kind == "kubeconfig":
         if (set(options) != {"kubeconfig", "context"} or ref is not None
                 or binding.username is not None or binding.sudo):
@@ -201,6 +226,9 @@ def _bind_target(target, binding):
     operational = copy.deepcopy({k: v for k, v in target.options.items()
                                  if isinstance(k, str) and k.casefold() not in _INVENTORY_AUTH})
     operational.update(options)
+    if kind == "vsphere":
+        operational["vsphere"] = {key: value for key, value in operational["vsphere"].items()
+                                  if key in {"endpoint", "tls_trust", "ca_file"}}
     operational.update(credential_bound=True, credential_source=_source(binding),
                        allow_agent=False, look_for_keys=False, interactive_auth=False)
     result = replace(target, username=binding.username, credential_ref=ref,
