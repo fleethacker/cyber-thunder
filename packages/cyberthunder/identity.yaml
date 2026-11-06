@@ -16,5 +16,9 @@ data:
   CT_OIDC_TOKEN_ENDPOINT: https://sso.###ZARF_VAR_DOMAIN###/realms/uds/protocol/openid-connect/token
   CT_OIDC_REDIRECT_URI: https://cyberthunder.###ZARF_VAR_DOMAIN###/auth/callback
   CT_OIDC_SCOPE: openid
+  # Configure exact assurance values from the enclave's authenticator policy.
+  # Empty deliberately refuses risky actions; it never invents a CAC assurance level.
+  CT_STEP_UP_ACR_VALUES: "[]"
+  CT_STEP_UP_MAX_AGE_SECONDS: "300"
   CT_TLS_CERT: ""
   CT_TLS_KEY: ""

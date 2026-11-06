@@ -204,6 +204,22 @@ def test_uds_native_oidc_registration_matches_application_profile():
     assert all((ROOT / "packages/cyberthunder" / path).is_file() for path in files)
 
 
+def test_uds_network_selectors_match_the_actual_application_pod():
+    package = next(d for d in documents("packages/cyberthunder/uds.yaml") if d.get("kind") == "Package")
+    deployment = next(d for d in documents("packages/cyberthunder/app.yaml") if d.get("kind") == "Deployment")
+    labels = deployment["spec"]["template"]["metadata"]["labels"]
+    network = package["spec"]["network"]
+    for rule in network["allow"] + network["expose"]:
+        assert rule["selector"] and all(labels.get(key) == value for key, value in rule["selector"].items())
+
+
+@pytest.mark.parametrize("filename", ["packages/cyberthunder/identity.yaml", "deploy/kubernetes/identity-config.example.yaml"])
+def test_packaged_assurance_requires_real_realm_configuration(filename):
+    config = documents(filename)[0]["data"]
+    assert config["CT_STEP_UP_MAX_AGE_SECONDS"] == "300"
+    assert json.loads(config["CT_STEP_UP_ACR_VALUES"]) == []
+
+
 @pytest.fixture(params=["native", "native-alternate", "uds"])
 def manifest_env(state_dir, monkeypatch, crypto, request):
     for name in os.environ:

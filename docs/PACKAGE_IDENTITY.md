@@ -21,6 +21,14 @@ authenticated mesh deployment may use `CT_AUTH_MODE=mesh` without application
 TLS; that mode still validates signed tokens and requires OIDC configuration.
 It does not trust a caller-supplied actor name or arbitrary proxy headers.
 
+The identity ConfigMaps deliberately start with `CT_STEP_UP_ACR_VALUES="[]"`.
+Set it to a JSON array of exact assurance values enforced by the intended realm,
+and retain `CT_STEP_UP_MAX_AGE_SECONDS=300` unless the enclave policy specifies a
+different supported limit. Sign-in alone does not enable risky actions while
+this list is empty. The realm must supply a signed authentication time and the
+configured assurance claim; token refresh is not reauthentication. No example
+value certifies CAC use. See [STEP_UP](STEP_UP.md) for policy and validation limits.
+
 Native CLI behavior is unchanged. Native development defaults to loopback.
 An explicit container `CT_HOST=127.0.0.1` is also loopback-only inside that
 container; publishing a Docker port does not make that listener reachable on

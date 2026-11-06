@@ -16,5 +16,8 @@ data:
   CT_OIDC_TOKEN_ENDPOINT: ""
   CT_OIDC_REDIRECT_URI: ""
   CT_OIDC_SCOPE: openid
+  # Fill from the actual realm policy. Empty refuses risky actions after sign-in.
+  CT_STEP_UP_ACR_VALUES: "[]"
+  CT_STEP_UP_MAX_AGE_SECONDS: "300"
   CT_TLS_CERT: /etc/cyberthunder-tls/tls.crt
   CT_TLS_KEY: /etc/cyberthunder-tls/tls.key
