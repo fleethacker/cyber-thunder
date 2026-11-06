@@ -68,7 +68,12 @@ before saving or returning an export.
 Validation statuses are `checked`, `not_established`, `legacy_unavailable`, and
 `not_checked` (local comment formatting without application context). A failed
 check retains the disputed historical receipts and reports the failure without
-including raw exception messages. `quorum_evidence_checked` describes that
+including raw exception messages. When validation is `not_established`, syntactically
+valid principal metadata is shown as a recorded identity claim, with `verified: false`
+and `recorded_verified: true`, rather than labelled verified at decision. The original
+principal and receipt dictionaries remain unchanged. A changed finding/fix can cause
+this result even when the historical login was authentic; it is not a finding that
+the identity provider rejected that login. `quorum_evidence_checked` describes that
 specific evidence check; it is not approval to act, including after cancellation
 or completion. `current_apply_authorization` is always
 `not_established_by_report`. The gate must separately recheck current account
@@ -81,6 +86,33 @@ identities remain explicitly unverified. Legacy proposals without separation
 fields retain the final recorded decision; no missing vote or quorum is invented.
 Reports are historical snapshots, not signed attestations or fresh authentication.
 The protected local state and audit checkpoint remain trust dependencies.
+Additive principal fields such as `session_fingerprint` are retained inside recorded
+evidence without being interpreted as identity, role, freshness or approval authority.
+
+## Publication and raw-checklist boundaries
+
+Each render remembers whether it consumed audit evidence and rechecks that node
+permission, export permission and the original target scopes before publication and
+return. History checks again after acquiring its writer lock and immediately before
+writing. A permission or ownership change during receipt validation aborts the export;
+it cannot be swallowed as an ordinary evidence-validation failure. These checks do
+not create one transaction across policy files, inventory, audit, history and the HTTP
+response. Already authorized saved snapshots are not deleted when a later return
+check fails, and later history access still requires its existing export/ownership
+checks. Policy and inventory changes remain subject to the node's trusted storage.
+
+Verified-mode CKLB reuse reads only the authorized target's raw-artifact directory
+under the anchor scan. A matching display hostname in another target's CKLB does not
+confer access to its comments or approvals. Case/trailing-dot or space aliases in
+the original scan's target names are refused because they can share a directory on
+supported filesystems. Legacy development lookup remains
+compatible. Raw artifacts and their association with the recorded scan remain trusted
+local inputs; the report does not attest to arbitrary imported checklist comments.
+
+The commander Markdown report escapes repeated finding/proposal titles as well as
+the approval section. Underscores, strikeout markers, links and HTML remain literal
+text. JSON/CKLB retain original strings through JSON serialization, and CSV retains
+receipt objects inside a quoted field while neutralizing formula-like display cells.
 
 ## Verification
 
@@ -91,6 +123,14 @@ reviewers, distinct issuers, changed findings/fixes/receipts/audit, unavailable
 sources, expired logins, revoked application rights, original target ownership,
 HTML/Markdown escaping, CSV formulas/multiline rows, legacy records, unverified
 development mode, and preserved CKLB inputs.
+
+`tests/report/test_approval_report_review.py` adds isolated JSON/SQLite regressions
+for ownership/audit revocation during validation, grants changing while history waits
+for its writer lock, disputed and self/duplicate receipts, repeated Markdown titles,
+CSV/CKLB string preservation, cross-target raw-checklist selection and directory
+aliases. It also uses the server's session-fingerprint evidence through real gate
+receipts to check retention in every approval export without exposing the raw session
+identifier. These fixtures do not validate a live identity provider or STIG Viewer.
 
 Run the new regressions and all existing report tests with:
 

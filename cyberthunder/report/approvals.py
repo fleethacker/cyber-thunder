@@ -11,6 +11,15 @@ LIMITATION = ("Recorded identity is attribution at decision time. Current permis
               "established by this report; the gate must recheck authorization and assessments before application.")
 
 
+def _disputed_identity(identity):
+    if not identity["verified"]:
+        return identity
+    label = ("Recorded identity claim; receipt validation not established; "
+             f"iss={identity['issuer']}; sub={identity['subject']}")
+    return {**identity, "verified": False, "recorded_verified": True, "label": label,
+            "text": f"{identity['display_name']}; {label}; audit actor={identity['actor']}"}
+
+
 def evidence(ctx, proposal) -> dict:
     """Retain every receipt and check its audit/source association without executing a gate transition.
 
@@ -53,8 +62,17 @@ def evidence(ctx, proposal) -> dict:
             validation["status"] = "not_established"
         else:
             validation["status"] = "checked"
+    if ctx is not None:
+        # A validator's PermissionError may describe a source ownership change rather
+        # than a disputed vote. Such a change must not downgrade into readable evidence.
+        access.artifact(ctx, getattr(proposal, "authorization_scope", None), targets=[proposal.host])
+        access.audit(ctx)
     proposer = attribution(recorded["proposed_by"], recorded["proposed_principal"], human=False)
     decision = attribution(recorded["decided_by"], recorded["decided_principal"])
+    if validation["status"] == "not_established":
+        proposer, decision = _disputed_identity(proposer), _disputed_identity(decision)
+        for row in rows:
+            row["identity"] = _disputed_identity(row["identity"])
     approvers = "\n".join(
         f"Receipt {row['id'] or 'not recorded'}: {row['identity']['text']}; "
         f"at {row['approved_at'] or 'not recorded'}; note: {row['note'] or 'none'}" for row in rows)

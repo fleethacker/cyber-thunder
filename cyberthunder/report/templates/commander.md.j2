@@ -1,9 +1,9 @@
 # Cyber Thunder - Commander one-pager
 
-Unit / enclave: **{{ r.node }}** | Date: {{ r.date }} | Scan: `{{ r.scan_id }}` ({{ r.trigger }})
-Audit chain: {% if r.audit.ok %}intact{% else %}**BROKEN: {{ r.audit.detail }}**{% endif %}, {{ r.audit.count }} records, head `{{ r.audit.head }}`
+Unit / enclave: **{{ r.node | md_cell }}** | Date: {{ r.date | md_cell }} | Scan: {{ r.scan_id | md_cell }} ({{ r.trigger | md_cell }})
+Audit chain: {% if r.audit.ok %}intact{% else %}**BROKEN: {{ r.audit.detail | md_cell }}**{% endif %}, {{ r.audit.count }} records, head {{ r.audit.head | md_cell }}
 
-**BLUF.** {% for s in r.bluf %}{{ s }} {% endfor %}
+**BLUF.** {% for s in r.bluf %}{{ s | md_cell }} {% endfor %}
 
 
 ## Open findings requiring action by host
@@ -14,7 +14,7 @@ Excludes verified changes and active review suppressions. Original scanner obser
 | Host | CAT I | CAT II | CAT III | Total open | Intrusion indicators |
 |---|---:|---:|---:|---:|---:|
 {% for row in r.by_host %}
-| {{ row.host }} | {{ row.high }} | {{ row.medium }} | {{ row.low }} | {{ row.total }} | {{ row.hunt }} |
+| {{ row.host | md_cell }} | {{ row.high }} | {{ row.medium }} | {{ row.low }} | {{ row.total }} | {{ row.hunt }} |
 {% endfor %}
 {% else %}
 No open findings requiring action. Unchecked results and errors still need investigation.
@@ -26,7 +26,7 @@ No open findings requiring action. Unchecked results and errors still need inves
 | Host | Indicator | ATT&CK |
 |---|---|---|
 {% for h in r.hunt %}
-| {{ h.host }} | {{ h.title }} | {{ h.attack | join(", ") or "-" }} |
+| {{ h.host | md_cell }} | {{ h.title | md_cell }} | {{ (h.attack | join(", ") or "-") | md_cell }} |
 {% endfor %}
 {% else %}
 No unsuppressed open intrusion indicators in the available observations; this is not proof of absence.
@@ -38,7 +38,7 @@ No unsuppressed open intrusion indicators in the available observations; this is
 | Host or address | Item | Severity |
 |---|---|---|
 {% for d in r.discovery %}
-| {{ d.host }} | {{ d.title }} | {{ d.severity }} |
+| {{ d.host | md_cell }} | {{ d.title | md_cell }} | {{ d.severity | md_cell }} |
 {% endfor %}
 
 {% endif %}
@@ -52,7 +52,7 @@ Pending {{ r.decisions.proposed }} | Approved {{ r.decisions.approved }} | Appli
 | Verified change | Host | Recorded approval decisions | Verified at (UTC) |
 |---|---|---|---|
 {% for v in r.verified %}
-| {{ v.title | md_cell }} | {{ v.host | md_cell }} | {{ v.approval_evidence.approver_text | md_cell }} | {{ v.verified_at or "-" }} |
+| {{ v.title | md_cell }} | {{ v.host | md_cell }} | {{ v.approval_evidence.approver_text | md_cell }} | {{ (v.verified_at or "-") | md_cell }} |
 {% endfor %}
 {% else %}
 No verified changes yet.
@@ -62,7 +62,7 @@ No verified changes yet.
 | Reverted or failed change | Host | Recorded approval decisions | When (UTC) | Why |
 |---|---|---|---|---|
 {% for x in r.reverted %}
-| {{ x.title | md_cell }} | {{ x.host | md_cell }} | {{ x.approval_evidence.approver_text | md_cell }} | {{ x.at or "-" }} | {{ x.why | md_cell }} |
+| {{ x.title | md_cell }} | {{ x.host | md_cell }} | {{ x.approval_evidence.approver_text | md_cell }} | {{ (x.at or "-") | md_cell }} | {{ x.why | md_cell }} |
 {% endfor %}
 {% endif %}
 
@@ -70,8 +70,8 @@ No verified changes yet.
 ## Top risks
 
 {% for t in r.top %}
-{{ loop.index }}. **{{ t.cat }}** {{ t.host }}: {{ t.title }}. {{ t.risk or "No explanation generated yet." }} [{{ t.citations | join(", ") }}]
-   Scanner status: {{ t.assurance.status }}; confidence: **{{ t.assurance.confidence.grade }}** - {{ t.assurance.confidence.reason | md_cell }}; review: {{ t.assurance.review.disposition }}. Reviewer identity: {{ t.assurance.identity_label | md_cell }}.
+{{ loop.index }}. **{{ t.cat | md_cell }}** {{ t.host | md_cell }}: {{ t.title | md_cell }}. {{ (t.risk or "No explanation generated yet.") | md_cell }} [{{ t.citations | join(", ") | md_cell }}]
+   Scanner status: {{ t.assurance.status | md_cell }}; confidence: **{{ t.assurance.confidence.grade | md_cell }}** - {{ t.assurance.confidence.reason | md_cell }}; review: {{ t.assurance.review.disposition | md_cell }}. Reviewer identity: {{ t.assurance.identity_label | md_cell }}.
 {% else %}
 No open findings to rank.
 {% endfor %}
@@ -79,7 +79,7 @@ No open findings to rank.
 
 ## Link and outbox
 
-{{ r.link }}
+{{ r.link | md_cell }}
 {% endif %}
 
 ## Check and fix coverage
@@ -90,7 +90,7 @@ No open findings to rank.
 | Available benchmark | Rules | Native | SCAP eligible | Executable fix | Runbook only | Unmapped |
 |---|---:|---:|---:|---:|---:|---:|
 {% for row in r.coverage.benchmarks %}
-| {{ row.benchmark }} ({{ row.release }}) | {{ row.published_rules }} | {{ row.native_checks }} | {{ row.scap_eligible }} | {{ row.executable_fixes }} | {{ row.runbook_only }} | {{ row.not_covered }} |
+| {{ row.benchmark | md_cell }} ({{ row.release | md_cell }}) | {{ row.published_rules }} | {{ row.native_checks }} | {{ row.scap_eligible }} | {{ row.executable_fixes }} | {{ row.runbook_only }} | {{ row.not_covered }} |
 {% endfor %}
 {% else %}
 Full benchmark totals are unknown; no local benchmark document is available.
@@ -106,8 +106,9 @@ Coverage inventory is incomplete; see that report's errors.
 ## Next actions
 
 {% for a in r.next_actions %}
-- {{ a }}
+- {{ a | md_cell }}
 {% endfor %}
 
 ---
-Reproduce: `{{ r.command }}`
+Reproduce:
+<pre>{{ r.command | e }}</pre>

@@ -183,7 +183,19 @@ def build_checklist(ctx: "AppContext", scan_id: str | None = None, host: str | N
     lifecycle = access.lifecycle(ctx, associations=associations)
     approval_evidence = {key: [approvals.evidence(ctx, p) for p in values]
                          for key, values in lifecycle.proposals.items()}
-    found = _find_input(ctx.store.scans_dir / sid / "raw", host)
+    raw = ctx.store.scans_dir / sid / "raw"
+    if access.verified_mode(ctx):
+        # Display hostnames in imported CKLB metadata are not an ownership boundary.
+        # Only reuse input collected under the authorized target's raw-artifact directory.
+        if Path(host).name != host or host in {".", ".."}:
+            raise PermissionError("checklist raw artifact target is invalid")
+        original_targets = (ctx.store.load_scan_run(sid) or {}).get("targets", [])
+        aliases = [name for name in original_targets if isinstance(name, str)
+                   and name.rstrip(" .").casefold() == host.rstrip(" .").casefold()]
+        if aliases != [host]:
+            raise PermissionError("checklist raw artifact ownership is ambiguous")
+        raw = raw / host
+    found = _find_input(raw, host)
     if found:
         _path, doc = found
         doc = copy.deepcopy(doc)

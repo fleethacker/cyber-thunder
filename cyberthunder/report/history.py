@@ -55,6 +55,7 @@ def save(ctx, kind: str, content, fmt: str, *, scan_id: str | None = None, targe
         existing = ctx.store.read_json(_path(ctx, rid))
         if report_id and existing:
             if not _legacy:
+                access.publication(ctx)
                 access.artifact(ctx, existing.get("authorization_scopes"))
             return existing
         while existing:
@@ -66,6 +67,9 @@ def save(ctx, kind: str, content, fmt: str, *, scan_id: str | None = None, targe
                "authorization_scopes": scopes,
                "filename": f"{kind}-{rid}.{fmt}", "media_type": FORMATS[fmt],
                "bytes": len(text.encode("utf-8")), "content": text}
+        if not _legacy:
+            # The writer lock may have waited while grants or inventory ownership changed.
+            doc["authorization_scopes"] = access.finish(ctx, scopes)
         ctx.store.write_json(_path(ctx, rid), doc)
     return doc
 
