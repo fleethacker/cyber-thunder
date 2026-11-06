@@ -59,6 +59,12 @@ every other role. Human-only actions are removed from workload permissions. Role
 matching policy grants below. Standing approval cannot be enabled in verified mode until verifiable
 policy signing is implemented.
 
+New persisted principal evidence keeps session correlation as an issuer/account-scoped
+`session_fingerprint` (SHA-256), with `session_id` set to null. Raw issuer session identifiers
+stay in the authenticated in-memory principal; the fingerprint never grants access or renews
+a session. Existing audit and historical decision records remain unchanged, including legacy
+session metadata, so apply the node's existing access and retention controls to those records.
+
 ## Protect and assign access.json
 
 Provision `<CT_STATE_DIR>/auth/access.json` through server administration, not a browser upload.
