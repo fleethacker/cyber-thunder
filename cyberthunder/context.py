@@ -81,7 +81,8 @@ class AppContext:
             self.vulnerabilities = self._optional("cyberthunder.vulnerabilities.service", "VulnerabilityService")
             self.cluster = self._optional("cyberthunder.cluster.service", "ClusterBaselineService")
         except BaseException:
-            self.store.close()
+            if not self.close():
+                log.warning("Construction cleanup timed out; active workers retain state")
             raise
 
     def close(self, timeout: float = 5.0) -> bool:
@@ -104,27 +105,37 @@ class AppContext:
         def workers():
             with util._threads_lock:
                 threads = list(util._threads)
-            for service in (self.scanner, self.discovery, self.vulnerabilities,
-                            getattr(self.ingest, "_content", None)):
+            for service in (getattr(self, "scanner", None), getattr(self, "discovery", None),
+                            getattr(self, "vulnerabilities", None),
+                            getattr(getattr(self, "ingest", None), "_content", None)):
                 registry = getattr(service, "_threads", None)
                 if registry is not None:
                     threads.extend(list(registry.values()))
                 threads.extend(list(getattr(service, "threads", ())))
             return [t for t in set(threads) if t.is_alive()]
 
-        while active := workers():
-            for thread in active:
-                if thread is threading.current_thread():
+        while True:
+            while active := workers():
+                for thread in active:
+                    if thread is threading.current_thread():
+                        return False
+                    thread.join(remaining())
+                if workers() and remaining() <= 0:
                     return False
-                thread.join(remaining())
-            if workers() and remaining() <= 0:
-                return False
-        worker = getattr(self.explain, "_worker", None)
-        if worker is not None:
-            if not worker.wait_idle(remaining()):
-                return False
-            worker.stop(remaining())
-            if worker.alive:
+            worker = getattr(getattr(self, "explain", None), "_worker", None)
+            if worker is not None:
+                if getattr(worker, "_thread", None) is threading.current_thread():
+                    return False
+                if not worker.wait_idle(remaining()):
+                    return False
+                worker.stop(remaining())
+                if worker.alive:
+                    return False
+            # Callbacks drained above may have registered children. Drain them and
+            # any explanations they submit before releasing the store.
+            if not workers():
+                break
+            if remaining() <= 0:
                 return False
         self.store.close()
         return True

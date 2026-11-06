@@ -277,3 +277,167 @@ def test_serve_ownership_on_return_and_failure(tmp_path, monkeypatch, owned, fai
             for conn in conns: assert conn.execute("SELECT 1").fetchone() == (1,)
     finally:
         assert ctx.close()
+
+
+def test_explanation_callback_child_is_drained(tmp_path):
+    """A callback can publish another registered writer while close waits for it."""
+    from cyberthunder.api.util import run_background
+    from cyberthunder.explain.worker import ExplainWorker
+    from cyberthunder.findings.schema import Finding
+    ctx = context(tmp_path, "sqlite")
+    entered, release, child_entered, child_release = [threading.Event() for _ in range(4)]
+    errors = []
+    def child():
+        try:
+            ctx.store.write_json(tmp_path / "demo.json", {"phase": 1})
+            child_entered.set()
+            assert child_release.wait(10)
+            ctx.store.write_json(tmp_path / "demo.json", {"phase": 2})
+        except BaseException as exc:
+            errors.append(exc)
+    def callback(finding):
+        entered.set()
+        assert release.wait(10)
+        run_background(child, "lifecycle-callback-child", early_wait=0)
+        assert child_entered.wait(10)
+    worker = ExplainWorker(callback)
+    ctx.explain._worker = worker
+    worker.submit(Finding(host="local", source="native", rule_id="callback", title="test",
+                          severity="low", status="open"))
+    assert entered.wait(10)
+    # Release only when close has reached the real explanation drain.
+    original = worker.wait_idle
+    def wait_idle(timeout):
+        release.set()
+        return original(timeout)
+    worker.wait_idle = wait_idle
+    try:
+        assert ctx.close(timeout=0.2) is False
+        assert child_entered.is_set()
+        for conn in connections(ctx):
+            assert conn.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        release.set()
+        child_release.set()
+        assert ctx.close()
+    assert not errors
+    assert state_handles(tmp_path) in (None, 0)
+
+
+def test_runtime_constructor_failure_releases_owned_context(tmp_path, monkeypatch):
+    import cyberthunder.api.app as api
+    import cyberthunder.runtime as runtime
+    ctx = context(tmp_path, "sqlite")
+    saved = connections(ctx)
+    monkeypatch.setattr(api, "AppContext", lambda: ctx)
+    def fail(ctx):
+        raise RuntimeError("runtime construction failed")
+    monkeypatch.setattr(runtime, "RuntimeTasks", fail)
+    try:
+        with pytest.raises(RuntimeError, match="runtime construction failed"):
+            with TestClient(create_app()):
+                pass
+        assert_closed(saved)
+        assert state_handles(tmp_path) in (None, 0)
+    finally:
+        assert ctx.close()
+
+
+def test_real_runtime_probe_and_reconnect_writer(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from cyberthunder.ingest import probe
+    ctx = context(tmp_path, "sqlite")
+    ctx.settings.content_check_on_reconnect = True
+    link = ctx.ingest.link
+    content = ctx.ingest.content
+    link.set(actor="Joshua Ott", probe_enabled=True)
+    link.observe(endpoint=link.state().probe_endpoint, method="HEAD", application_bytes=0,
+                 elapsed_seconds=0.01, success=False, status=None, reachable=False, kind="probe")
+    probe_entered, probe_release, fetch_entered, fetch_release = [threading.Event() for _ in range(4)]
+    def response(endpoint, *, guard):
+        guard()
+        probe_entered.set()
+        assert probe_release.wait(10)
+        guard()
+        return {"success": True, "status": 200, "elapsed_seconds": 0.01}
+    def fetch():
+        fetch_entered.set()
+        assert fetch_release.wait(10)
+        return SimpleNamespace(entries=[], stats=lambda: {})
+    monkeypatch.setattr(probe, "bounded_probe", response)
+    monkeypatch.setattr(content, "_fetch_live", fetch)
+    tasks = RuntimeTasks(ctx)
+    # Exercise the actual producer loop without waiting the production five seconds.
+    tasks._start_interval("probe-review", 0.001, tasks._probe_link)
+    try:
+        assert probe_entered.wait(10)
+        assert ctx.close(timeout=0.02) is False
+        probe_release.set()
+        assert fetch_entered.wait(10)
+        assert tasks.stop(1)
+        saved = connections(ctx)
+        assert ctx.close(timeout=0.02) is False
+        for conn in saved:
+            assert conn.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        probe_release.set()
+        fetch_release.set()
+        assert ctx.close()
+    assert_closed(saved)
+    assert state_handles(tmp_path) in (None, 0)
+    assert content.last_check()["source"] == "live"
+    assert ctx.close()
+
+
+def test_partial_context_failure_drains_existing_service(tmp_path, monkeypatch):
+    import cyberthunder.context as module
+    import cyberthunder.explain.service as explain
+    from cyberthunder.api.util import run_background
+    captured, saved = [], []
+    original = module.StateStore
+    def store(*args, **kwargs):
+        result = original(*args, **kwargs)
+        saved.extend(c for _, c in result.docs._conns.values())
+        return result
+    def fail(ctx):
+        captured.append(ctx)
+        run_background(lambda: ctx.store.write_json(tmp_path / "partial.json", {"done": True}),
+                       "partial-context-writer", early_wait=0)
+        raise RuntimeError("partial context")
+    monkeypatch.setattr(module, "StateStore", store)
+    monkeypatch.setattr(explain, "ExplainService", fail)
+    with pytest.raises(RuntimeError, match="partial context"):
+        context(tmp_path, "sqlite")
+    assert_closed(saved)
+    assert state_handles(tmp_path) in (None, 0)
+    assert captured[0].store.read_json(tmp_path / "partial.json") == {"done": True}
+    assert captured[0].close()
+
+
+def test_real_download_worker_finishes_before_release(tmp_path, monkeypatch):
+    from cyberthunder.ingest.content import fetch
+    ctx = context(tmp_path, "sqlite")
+    content = ctx.ingest.content
+    entries, _ = content.catalog_entries()
+    entry = next(e for e in entries if e.format_supported and
+                 e.allowed_by(content.client.allowed_hosts, content.client.allow_http))
+    entered, release = threading.Event(), threading.Event()
+    def download(*args, **kwargs):
+        entered.set()
+        assert release.wait(10)
+        raise fetch.Stopped("controlled transport stop")
+    monkeypatch.setattr(fetch, "download", download)
+    job = content.pull("Joshua Ott", filenames=[entry.filename], background=True)
+    try:
+        assert entered.wait(10)
+        saved = connections(ctx)
+        assert ctx.close(timeout=0.02) is False
+        for conn in saved:
+            assert conn.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        release.set()
+        assert ctx.close()
+    assert_closed(saved)
+    assert state_handles(tmp_path) in (None, 0)
+    assert content.get_job(job["id"])["state"] == "stopped"
+    assert ctx.close()

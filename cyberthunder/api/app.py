@@ -41,10 +41,10 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
 
     @app.on_event("startup")
     def _startup_runtime_tasks() -> None:
-        from cyberthunder.runtime import RuntimeTasks
-        tasks = RuntimeTasks(app.state.ctx)
-        app.state.runtime_tasks = tasks
         try:
+            from cyberthunder.runtime import RuntimeTasks
+            tasks = RuntimeTasks(app.state.ctx)
+            app.state.runtime_tasks = tasks
             tasks.start()
         except BaseException:
             release()
