@@ -247,6 +247,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/LINK.md](docs/LINK.md) | observed request conditions, offline control and explicit demonstration mode |
 | [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |
 | [docs/SCAP_RESULTS.md](docs/SCAP_RESULTS.md) | persisted container OS XCCDF imports, explicit target mapping and incomplete coverage |
+| [docs/CONTENT_PUBLICATION.md](docs/CONTENT_PUBLICATION.md) | complete content generations, release floors, explicit downgrade review and interrupted imports |
 | [docs/CONTENT.md](docs/CONTENT.md) | STIG Library, saved subscriptions, versions and sync times, uploads/downloads and offline transfers |
 | [docs/VULNERABILITY_DATA.md](docs/VULNERABILITY_DATA.md) | public CVE database updates, freshness, offline transfer and cluster findings |
 | [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |

@@ -235,7 +235,10 @@ POSIX permission branches require a separate platform run. The TLS fixtures subs
 loopback host and its temporary CA; production retains the fixed DoD host allow-list.
 These fixtures do not validate operational key custody, fleet Windows DACL rollout, organizational
 key distribution, key revocation procedures, FIPS suitability or a live DISA signing service. Signed
-content is not automatically fresh: this profile has no release monotonicity or anti-rollback ledger.
+content is not automatically fresh. Signature validation is separate from the
+[content publication ledger](CONTENT_PUBLICATION.md), which adds release floors,
+explicit exceptional activation and interrupted-publication handling. The historical
+review counts below validate the signature work, not those later publication changes.
 
 Review validation on Windows, with the shared interpreter and this checkout on `PYTHONPATH`:
 

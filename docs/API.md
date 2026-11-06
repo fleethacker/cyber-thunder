@@ -201,7 +201,7 @@ remains unverified. See [SCAP_RESULTS](SCAP_RESULTS.md) for the exact contract.
 | GET | `/ingest/updates/jobs/{id}` | → the pull job with per-file progress; `404` if unknown |
 | GET | `/ingest/content` | → `HeldContent` `{files: [HeldRecord], products, scap: [{product_key, filename, datastream_path}], quarantine, dir}`. HeldRecord includes `filename`, `product_key`, `kind`, `version`, `version_label`, `upload_date`, `sha256`, `etag`, `bytes`, `url`, `fetched_at`, `fetched_by`, `source`, and `ingest: {delta_id?, catalog_path?, datastream_path?, upload?}`. New upload records use `ingest.upload.imported_at/imported_by` with null fetch fields; duplicate bytes return the existing record without changing its provenance |
 | POST | `/ingest/manifest` | → `{generated_at, node, items: [{filename, url, product_key, kind, version, expected_bytes?, expected_etag?}], path, sha256}` for missing updates matching saved subscriptions, written to `<state>/content/manifest.json`. Audit `content.manifest` |
-| POST | `/ingest/import-dir` | `{path}` (a folder on this node) → `{imported, refused: [{filename, reason}], skipped, missing, verified_by, deltas}`; named actor required, kill-switch guard before starting and between files (`423`); invalid body `400`. Lock-file entries are verified against `manifest.lock.json`. Audit `content.import`, `content.quarantine` |
+| POST | `/ingest/import-dir` | `{path, publication_intent?}` (a folder on this node) → `{imported, refused: [{filename, reason}], skipped, missing, verified_by, deltas}` with additive partial/commit status. Authentication, import authority and kill-switch checks apply; lock-file entries are verified against `manifest.lock.json`. Exceptional publication returns a bounded `409` review and needs a separate verified-human, fresh admin decision bound to the current generation and exact candidate; see [CONTENT_PUBLICATION](CONTENT_PUBLICATION.md). Each package commits independently |
 
 Folder imports route raw XML with no lock-file entry and unrecognized content kind through the validated
 upload helper (32 MiB per file). New records use `source: "uploaded"` and `ingest.upload` import metadata;
@@ -214,7 +214,7 @@ existing checks and `source: "imported"`. Previously accepted files remain if th
 |---|---|---|
 | GET | `/ingest/library` | → library view below; local reads only, no network requests or writes |
 | PUT | `/ingest/library/preferences` | complete preference body below → saved preferences with new `revision`, `updated_at`, `updated_by`; named actor required, audit `content.preferences`. `400` invalid body, `423` kill-switch guard, `409` stale revision; saves only, never downloads |
-| POST | `/ingest/content/upload` | multipart `file`, exactly one supported XML or ZIP benchmark package, at most 32 MiB → `201 {record: HeldRecord, delta: PullDelta\|null}`. Named actor required, kill-switch guarded; works offline. `400` invalid content, `413` size limit, `423` kill switch |
+| POST | `/ingest/content/upload` | multipart `file`, exactly one supported XML or ZIP benchmark package, at most 32 MiB, and optional JSON text `publication_intent` → `201 {record: HeldRecord, delta: PullDelta\|null}` with generation/active/commit status. Existing authenticity requirements, import authority and kill-switch checks apply; works offline. `400` invalid content, `413` size limit, `423` kill switch; bounded `409` publication review requires explicit confirmation as described in [CONTENT_PUBLICATION](CONTENT_PUBLICATION.md) |
 
 The library response contains:
 
