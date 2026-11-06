@@ -37,6 +37,17 @@ def _check_file(info: os.stat_result) -> None:
 
 
 def read_cache(path: Path) -> bytes | None:
+    if os.name == "nt":
+        from .file_trust import open_protected
+        try:
+            with open_protected(path) as stream:
+                _check_file(os.fstat(stream.fileno()))
+                data = stream.read(MAX_CACHE_BYTES + 1)
+                if len(data) > MAX_CACHE_BYTES:
+                    raise ValueError("Oversized cache")
+                return data
+        except FileNotFoundError:
+            return None
     _check_parent(path)
     try:
         original = path.lstat()
@@ -66,6 +77,16 @@ def check_cache(path: Path, expected_digest: bytes | None) -> None:
 
 
 def write_cache(path: Path, data: bytes, *, expected_digest=_UNCHECKED) -> None:
+    if os.name == "nt":
+        from .file_trust import protected_parent
+        with protected_parent(path, creating=True):
+            read_cache(path)  # Even an unconditional write must reject an unsafe existing file.
+            _write_cache(path, data, expected_digest=expected_digest)
+        return
+    _write_cache(path, data, expected_digest=expected_digest)
+
+
+def _write_cache(path: Path, data: bytes, *, expected_digest=_UNCHECKED) -> None:
     if len(data) > MAX_CACHE_BYTES:
         raise ValueError("Oversized cache")
     _check_parent(path)
@@ -78,6 +99,9 @@ def write_cache(path: Path, data: bytes, *, expected_digest=_UNCHECKED) -> None:
     fd, temporary = tempfile.mkstemp(prefix=".oidc-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
+            if os.name == "nt":
+                from .file_trust import check_open_file
+                check_open_file(stream.fileno(), temporary)
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
@@ -89,7 +113,15 @@ def write_cache(path: Path, data: bytes, *, expected_digest=_UNCHECKED) -> None:
             pass
         if expected_digest is not _UNCHECKED:
             check_cache(path, expected_digest)
+        if os.name == "nt":
+            # A newly created file inherits ACEs that need not apply to its parent.
+            # Validate the actual completed temporary object before publication.
+            if read_cache(Path(temporary)) != data:
+                raise ValueError("Cache changed before publication")
+            read_cache(path)
         os.replace(temporary, path)
+        if os.name == "nt" and read_cache(path) != data:
+            raise ValueError("Cache changed during publication")
         if os.name != "nt":
             directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:

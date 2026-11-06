@@ -13,6 +13,32 @@ if str(ROOT) not in sys.path:
 FIXTURES = ROOT / "tests" / "fixtures"
 
 
+def pytest_configure(config):
+    if os.name == "nt":
+        from tests.windows_acl import create_root, register_root, track_databases
+        if config.option.basetemp is not None:
+            # Explicit --basetemp retains its normal pytest behavior. Its ancestors
+            # must already be protected; test ACL mutations stay inside that root.
+            register_root(config.option.basetemp)
+            return
+        root = create_root()
+        config._ct_windows_temporary = (root, tempfile.tempdir, track_databases(root))
+        config.option.basetemp = str(root / "pytest")
+        general = root / "temporary"
+        general.mkdir()
+        tempfile.tempdir = str(general)
+
+
+def pytest_unconfigure(config):
+    temporary = getattr(config, "_ct_windows_temporary", None)
+    if temporary is not None:
+        from tests.windows_acl import remove_root
+        root, previous, close_databases = temporary
+        tempfile.tempdir = previous
+        close_databases()
+        remove_root(root)
+
+
 @pytest.fixture
 def fixtures_dir() -> Path:
     return FIXTURES

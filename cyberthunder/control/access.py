@@ -134,8 +134,7 @@ def _check_node(info, *, directory=False):
             # child against replacement by another user. Never exempt the file.
             if not (directory and info.st_uid == 0 and info.st_mode & stat.S_ISVTX):
                 raise ValueError("policy path is writable by other accounts")
-    # Windows st_uid/mode do not describe DACL ownership or effective permissions.
-    # Deployment must restrict write/delete/ACL rights on the file and all parents.
+    # Windows ownership and DACL checks run on the pinned native handles below.
 
 
 def _parents(path):
@@ -152,6 +151,11 @@ def _parents(path):
 
 @contextmanager
 def _open_policy(path, parents):
+    if os.name == "nt":
+        from cyberthunder.security.file_trust import open_protected
+        with open_protected(path) as stream:
+            yield stream
+        return
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     with ExitStack() as stack:
         if os.name == "posix":
@@ -297,13 +301,13 @@ class AccessPolicy:
                 if (len(raw) > MAX_POLICY_BYTES or _signature(opened) != _signature(read)
                         or opened.st_ctime_ns != read.st_ctime_ns):
                     raise ValueError("policy changed while reading")
-            entries = _parse(raw)
-            after = self.path.lstat()
-            _check_node(after)
-            if (_signature(opened) != _signature(after) or before.st_ctime_ns != after.st_ctime_ns
-                    or parents != _parents(self.path)):
-                raise ValueError("policy replaced during decision")
-            return entries, hashlib.sha256(raw).hexdigest()
+                entries = _parse(raw)
+                after = self.path.lstat()
+                _check_node(after)
+                if (_signature(opened) != _signature(after) or before.st_ctime_ns != after.st_ctime_ns
+                        or parents != _parents(self.path)):
+                    raise ValueError("policy replaced during decision")
+                return entries, hashlib.sha256(raw).hexdigest()
         except (OSError, ValueError, TypeError, RecursionError):
             raise AccessDenied("access policy is unavailable or invalid") from None
 
