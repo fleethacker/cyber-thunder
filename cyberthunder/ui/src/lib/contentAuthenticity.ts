@@ -15,19 +15,27 @@ export function contentProvenance(value?: ContentAuthenticity) {
 
 export function canOverrideContent(identity: SessionIdentity | null = sessionIdentity()): boolean {
   const principal = identity?.principal;
-  return !!identity?.authenticated && identity.mode !== 'dev' && principal?.verified === true
+  return !!identity?.authenticated && ['oidc', 'mesh'].includes(identity.mode) && principal?.verified === true
     && principal.source === identity.mode && principal.kind === 'human'
+    && typeof principal.issuer === 'string' && !!principal.issuer.trim()
+    && typeof principal.subject === 'string' && !!principal.subject.trim()
     && identity.permissions.includes('admin') && identity.permissions.includes('import');
 }
 
 export function contentAccount(identity: SessionIdentity | null = sessionIdentity()): string {
-  return JSON.stringify([identity?.mode, identity?.principal?.issuer, identity?.principal?.subject,
-    identity?.principal?.actor]);
+  return JSON.stringify([identity?.mode, identity?.authenticated, identity?.principal?.issuer,
+    identity?.principal?.subject, identity?.principal?.actor, identity?.principal?.source,
+    identity?.principal?.kind, identity?.principal?.verified]);
 }
 
-export function manifestText(manifest: ContentManifest): string {
+export function plainUploadNeedsException(identity: SessionIdentity | null = sessionIdentity()): boolean {
+  return identity?.mode !== 'dev';
+}
+
+export function manifestText(manifest: ContentManifest, identity: SessionIdentity | null = sessionIdentity()): string {
   if (typeof manifest.download_text === 'string' && manifest.download_text.length) return manifest.download_text;
-  if (manifest.authenticity?.operator_attested || manifest.authenticity?.status === 'operator_signed') {
+  if (identity?.mode !== 'dev' || manifest.authenticity?.operator_attested ||
+      (manifest.authenticity?.status && manifest.authenticity.status !== 'unsigned_dev')) {
     throw new Error('The server did not supply the signed download. Refresh before exporting.');
   }
   // Older development nodes returned a summary; strip local paths and receipt fields.

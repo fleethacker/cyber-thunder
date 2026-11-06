@@ -4,7 +4,9 @@ import { browser, errorText, evaluate, format, libraryFixture, linkPresentation,
 
 async function setup(t, overrides = {}) {
   const env = browser(t), calls = [];
-  let identity = null;
+  let identity = { mode: 'dev', authenticated: false, permissions: [] };
+  const pending = new Map();
+  const reply = (kind) => pending.get(kind) ?? Promise.resolve();
   const permissions = new Set(['import', 'admin', 'export']);
   const authenticity = evaluate(new URL('../lib/contentAuthenticity.ts', import.meta.url), {
     '../api/identity': { sessionIdentity: () => identity },
@@ -22,9 +24,9 @@ async function setup(t, overrides = {}) {
     '../api/client': { errorText, api: {
       pullUpdates: async (body) => { calls.push(['pull', body]); return job; },
       pullJob: async (id) => { calls.push(['job', id]); if (readFailure) throw new Error('Transfer status unavailable'); return { ...job, state: 'done' }; },
-      uploadContent: async (file, reason) => { calls.push(['upload', file.name, reason]); return { record: props.library.held.files[0] }; },
-      importDir: async (path, reason) => { calls.push(['import', path, reason]); return { imported: [], refused: [], skipped: [], missing: [], deltas: [], verified_by: 'hash' }; },
-      writeManifest: async () => { calls.push(['manifest']); return manifest; },
+      uploadContent: async (file, reason) => { calls.push(['upload', file.name, reason]); await reply('upload'); return { record: props.library.held.files[0] }; },
+      importDir: async (path, reason) => { calls.push(['import', path, reason]); await reply('import'); return { imported: [], refused: [], skipped: [], missing: [], deltas: [], verified_by: 'hash' }; },
+      writeManifest: async () => { calls.push(['manifest']); await reply('manifest'); return manifest; },
     } }, '../lib/format': format, '../state/AppState': { useAppState: () => context }, './ActorChip': { actorProblem: () => null },
     './LibraryTables': tableStubs, './common': ui, '../lib/linkPresentation': linkPresentation,
     '../lib/contentAuthenticity': authenticity,
@@ -32,6 +34,7 @@ async function setup(t, overrides = {}) {
   }).ContentUpdates, props);
   env.cleanup(() => panel.unmount()); await panel.settle();
   return { ...panel, props, calls, context, env, manifest, downloads, permissions,
+    delay: (kind) => { let resolve; pending.set(kind, new Promise((done) => { resolve = done; })); return () => { pending.delete(kind); resolve(); }; },
     identity: (value) => { identity = value; }, failRead: () => { readFailure = true; } };
 }
 
@@ -84,6 +87,102 @@ test('an exception cannot follow an account change or revoked permissions throug
   panel.permissions.delete('import');
   retained(); await panel.settle();
   assert.ok(panel.calls.every(([kind]) => kind !== 'import'));
+});
+
+test('verified plain uploads require an exception even through a direct handler; signed folders need none', async (t) => {
+  const panel = await setup(t, { view: 'transfers' });
+  panel.identity(human()); await panel.rerender();
+  await panel.change('Choose content files', [new File(['fixture'], 'reference.xml')]);
+  const upload = panel.button('Upload 1 file');
+  assert.equal(upload.props.disabled, true);
+  upload.props.onClick(); await panel.settle();
+  assert.ok(!panel.calls.some(([kind]) => kind === 'upload'));
+  await panel.change('Import folder on the server', 'C:/fixture/signed-bundle');
+  await panel.click('Import folder');
+  assert.deepEqual(panel.calls.find(([kind]) => kind === 'import'), ['import', 'C:/fixture/signed-bundle', undefined]);
+  assert.ok(panel.nodes().some((node) => text(node).includes('authenticity not established')));
+});
+
+test('retained content handlers cannot transfer intent to another issuer with the same subject', async (t) => {
+  const panel = await setup(t, { view: 'all' });
+  const original = human();
+  panel.identity(original); await panel.rerender();
+  await panel.change('Download tracked.zip', true);
+  await panel.change('Import folder on the server', 'C:/fixture/original-account');
+  const handlers = ['Download selected (1)', 'Import folder', 'Download manifest'].map((name) => panel.button(name).props.onClick);
+  panel.identity({ ...original, principal: { ...original.principal, issuer: 'https://other.example.test' } });
+  await panel.rerender();
+  for (const handler of handlers) { handler(); await panel.settle(); }
+  assert.deepEqual(panel.calls, []);
+  assert.equal(panel.control('Import folder on the server').props.value, '');
+  // Returning to the original identity must not revive handlers retained before the switch.
+  panel.identity(original); await panel.rerender();
+  for (const handler of handlers) { handler(); await panel.settle(); }
+  assert.deepEqual(panel.calls, []);
+});
+
+test('retained unsigned upload and manifest handlers honor current roles and page guards', async (t) => {
+  const panel = await setup(t, { view: 'transfers' });
+  await panel.change('Choose content files', [new File(['fixture'], 'reference.xml')]);
+  const upload = panel.button('Upload 1 file').props.onClick;
+  const manifest = panel.button('Download manifest').props.onClick;
+  panel.permissions.delete('import'); panel.permissions.delete('export');
+  upload(); manifest(); await panel.settle();
+  assert.deepEqual(panel.calls, []);
+  panel.permissions.add('import'); panel.permissions.add('export');
+  await panel.rerender({ ...panel.props, disabled: true });
+  upload(); manifest(); await panel.settle();
+  assert.deepEqual(panel.calls, []);
+});
+
+for (const change of ['account', 'import role', 'admin role', 'workload']) {
+  test(`a two-file exception batch stops after ${change} changes during the first request`, async (t) => {
+    const panel = await setup(t, { view: 'transfers' });
+    const original = human();
+    panel.identity(original); await panel.rerender();
+    await panel.change('Request an exception for unsigned content or an unknown signer', true);
+    await panel.change('Reason for the content exception', 'Reviewed courier media');
+    await panel.change('Choose content files', [new File(['one'], 'one.xml'), new File(['two'], 'two.xml')]);
+    const release = panel.delay('upload');
+    await panel.click('Upload 2 files');
+    assert.equal(panel.calls.filter(([kind]) => kind === 'upload').length, 1);
+    if (change === 'account') panel.identity(human('other'));
+    else if (change === 'workload') panel.identity({ ...original, principal: { ...original.principal, kind: 'workload' } });
+    else {
+      const role = change.split(' ')[0];
+      panel.permissions.delete(role);
+      panel.identity({ ...original, permissions: original.permissions.filter((p) => p !== role) });
+    }
+    await panel.rerender(); release(); await panel.settle();
+    assert.equal(panel.calls.filter(([kind]) => kind === 'upload').length, 1);
+    if (['account', 'workload'].includes(change)) {
+      assert.equal(panel.control('Choose content files').props.value.length, 0);
+      assert.ok(!panel.nodes().some((node) => node.type === 'FileProvenance'));
+    }
+  });
+}
+
+for (const change of ['account', 'role']) {
+  test(`an export response cannot trigger a download after an ${change} change`, async (t) => {
+    const panel = await setup(t, { view: 'transfers' });
+    panel.identity(human()); await panel.rerender();
+    panel.manifest.download_text = '{"signed":"fixture"}';
+    const release = panel.delay('manifest');
+    await panel.click('Download manifest');
+    if (change === 'account') panel.identity(human('other')); else panel.permissions.delete('export');
+    await panel.rerender(); release(); await panel.settle();
+    assert.equal(panel.downloads.length, 0);
+  });
+}
+
+test('a folder exception records the reason only after deliberate opt-in', async (t) => {
+  const panel = await setup(t, { view: 'transfers' });
+  panel.identity(human()); await panel.rerender();
+  await panel.change('Request an exception for unsigned content or an unknown signer', true);
+  await panel.change('Reason for the content exception', '  Unsigned courier bundle reviewed  ');
+  await panel.change('Import folder on the server', 'C:/fixture/unsigned-bundle');
+  await panel.click('Import folder');
+  assert.deepEqual(panel.calls.find(([kind]) => kind === 'import'), ['import', 'C:/fixture/unsigned-bundle', 'Unsigned courier bundle reviewed']);
 });
 
 test('viewing updates and transfers does not download; selection survives task switches', async (t) => {

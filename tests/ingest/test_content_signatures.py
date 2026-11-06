@@ -440,6 +440,64 @@ def test_manifest_export_is_signed_portable_file_for_each_backend(verified):
     assert doc["generated_by"] == human.actor and evidence["operator_attested"]
 
 
+@pytest.mark.parametrize("signed", [True, False])
+def test_manifest_export_api_json_preserves_artifact_bytes_and_hash(verified, monkeypatch, signed):
+    from fastapi.testclient import TestClient
+    from cyberthunder.api.app import create_app
+    from tests.ingest.content_helpers import guard_network
+
+    ctx, human = verified
+    guard_network(monkeypatch)
+    ctx.settings.node = 'Review "node" \\ caf\u00e9 \U0001f680'
+    if not signed:
+        ctx.settings.auth_mode = "dev"
+        ctx.content_signature_config = sig.ContentSignatureConfig()
+
+    class IdentityValidator:
+        def validate(self, _):
+            return {"iss": human.issuer, "sub": human.subject, "name": human.display_name,
+                    "ct_kind": human.kind, "ct_roles": list(human.roles), "exp": human.expires_at}
+
+    monkeypatch.setattr("cyberthunder.api.auth.make_validator", lambda *a: IdentityValidator())
+    headers = {"Authorization": "Bearer fixture-human"} if signed else {"X-Actor": "Test operator"}
+    with TestClient(create_app(ctx)) as client:
+        response = client.post("/api/v1/ingest/manifest", headers=headers)
+    assert response.status_code == 200, response.text
+    receipt = response.json()
+    raw = receipt["download_text"].encode("utf-8")
+    assert raw == Path(receipt["path"]).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == receipt["sha256"]
+    doc, evidence = sig.verify_document(raw, "request", ctx.content_signature_config)
+    assert doc["node"] == ctx.settings.node
+    assert evidence["operator_attested"] is signed
+    assert not {"download_text", "path", "sha256", "authenticity"}.intersection(doc)
+    event = [r for r in ctx.audit.records() if r["action"] == "content.manifest"][-1]
+    assert event["details"]["bytes"] == len(raw)
+    assert event["details"]["sha256"] == receipt["sha256"]
+
+
+def test_manifest_export_receipt_size_describes_its_bytes_when_path_is_replaced(verified, monkeypatch):
+    ctx, human = verified
+    save = sig.atomic_document
+
+    def competing_export(path, doc):
+        digest = save(path, doc)
+        # Another completed export can replace the shared destination before this audit append.
+        save(path, {"items": []})
+        return digest
+
+    monkeypatch.setattr(sig, "atomic_document", competing_export)
+    with principal_scope(human):
+        receipt = ctx.ingest.content.write_manifest(human.actor)
+    raw = receipt["download_text"].encode("ascii")
+    assert raw != Path(receipt["path"]).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == receipt["sha256"]
+    assert sig.verify_document(raw, "request", ctx.content_signature_config)[1]["operator_attested"]
+    event = [r for r in ctx.audit.records() if r["action"] == "content.manifest"][-1]
+    assert event["details"]["bytes"] == len(raw)
+    assert event["details"]["sha256"] == receipt["sha256"]
+
+
 def test_trusted_public_key_must_not_be_writable_by_others(signing):
     config, _ = signing
     envelope = sig.sign_document({"items": []}, "request", config)

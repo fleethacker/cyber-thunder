@@ -128,6 +128,12 @@ legacy `/ingest/stig` JSON path body accepts the same reason. Signed packages us
 The STIG Library's Import / transfer view has an initially unchecked exception control. It requires
 a verified human with both role permissions and a nonempty reason; the server independently checks
 node grants and the live session. An exception cannot carry over to a different signed-in account.
+Plain browser uploads require that explicit exception in verified mode; signed bundles still use
+folder import without an exception. Development uploads retain their unsigned workflow. Retained
+handlers are bound to the account that opened them, and every file in a batch rechecks current
+permissions. Account changes clear local selections, exception intent and results; late replies
+cannot download a manifest or populate import results for a different account. A stopped request
+may already have reached the server: refresh the library before deciding whether to retry.
 The downloaded-file view labels attested, HTTPS, development, legacy and human-exception provenance
 separately. These labels describe the stored event, not current key validity or publisher authorship.
 CLI `--override-reason` does not establish identity or bypass the verified-mode CLI restriction.
@@ -135,7 +141,13 @@ CLI `--override-reason` does not establish identity or bypass the verified-mode 
 Manifest export returns the exact portable artifact as `download_text` beside the API summary. The
 browser downloads those bytes, preserving the artifact's hash and signed envelope; it never rebuilds
 a signed request from the unsigned summary. Older development responses use only the portable
-request fields. A response claiming a signature but missing the downloadable artifact is refused.
+request fields, and this fallback is available only in an explicitly identified development session.
+Verified or unknown sessions refuse a response missing the downloadable artifact, even when its
+summary omits signature metadata. The browser preserves the returned text; signature verification
+remains a server/courier responsibility. Export audit size and digest describe that response's bytes.
+The shared destination path can subsequently be replaced by another export, so it is not a permanent
+file identity. Folder integrity checks and recorded authenticity are displayed separately; provenance
+metadata is rendered as escaped text.
 
 An exception records `human_override`, the verified actor and reason in `content.authenticity` audit
 events and held-content provenance. It is never relabelled as a verified signature. Invalid signatures

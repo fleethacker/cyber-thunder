@@ -2,7 +2,7 @@ import { Accordion, Alert, Badge, Button, Checkbox, FileInput, Group, Paper, Pro
 import { notifications } from '@mantine/notifications';
 import { useEffect, useRef, useState } from 'react';
 import { linkLabel } from '../lib/linkPresentation';
-import { canOverrideContent, contentAccount, manifestText } from '../lib/contentAuthenticity';
+import { canOverrideContent, contentAccount, contentProvenance, manifestText, plainUploadNeedsException } from '../lib/contentAuthenticity';
 import { usePermissions } from './PermissionGate';
 import { api, errorText } from '../api/client';
 import type { ContentUploadResult, ImportDirResult, PullDelta, PullJob, StigLibrary } from '../api/types';
@@ -83,6 +83,11 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
 }) {
   const { status } = useAppState();
   const permission = usePermissions();
+  const account = contentAccount();
+  const ownerRef = useRef({ account });
+  if (ownerRef.current.account !== account) ownerRef.current = { account };
+  const owner = ownerRef.current;
+  const sameAccount = () => ownerRef.current === owner && account === contentAccount();
   const [override, setOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
   const [overrideAccount, setOverrideAccount] = useState<string | null>(null);
@@ -109,8 +114,8 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
   const exceptionBlocked = override && (overrideAccount !== contentAccount() || !canOverrideContent() || !overrideReason.trim() || overrideReason.trim().length > 512);
   const importBlocked = blocked || !permission.can('import') || exceptionBlocked;
   const selectionBlocked = blocked || dirty || running;
-  const uploadBlocked = useRef(disabled);
-  uploadBlocked.current = disabled;
+  const gates = useRef({ disabled, busy: !!busy, dirty, running, connected });
+  gates.current = { disabled, busy: !!busy, dirty, running, connected };
   const importNotices = imported ? [
     ...imported.refused.map((r) => ({ ...r, state: 'Refused' })),
     ...imported.skipped.map((r) => ({ ...r, state: 'Skipped' })),
@@ -118,59 +123,79 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
   ] : [];
 
   useEffect(() => { setSelected([]); }, [updateKey]);
+  useEffect(() => {
+    setSelected([]); setFiles([]); setFolder(''); setOverride(false); setOverrideReason('');
+    setOverrideAccount(null); setUploads([]); setImported(null); setNewJob(null); setError(null);
+  }, [account]);
   useEffect(() => { setOpenJobs((current) => [...new Set([...current, ...JSON.parse(runningIds) as string[]])]); }, [runningIds]);
   // Resume newly started jobs even if the first library refresh failed.
   useEffect(() => {
     if (!newJob || !jobRunning(newJob) || library.jobs.some((j) => j.id === newJob.id)) return;
     const timer = window.setTimeout(async () => {
-      try { setNewJob(await api.pullJob(newJob.id)); await onRefresh(); }
-      catch (e) { setError(errorText(e)); setNewJob({ ...newJob }); }
+      if (!sameAccount()) return;
+      try {
+        const result = await api.pullJob(newJob.id);
+        if (!sameAccount()) return;
+        setNewJob(result); await onRefresh();
+      } catch (e) { if (sameAccount()) { setError(errorText(e)); setNewJob({ ...newJob }); } }
     }, 1500);
     return () => window.clearTimeout(timer);
-  }, [newJob, library.jobs, onRefresh]);
+  }, [newJob, library.jobs, onRefresh, account]);
 
+  const requireAction = (action: string) => {
+    if (!sameAccount() || gates.current.disabled || !permission.can(action)) {
+      throw new Error('Content operation stopped: account or permissions changed. Refresh the library before retrying.');
+    }
+  };
   const act = async (what: string, fn: () => Promise<void>) => {
-    if (blocked || (['pull', 'manifest'].includes(what) && (dirty || running)) || (what === 'pull' && !connected)) return;
+    const gate = gates.current;
+    if (!sameAccount() || gate.disabled || gate.busy || (['pull', 'manifest'].includes(what) && (gate.dirty || gate.running)) || (what === 'pull' && !gate.connected)) return;
     if (!permission.can(what === 'manifest' ? 'export' : what === 'pull' ? 'admin' : 'import')) return;
+    gate.busy = true;
     setBusy(what);
     setError(null);
     try { await fn(); }
-    catch (e) { setError(errorText(e)); }
-    finally { setBusy(null); }
+    catch (e) { if (sameAccount()) setError(errorText(e)); }
+    finally { gates.current.busy = false; setBusy(null); }
   };
-  const importException = (account: string) => {
-    if (account !== contentAccount() || uploadBlocked.current || !permission.can('import')) {
-      throw new Error('Import stopped: account or permissions changed. Review before retrying.');
+  const importException = (value = exception.current, plain = false) => {
+    requireAction('import');
+    if (!value.override) {
+      if (plain && plainUploadNeedsException()) throw new Error('A plain upload requires an explicit human exception. Use folder import for an attested bundle.');
+      return undefined;
     }
-    const value = exception.current;
-    if (!value.override) return undefined;
     if (value.account !== account || !canOverrideContent() || !value.reason.trim() || value.reason.trim().length > 512) {
       throw new Error('This exception requires a verified human with import and admin permissions and a reason.');
     }
     return value.reason.trim();
   };
   const upload = async () => {
-    const account = contentAccount();
+    // One explicit exception applies to this batch; recheck the account and roles for every file.
+    const intent = { ...exception.current };
+    importException(intent, true);
     const batch: UploadItem[] = files.map((file) => ({ file, state: 'queued' }));
     setUploads(batch);
     for (let i = 0; i < batch.length; i++) {
       const item = batch[i];
+      const reason = importException(intent, true);
       try {
-        if (uploadBlocked.current) throw new Error('Upload stopped: check the kill switch and acting name before retrying.');
         if (!/\.(xml|zip)$/i.test(item.file.name)) throw new Error('Choose an XML or ZIP file.');
         if (item.file.size > 32 * 1024 * 1024) throw new Error('File exceeds the 32 MiB upload limit.');
         batch[i] = { ...item, state: 'uploading' };
         setUploads([...batch]);
-        const result = await api.uploadContent(item.file, importException(account));
+        const result = await api.uploadContent(item.file, reason);
+        if (!sameAccount()) return;
+        requireAction('import');
         batch[i] = { ...item, state: 'done', result };
         setUploads([...batch]);
-        await onRefresh().catch((e) => setError(`File imported, but the library could not refresh: ${errorText(e)}`));
+        await onRefresh().catch((e) => { if (sameAccount()) setError(`File imported, but the library could not refresh: ${errorText(e)}`); });
       } catch (e) {
+        if (!sameAccount()) return;
         batch[i] = { ...item, state: 'failed', error: errorText(e) };
         setUploads([...batch]);
       }
     }
-    setFiles(batch.filter((item) => item.state === 'failed').map((item) => item.file));
+    if (sameAccount()) setFiles(batch.filter((item) => item.state === 'failed').map((item) => item.file));
   };
 
   return <Stack gap="lg">
@@ -195,7 +220,9 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
           </Table.Tr>} />
         <Group>
           <Button loading={busy === 'pull'} disabled={selectionBlocked || !permission.can('admin') || !connected || !selected.length} onClick={() => void act('pull', async () => {
-            setNewJob(await api.pullUpdates({ filenames: selected.filter((name) => updates.some((r) => r.filename === name)), pace: pace && link?.mode === 'test' }));
+            const result = await api.pullUpdates({ filenames: selected.filter((name) => updates.some((r) => r.filename === name)), pace: pace && link?.mode === 'test' });
+            requireAction('admin');
+            setNewJob(result);
             onTransfers?.();
             await onRefresh();
           })}>Download selected ({selected.length})</Button>
@@ -217,7 +244,7 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
       <Text size="sm">Verified nodes require an operator-attested bundle. Configure trusted keys on the server, then use folder import. A plain XML or ZIP has no attestation.</Text>
       <Checkbox mt="sm" label="Request an exception for unsigned content or an unknown signer" checked={override}
         disabled={blocked || (!override && !canOverrideContent())} onChange={(event) => {
-          if (!event.currentTarget.checked || canOverrideContent()) {
+          if (sameAccount() && (!event.currentTarget.checked || canOverrideContent())) {
             setOverride(event.currentTarget.checked);
             setOverrideAccount(event.currentTarget.checked ? contentAccount() : null);
           }
@@ -231,8 +258,9 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
         <Text fw={700}>Upload from this computer</Text>
         {!permission.can('import') && <Text size="sm" c="dimmed">Your account does not have permission to import content.</Text>}
         <Text size="sm" c="dimmed">XML or ZIP, up to 32 MiB per file. Files are validated and indexed one at a time. Uploads work offline; publisher authenticity is not verified.</Text>
+        {plainUploadNeedsException() && <Text size="sm">Plain uploads require the explicit human exception above. For an operator-attested bundle, use folder import.</Text>}
         <FileInput label="Choose content files" placeholder="Select XML or ZIP files" multiple clearable accept=".xml,.zip" value={files} onChange={setFiles} disabled={blocked} />
-        <Button loading={busy === 'upload'} disabled={importBlocked || !files.length} onClick={() => void act('upload', upload)} style={{ alignSelf: 'flex-start' }}>Upload {files.length || ''} file{files.length === 1 ? '' : 's'}</Button>
+        <Button loading={busy === 'upload'} disabled={importBlocked || !files.length || (plainUploadNeedsException() && !override)} onClick={() => void act('upload', upload)} style={{ alignSelf: 'flex-start' }}>Upload {files.length || ''} file{files.length === 1 ? '' : 's'}</Button>
         {uploads.length > 0 && <LibraryTable rows={uploads} label="upload results" empty="No uploads." searchText={(u) => `${u.file.name} ${u.state}`}
           headings={<><Table.Th>File</Table.Th><Table.Th>Result</Table.Th></>}
           render={(u, i) => <Table.Tr key={i}><Table.Td><Text size="sm" style={{ overflowWrap: 'anywhere' }}>{u.file.name}</Text></Table.Td><Table.Td>
@@ -255,16 +283,21 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
         <Text size="sm" c="dimmed">Export a manifest for your saved selections. Retrieve its files on a connected machine, then import the folder available to this server.</Text>
         <Group align="flex-end">
           <Button variant="light" loading={busy === 'manifest'} disabled={selectionBlocked || !permission.can('export') || !library.selection.wanted.length} onClick={() => void act('manifest', async () => {
-            const manifest = await api.writeManifest(); downloadJson('manifest.json', manifestText(manifest));
+            const manifest = await api.writeManifest();
+            requireAction('export');
+            downloadJson('manifest.json', manifestText(manifest));
             notifications.show({ message: `Manifest exported: ${manifest.items.length} items` });
           })}>Download manifest</Button>
           <TextInput label="Import folder on the server" placeholder="E:\stig-content" value={folder} disabled={blocked} style={{ flex: 1, minWidth: 220 }} onChange={(e) => setFolder(e.currentTarget.value)} />
           <Button variant="light" loading={busy === 'import'} disabled={importBlocked || !folder.trim()} onClick={() => void act('import', async () => {
-            setImported(await api.importDir(folder.trim(), importException(contentAccount()))); await onRefresh();
+            const result = await api.importDir(folder.trim(), importException());
+            requireAction('import');
+            setImported(result); await onRefresh();
           })}>Import folder</Button>
         </Group>
         {imported && <Stack gap="sm">
-          <Text size="sm">Imported {imported.imported.length} file(s), verified by {imported.verified_by}.</Text>
+          <Text size="sm">Imported {imported.imported.length} file(s). Integrity checks: {imported.verified_by}.</Text>
+          <Text size="xs" c={contentProvenance(imported.authenticity).color}>{contentProvenance(imported.authenticity).text}</Text>
           {importNotices.length > 0 && <LibraryTable rows={importNotices} label="import notices" searchText={(r) => `${r.filename} ${r.reason}`} empty="No notices."
             headings={<><Table.Th>File</Table.Th><Table.Th>State</Table.Th><Table.Th>Reason</Table.Th></>}
             render={(r, i) => <Table.Tr key={i}><Table.Td>{r.filename}</Table.Td><Table.Td>{r.state}</Table.Td><Table.Td>{r.reason}</Table.Td></Table.Tr>} />}

@@ -606,16 +606,17 @@ class ContentService:
         if sig.required(self.ctx) and config.signing_key is None:
             raise sig.AuthenticityError("A configured operator signing key is required")
         envelope = sig.sign_document(doc, "request", config) if config.signing_key else doc
+        download_text = sig.document_text(envelope)
         authorize(self.ctx, "export", actor=actor)
         self.ctx.killswitch.guard("content.manifest", actor)
         digest = sig.atomic_document(out, envelope)
         authenticity = {"status": "operator_signed" if config.signing_key else "unsigned_dev",
                         "operator_attested": bool(config.signing_key), "disa_signature": False,
                         "scope": config.scope}
-        self.audit.append("content.manifest", actor, {"url": str(out), "bytes": out.stat().st_size, "sha256": digest,
+        self.audit.append("content.manifest", actor, {"url": str(out), "bytes": len(download_text.encode("ascii")), "sha256": digest,
                                                       "items": len(items)})
         return dict(doc, path=str(out), sha256=digest, authenticity=authenticity,
-                    download_text=sig.document_text(envelope))
+                    download_text=download_text)
 
     def import_dir(self, path: str | Path, actor: str, *, override_reason: str | None = None) -> dict:
         """Verify the complete bundle before parsing a single archive or publishing content."""

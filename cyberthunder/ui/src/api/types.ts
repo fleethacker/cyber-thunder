@@ -774,6 +774,7 @@ export interface ContentManifest {
 }
 
 export interface ImportDirResult {
+  authenticity?: ContentAuthenticity;
   imported: HeldFile[];
   refused: { filename: string; reason: string }[];
   skipped: { filename: string; reason: string }[];
