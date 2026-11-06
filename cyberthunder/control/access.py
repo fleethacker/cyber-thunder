@@ -25,7 +25,7 @@ MAX_DEPTH = 12
 MAX_PATH_PARTS = 128
 # Deliberately enumerated independently of roles: new actions require review here.
 ACTIONS = frozenset({"read", "read.all", "scan", "discover", "propose", "explain", "plan", "import",
-                     "approve", "deny", "cancel", "apply", "rollback", "verify", "review", "risk.accept",
+                     "approve", "deny", "cancel", "apply", "rollback", "verify", "review", "risk.accept", "maintenance.override",
                      "admin", "policy", "audit", "export", "kill.engage", "kill.release"})
 NODE_ONLY_ACTIONS = frozenset({"read.all"})
 
@@ -192,7 +192,7 @@ class _Grant:
     credential: CredentialBinding | None
 
     def matches(self, action, tid, environment):
-        if action == "risk.accept" and (not self.target_ids or not self.environments
+        if action in {"risk.accept", "maintenance.override"} and (not self.target_ids or not self.environments
                                        or "*" in self.target_ids or "*" in self.environments):
             return False
         return (action in self.actions
@@ -344,6 +344,33 @@ def _principal(principal):
     return issuer, subject, groups
 
 
+def read_protected_policy(path, parser):
+    try:
+        parents = _parents(path)
+        before = path.lstat()
+        _check_node(before)
+        with _open_policy(path, parents) as stream:
+            opened = os.fstat(stream.fileno())
+            _check_node(opened)
+            if _signature(before) != _signature(opened):
+                raise ValueError("policy replaced while opening")
+            raw = stream.read(MAX_POLICY_BYTES + 1)
+            read = os.fstat(stream.fileno())
+            _check_node(read)
+            if (len(raw) > MAX_POLICY_BYTES or _signature(opened) != _signature(read)
+                    or opened.st_ctime_ns != read.st_ctime_ns):
+                raise ValueError("policy changed while reading")
+            policy = parser(raw)
+            after = path.lstat()
+            _check_node(after)
+            if (_signature(opened) != _signature(after) or before.st_ctime_ns != after.st_ctime_ns
+                    or parents != _parents(path)):
+                raise ValueError("policy replaced during decision")
+            return policy, hashlib.sha256(raw).hexdigest()
+    except (OSError, ValueError, TypeError, RecursionError):
+        raise AccessDenied("access policy is unavailable or invalid") from None
+
+
 class AccessPolicy:
     """Read-only ACL facade; construct with a server-controlled absolute policy path."""
 
@@ -351,30 +378,7 @@ class AccessPolicy:
         self.path = Path(path)
 
     def _read(self):
-        try:
-            parents = _parents(self.path)
-            before = self.path.lstat()
-            _check_node(before)
-            with _open_policy(self.path, parents) as stream:
-                opened = os.fstat(stream.fileno())
-                _check_node(opened)
-                if _signature(before) != _signature(opened):
-                    raise ValueError("policy replaced while opening")
-                raw = stream.read(MAX_POLICY_BYTES + 1)
-                read = os.fstat(stream.fileno())
-                _check_node(read)
-                if (len(raw) > MAX_POLICY_BYTES or _signature(opened) != _signature(read)
-                        or opened.st_ctime_ns != read.st_ctime_ns):
-                    raise ValueError("policy changed while reading")
-                policy = _parse(raw)
-                after = self.path.lstat()
-                _check_node(after)
-                if (_signature(opened) != _signature(after) or before.st_ctime_ns != after.st_ctime_ns
-                        or parents != _parents(self.path)):
-                    raise ValueError("policy replaced during decision")
-                return policy, hashlib.sha256(raw).hexdigest()
-        except (OSError, ValueError, TypeError, RecursionError):
-            raise AccessDenied("access policy is unavailable or invalid") from None
+        return read_protected_policy(self.path, _parse)
 
     def _load(self):
         policy, digest = self._read()
@@ -397,7 +401,7 @@ class AccessPolicy:
                 tid, environment = _identifier(target.id), _identifier(getattr(target, "environment", "default"))
                 in_scope = getattr(target, "in_scope", None)
                 if type(in_scope) is not bool or (not in_scope and action in {
-                        "scan", "discover", "propose", "approve", "plan", "apply", "rollback", "verify"}):
+                        "scan", "discover", "propose", "approve", "plan", "apply", "rollback", "verify", "maintenance.override"}):
                     raise ValueError("target is outside inventory scope")
             matched = []
             for entry in entries:
@@ -405,7 +409,7 @@ class AccessPolicy:
                     continue
                 # Risk acceptance is an explicit account/environment/target grant.
                 # Group membership, person association and node grants cannot supply it.
-                if action == "risk.accept" and (target is None or entry.kind != "subject"):
+                if action in {"risk.accept", "maintenance.override"} and (target is None or entry.kind != "subject"):
                     continue
                 if not ((entry.kind == "subject" and entry.selector == subject)
                         or (entry.kind == "group" and entry.selector in groups)):

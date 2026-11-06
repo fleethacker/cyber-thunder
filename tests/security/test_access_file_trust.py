@@ -57,7 +57,9 @@ def test_trusted_file_content_digest_and_scope_predicate_preserved(tmp_path):
     entries, digest = policy._load()
     assert entries and digest == hashlib.sha256(policy.path.read_bytes()).hexdigest()
     target = SimpleNamespace(id="host-a", environment="default", in_scope=False)
-    restricted = {"scan", "discover", "propose", "approve", "plan", "apply", "rollback", "verify"}
+    # Dedicated exception actions also require an exact environment, absent in this fixture.
+    restricted = {"scan", "discover", "propose", "approve", "plan", "apply", "rollback", "verify",
+                  "risk.accept", "maintenance.override"}
     for action in access.ACTIONS - access.NODE_ONLY_ACTIONS:
         assert policy.allows(principal(), action, target) is (action not in restricted)
     for flag in (None, 0, 1, "false"):

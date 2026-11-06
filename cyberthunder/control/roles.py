@@ -5,11 +5,11 @@ READ = frozenset({"read", "read.all", "kill.engage"})
 ROLE_PERMISSIONS = {
     "viewer": READ,
     "analyst": READ | {"scan", "discover", "propose", "explain", "plan", "import"},
-    "approver": READ | {"approve", "deny", "cancel", "apply", "rollback", "verify", "plan", "review", "risk.accept"},
+    "approver": READ | {"approve", "deny", "cancel", "apply", "rollback", "verify", "plan", "review", "risk.accept", "maintenance.override"},
     "admin": READ | {"admin", "policy", "kill.release"},
     "auditor": READ | {"audit", "export"},
 }
-HUMAN_ACTIONS = frozenset({"approve", "deny", "cancel", "apply", "rollback", "verify", "review", "risk.accept", "admin", "policy", "kill.release"})
+HUMAN_ACTIONS = frozenset({"approve", "deny", "cancel", "apply", "rollback", "verify", "review", "risk.accept", "maintenance.override", "admin", "policy", "kill.release"})
 
 
 def permissions(principal) -> frozenset[str]:

@@ -63,8 +63,17 @@ class ExplainBatchBody(BaseModel):
     ids: list[str] | None = None
 
 
+class MaintenanceOverrideBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    binding: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expires_at: str = Field(max_length=40)
+    reason: str = Field(min_length=10, max_length=1000)
+
+
 class ApplyBody(BaseModel):
+    model_config = {"extra": "forbid"}
     simulate_verify_fail: bool | None = None
+    maintenance_override: MaintenanceOverrideBody | None = None
 
 
 class BulkBody(BaseModel):

@@ -10,7 +10,7 @@ async function setup(t, state, flags = {}) {
   const actions = { approve: (p) => calls.push(['approve', p.id]), deny() {}, apply: (p) => calls.push(['apply', p.id]), rollback() {}, openFinding() {},
     impact: (p, inspectOnly) => calls.push(['impact', p.id, inspectOnly]) };
   const panel = mount(() => evaluate(new URL('./ProposalCard.tsx', import.meta.url), {
-    '@mantine/core': ui, '../lib/format': { fmtAgo: () => 'earlier', fmtZonedTime: (value) => value, label: (value) => value },
+    './ProposalMaintenance': ui, '@mantine/core': ui, '../lib/format': { fmtAgo: () => 'earlier', fmtZonedTime: (value) => value, label: (value) => value },
     '../lib/proposalHistory': helpers,
     './PermissionGate': permissions.imports, './ApplyTimeline': ui, './CitationChips': ui, './ProposalDiff': ui, './ProposalPlan': ui, './FixPanel': ui, './common': ui,
     './ApprovalProgress': ui, '../lib/proposalApprovals': approvalFixture(flags.identity),
@@ -19,6 +19,15 @@ async function setup(t, state, flags = {}) {
   await panel.settle();
   return { ...panel, calls };
 }
+
+test('maintenance hold disables ordinary apply, including an invoked disabled handler', async (t) => {
+  const p = { ...proposal('approved', 'change'), maintenance: { allowed: false, status: 'held' } };
+  const panel = await setup(t, 'approved', { p });
+  const apply = panel.find(node => node.props?.children === 'Apply');
+  assert.equal(apply.props.disabled, true);
+  apply.props.onClick();
+  assert.deepEqual(panel.calls, []);
+});
 
 test('risk hold disables apply and a retained handler cannot invoke it', async (t) => {
   const p = proposal('approved', 'change');

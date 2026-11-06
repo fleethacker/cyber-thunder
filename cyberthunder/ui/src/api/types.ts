@@ -112,8 +112,25 @@ export interface FixEntry {
   risk_tags: string[];
 }
 
+export interface MaintenanceOverride {
+  binding: string;
+  expires_at: string;
+  reason: string;
+}
+
+export interface MaintenanceStatus {
+  status: 'unconfigured' | 'not_applicable' | 'invalid' | 'open' | 'held';
+  allowed: boolean;
+  reason: string;
+  checked_at: string | null;
+  current_window: { start: string; end: string } | null;
+  next_eligible_at: string | null;
+  override: Omit<MaintenanceOverride, 'reason'> | null;
+}
+
 /** POST /proposals/{id}/plan: library metadata only; no target connection or execution. */
 export interface ProposalPlan {
+  maintenance?: MaintenanceStatus;
   version: 1;
   mode: 'static';
   generated_at: string;
@@ -289,6 +306,7 @@ export interface ImpactReceipt {
 }
 
 export interface ProposalPlus extends Proposal {
+  maintenance?: MaintenanceStatus;
   fix: FixEntry | null;
   finding: FindingPlus | null;
   policy: PolicyDecision | null;

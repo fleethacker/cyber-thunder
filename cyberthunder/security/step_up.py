@@ -9,7 +9,7 @@ import re
 import threading
 import time
 
-RISKY_ACTIONS = frozenset({"approve", "policy", "kill.release", "admin", "risk.accept"})
+RISKY_ACTIONS = frozenset({"approve", "policy", "kill.release", "admin", "risk.accept", "maintenance.override"})
 ERROR = "insufficient_user_authentication"
 DETAIL = "Fresh authentication with an accepted assurance context is required."
 _ACR = re.compile(r'[\x21\x23-\x5b\x5d-\x7e]{1,128}\Z', re.ASCII)

@@ -218,6 +218,8 @@ export const api = {
   cancel: (id: string, note?: string) => post<ProposalPlus>(`/proposals/${enc(id)}/cancel`, { note }),
   apply: (id: string, simulate_verify_fail?: boolean) =>
     post<{ proposal_id: string; state: string }>(`/proposals/${enc(id)}/apply`, simulate_verify_fail ? { simulate_verify_fail } : {}),
+  applyWithMaintenanceOverride: (id: string, maintenance_override: import('./types').MaintenanceOverride) =>
+    post<{ proposal_id: string; state: string }>(`/proposals/${enc(id)}/apply`, { maintenance_override }),
   rollback: (id: string) => post<unknown>(`/proposals/${enc(id)}/rollback`),
   diff: (id: string) => get<ProposalDiff>(`/proposals/${enc(id)}/diff`),
   verify: (id: string) => post<ProposalPlus>(`/proposals/${enc(id)}/verify`),

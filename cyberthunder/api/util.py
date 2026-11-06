@@ -246,6 +246,8 @@ def proposal_plus(ctx: "AppContext", p: Proposal) -> dict:
     from cyberthunder.control.policy import evaluate_for_context
 
     d = p.to_dict()
+    from cyberthunder.remediation.maintenance import MaintenanceService
+    d["maintenance"] = MaintenanceService(ctx).summary(p)
     fix = ctx.library.get(p.fix_ref)
     d["fix"] = fix.to_dict() if fix is not None else None
     finding = None

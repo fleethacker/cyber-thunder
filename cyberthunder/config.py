@@ -79,6 +79,8 @@ class Settings:
     content_timeout_s: int = field(default_factory=lambda: _env_num("CT_CONTENT_TIMEOUT", 30, int))
     content_snapshot: str | None = field(default_factory=lambda: _env("CT_CONTENT_SNAPSHOT", "") or None)
     content_trust_config: str | None = field(default_factory=lambda: _env("CT_CONTENT_TRUST_CONFIG", "") or None)
+    # Optional protected finite maintenance schedule; empty is invalid, not disabled.
+    maintenance_policy: str | None = field(default_factory=lambda: os.environ.get("CT_MAINTENANCE_POLICY"))
     # web
     auth_mode: str = field(default_factory=lambda: _env("CT_AUTH_MODE", "dev"))
     security_mode: str = field(default_factory=lambda: _env("CT_SECURITY_MODE", "range"))

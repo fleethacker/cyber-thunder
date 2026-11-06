@@ -46,6 +46,7 @@ import os
 import re
 import threading
 import uuid
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Iterable
@@ -60,6 +61,7 @@ from cyberthunder.findings.lifecycle import ReviewConflict
 from cyberthunder.findings.current import policy_block_reason
 from cyberthunder.inventory.targets import ScopeViolation
 from cyberthunder.remediation import snapshot
+from cyberthunder.remediation.maintenance import MaintenanceService, MaintenanceBlocked
 from cyberthunder.remediation import rollback_guard
 from cyberthunder.remediation.library import FixEntry
 from cyberthunder.remediation.models import ApplyResult, BeforeState, HealthResult, RollbackResult, VerifyResult
@@ -429,8 +431,10 @@ class RemediationEngine:
 
     @rollback_guard.serialized
     @operation("apply")
-    def execute(self, proposal_id: str, *, actor: str, simulate_verify_fail: bool = False) -> Proposal:
+    def execute(self, proposal_id: str, *, actor: str, simulate_verify_fail: bool = False,
+                maintenance_override: dict | None = None) -> Proposal:
         from cyberthunder.control.assessment import AssessmentBlocked, guard_approved_assessment
+        maintenance_override = deepcopy(maintenance_override)
         gate = self.ctx.gate
         p = gate.get(proposal_id)
         authorize(self.ctx, "apply", actor=actor, target=p.host)
@@ -445,6 +449,8 @@ class RemediationEngine:
             raise ReviewSuppressed("The current finding has an active review suppression; reopen its review before applying")
         self._guard_policy_evidence(p, finding, actor)
         fix = self._fix_for(p, finding)
+        maintenance = MaintenanceService(self.ctx)
+        admission = maintenance.guard(p, actor=actor, override=maintenance_override)
         adapter = self._adapter(target)
         snap = self.ctx.store.snapshot_dir(p.id)
 
@@ -467,6 +473,8 @@ class RemediationEngine:
                                                  "copied": len(copied), "dir": str(snap)})
             from cyberthunder.findings.review import ReviewService
             with ReviewService(self.ctx).remediation_guard(finding):
+                maintenance.guard(gate.get(p.id), actor=actor, override=maintenance_override,
+                                  expected=admission, boundary="execution")
                 if self._review_blocked(finding, actor, "apply"):
                     raise ReviewSuppressed("A review suppressed the finding before apply; no fix was executed")
                 self._guard_policy_evidence(p, finding, actor)
@@ -478,6 +486,8 @@ class RemediationEngine:
                 self.ctx.killswitch.guard(f"remediation.apply:{p.id}", actor)
                 if rollback_guard.identity(self._target(p, "execute", actor)) != bound_identity:
                     raise rollback_guard.RollbackBlocked("target connection identity changed before apply")
+                maintenance.guard(gate.get(p.id), actor=actor, override=maintenance_override,
+                                  expected=admission, boundary="execution", record=False)
                 if fix.kind == "runbook":
                     return self._issue_runbook(p, target, fix)
                 step = "apply"
@@ -518,11 +528,11 @@ class RemediationEngine:
                                             f"{_short(vr.evidence, 200)}")
             self._auto_rollback(p, target, adapter, transport, fix, before, why)
             return gate.get(p.id)
-        except (ReviewSuppressed, RemediationHeld, PolicyEvidenceBlocked, ReviewConflict, AssessmentBlocked,
-                ScopeViolation, rollback_guard.RollbackBlocked):
+        except (MaintenanceBlocked, ReviewSuppressed, RemediationHeld, PolicyEvidenceBlocked, ReviewConflict, AssessmentBlocked,
+                ScopeViolation, rollback_guard.RollbackBlocked) as exc:
             # Before-state capture is read-only. Do not run a rollback when apply never ran.
             if gate.get(p.id).state is ProposalState.APPLYING:
-                gate.failed(p.id, actor, note="stopped before apply by finding evidence or review")
+                gate.failed(p.id, actor, note=f"stopped before apply: {_short(str(exc))}")
             raise
         except KillSwitchEngaged as e:
             # the guard has already audited the block; stop here and do not touch the host again

@@ -12,6 +12,7 @@ import { ApprovalProgress } from './ApprovalProgress';
 import { ApplyTimeline } from './ApplyTimeline';
 import { CitationChips } from './CitationChips';
 import { DiffButton } from './ProposalDiff';
+import { MaintenanceNotice, MaintenanceOverrideButton } from './ProposalMaintenance';
 import { PreviewButton } from './ProposalPlan';
 import { PermissionButton, usePermissions } from './PermissionGate';
 import { RecordedIdentity } from './IdentityProvenance';
@@ -185,6 +186,8 @@ export function ProposalCard({
         {p.state === 'rolled_back' && <Alert color="yellow">This change was rolled back. Earlier passing observations may no longer describe the target. Check its current condition with a fresh scan.</Alert>}
 
         <Divider />
+        <MaintenanceNotice value={p.maintenance} />
+        {p.state === 'approved' && p.maintenance?.status === 'held' && <MaintenanceOverrideButton proposalId={p.id} disabled={actionsDisabled || busy || suppressed || held} />}
         {held && <Alert color="orange" title="Remediation held by risk acceptance">
           <Text size="sm">{f?.review?.current?.reason} The scanner risk remains. Revoke acceptance in Finding detail, or reassess after expiry or changed evidence before applying.</Text>
         </Alert>}
@@ -203,7 +206,7 @@ export function ProposalCard({
             </>
           )}
           {p.state === 'approved' && (
-            <PermissionButton action="apply" size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={actionsDisabled || busy || suppressed || held} onClick={() => { if (!held) actions.apply(p); }}>Apply</PermissionButton>
+            <PermissionButton action="apply" size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={actionsDisabled || busy || suppressed || held || p.maintenance?.allowed === false} onClick={() => { if (!held && p.maintenance?.allowed !== false) actions.apply(p); }}>Apply</PermissionButton>
           )}
           {p.state === 'applying' && <Button size="md" loading variant="light">Applying</Button>}
           {canRequestRollback(p) && (
