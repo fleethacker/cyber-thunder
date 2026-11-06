@@ -275,3 +275,165 @@ operation-wrapper enforcement, full integration gate or external validation is
 claimed here. The parent owns those acceptance checks, inventory environment
 schema, API/CLI/worker enforcement, cluster-service wiring and backlog updates.
 No dependency changes are required.
+
+## Guarding selected Kubernetes credentials
+
+The followup module `security/kube_credentials.py` exposes:
+
+```python
+validate_kubeconfig(binding: CredentialBinding, *, trusted_uid: int | None = None) -> KubeconfigBinding
+guard_kubeconfig(binding: KubeconfigBinding) -> None
+```
+
+The input is the fresh account-policy binding for a kubeconfig target. The
+immutable result supplies `path`, `context`, `cluster`, `user`, `server`, file
+identity/content-hash bindings, `kubectl_args()` and secret-free `evidence()`.
+The parent must guard immediately before each Kubernetes subprocess, use all
+returned selection arguments, and reject caller-provided connection or identity
+overrides. This module does not modify central services or transport factories.
+
+The accepted file contains exactly one selected context, cluster and user. The
+validator rejects unsafe fields rather than producing a temporary kubeconfig
+containing secret material. POSIX ownership/mode checks and Windows reparse-point
+rejection apply to the config and referenced files. Windows DACL verification
+remains a deployment responsibility. A hash guard detects prior changes; it does
+not make an external process reopening the path race-free.
+
+The subprocess-input contract adds:
+
+```python
+validate_kubectl_args(args: Sequence[str]) -> tuple[str, ...]
+kube_subprocess_env(environ: Mapping[str, str] | None = None) -> dict[str, str]
+```
+
+`args` must be a list or tuple of operation arguments, excluding both the executable
+and the fixed connection arguments returned by `kubectl_args()`. Validate the
+complete operation tail, including any arguments added by the caller. Do not
+validate a prefix and subsequently append unchecked flags. All four public
+helpers raise `KubeCredentialError`, a `PermissionError`, with fixed error text
+and no original parser exception attached. Do not log raw commands, source files,
+library exceptions, private keys, tokens or unfiltered subprocess stderr.
+
+The complete parent sequence for a subprocess is:
+
+```python
+selected = access.credential(principal, action, current_target)
+kube = validate_kubeconfig(selected)
+operation_args = validate_kubectl_args(["get", "pods", "-A", "-o", "json"])
+environment = kube_subprocess_env()
+# Recheck parent principal/action/scope and policy here too.
+guard_kubeconfig(kube)
+argv = [trusted_absolute_kubectl, *kube.kubectl_args(), *operation_args]
+# subprocess.run(argv, env=environment, shell=False, ...)
+```
+
+Use a server-approved executable; the helper does not locate or attest kubectl.
+Pass the returned environment directly, without merging ambient variables back.
+Neither a kubeconfig selection nor command-shape validation grants permission to
+perform the operation. The parent must retain role, resource, human-approval and
+kill-switch enforcement. The file guard does not reload the access policy or
+inventory. A cached connection/selection is not an authorization capability.
+
+The config source must come from a policy-selected `CredentialBinding` with
+provenance for an in-scope Kubernetes kubeconfig target. There is no bare-path
+or default-context convenience entrypoint. Root fields are exactly `apiVersion`
+(`v1`), `kind` (`Config`), `contexts`, `clusters`, and `users`, optionally an empty
+`preferences` map and a `current-context` equal to the selected context. Each
+array contains exactly one named entry. The context must explicitly select that
+cluster and user; a valid namespace is optional. Unselected accounts and clusters
+are rejected rather than silently removed from a secret-bearing file.
+
+Cluster fields are limited to an HTTPS `server` and exactly one explicit
+`certificate-authority-data` or absolute `certificate-authority` file. URLs with
+credentials, queries, fragments or backslashes are rejected. CA bytes must contain
+only PEM certificates carrying CA basic constraints. No system-CA fallback is
+accepted. `insecure-skip-tls-verify`, `tls-server-name`, `proxy-url`, extensions and
+unknown cluster fields are rejected, even when a bypass flag is set to false.
+
+The selected user has either a nonempty static bearer token or exactly one source
+for each client certificate and private key. Certificate/key sources may be
+base64 embedded `*-data` or absolute protected files. The first client certificate
+must match the private key. Encrypted keys, extra PEM payloads, malformed material,
+token-plus-certificate combinations, `tokenFile`, Basic authentication, executable
+or auth-provider plugins, impersonation fields and unknown credential fields are
+rejected. Token and key bytes are used only within validation and are not returned
+or cached. This does not attest the remote identity, RBAC, certificate revocation,
+expiry acceptance or successful TLS handshake; those remain connection-time checks.
+
+Source reads are limited to 256 KiB for a config, 128 KiB for each public CA or
+client certificate source, and 32 KiB for a private key. There are at most four
+source files. Embedded data has the same decoded limits. YAML is bounded to
+4,096 events and depth 12. Aliases, anchors, explicit tags, duplicate mapping keys
+and multiple documents are rejected. Static tokens are limited to 16,384 ASCII
+bearer-token characters. Certificate bundles are limited to 16 certificates.
+
+All file paths must be absolute on the executing host. There is no tilde,
+environment-variable, relative-path, parent-traversal, UNC/network-share or
+Windows alternate-data-stream expansion. All parent path components are checked
+for symlinks or reparse points. Sources must be regular files with one hard link.
+On POSIX, owner must be root or `trusted_uid`, which defaults to the effective
+service UID. Configs and private keys must have no group/other access. Public CA
+and client certificates may be world-readable, but group/other writes are denied.
+Parent directories must have a trusted owner and reject group/other writes, with
+an exception for trusted sticky directories such as `/tmp`. The caller must set
+any `trusted_uid` override from server configuration, never request data.
+
+Windows paths and source handles are checked for reparse points; this does not
+verify the owner or DACL. `evidence()["protection"]` explicitly reports
+`windows_dacl_not_verified` on Windows, and `posix_owner_mode` on POSIX. Provision
+restrictive Windows file/directory ACLs separately before verified live use.
+The loader does not claim to attest extended filesystem policy or remote filesystems.
+
+`FileIdentity` binds each source path, role, SHA-256, file identity, size, timestamps,
+mode/owner metadata and parent-directory identities. Validation checks all files
+again before returning. `guard_kubeconfig` rereads and rehashes all sources, so a
+same-size edit with restored mtime, atomic replacement, owner/mode change, missing
+source or changed key/CA cannot reuse the old result. Audit evidence exposes only
+file roles/hashes, exact selection, server, authentication kind, policy hash and
+principal/target provenance. Raw source paths are available for execution but
+omitted from the evidence and dataclass representation. No temporary kubeconfig
+is written, and no secret-containing file contents remain in the returned object.
+
+This is a prelaunch snapshot check, not an immutable subprocess file handle.
+An administrator or otherwise authorized writer can change the path after the
+guard returns and before kubectl opens it; a later guard detects the change but
+cannot undo the earlier external operation. Keep these sources in protected,
+server-managed directories and coordinate credential rotation with active jobs.
+Do not describe this path-based integration as race-free. OS-protected immutable
+deployment material or a separately reviewed descriptor-based subprocess design
+would be required for that stronger guarantee.
+
+The command allowlist includes `get`, `describe`, `version`, `api-resources`,
+`api-versions`, `apply`, `replace`, `patch`, `delete`, `rollout status` and
+`auth can-i`, with a small set of their operation flags. There are at most 128
+arguments, 32,768 characters per argument and 65,536 total characters. The helper
+rejects all unreviewed flags, short-flag bundles and `--` delimiters. It rejects
+endpoint, user, context, cluster, kubeconfig, token, impersonation, CA, client key,
+TLS-name, verification-bypass, proxy, preference-file, logging and profiling
+overrides in either `--flag value` or `--flag=value` form. New flags require review.
+Raw GET requests must use relative API paths, not absolute URLs. Manifest inputs
+accept only stdin (`-f -`); filesystem/URL manifests and Kustomize are excluded.
+Unreviewed commands, plugins, config inspection, editing, external diff, exec,
+debug, run and proxy operations are excluded. The parent still owns validation
+and authorization of manifests and patches supplied on stdin or as arguments.
+
+The environment helper retains only executable-path, Windows runtime,
+temporary-directory, locale and timezone variables. It drops Kubernetes defaults,
+in-cluster variables, cloud/OS credentials, proxy variables, alternate trust stores,
+home/profile settings, dynamic-loader hooks and other ambient variables. It sets
+both `KUBECTL_KUBERC=false` and `KUBERC=off`. This prevents kubectl preferences from
+adding defaults or aliases; see the official [kuberc reference](https://kubernetes.io/docs/reference/kubectl/kuberc/).
+The rejected authentication and cluster fields are documented in the official
+[kubeconfig schema](https://kubernetes.io/docs/reference/config-api/kubeconfig.v1/).
+
+Focused followup validation: `python -m pytest tests/security/test_kube_credentials.py`
+completed with 199 passed and 3 skipped on Windows. The skips are real POSIX
+permission tests; owner/mode rules are also exercised with explicit metadata on
+all hosts. Tests use generated certificates, protected temporary config/key/CA
+files, real symlinks/hardlinks where supported, duplicate-key and malicious YAML,
+injected plugins, extra accounts, same-mtime edits, replacement/deletion, key/CA
+changes, appended CLI overrides and ambient environment inputs. No network or
+live cluster was used. Existing PyYAML and cryptography runtimes are used; no
+dependency manifest or global config changes are included. Parent context,
+cluster-service and adapter wiring, Windows DACL provisioning, live TLS/RBAC
+acceptance and the full integration gate remain parent-owned.
