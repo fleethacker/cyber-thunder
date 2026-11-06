@@ -244,9 +244,11 @@ tests passed (42 passes, no skips):
 python -m pytest -o addopts= -q -p no:cacheprovider tests/ops/test_ci_policy.py "tests/security/test_oidc.py::test_total_deadline_stops_trickle_responses[slow_body]"
 ```
 
-The WSL OIDC module had 186 passes, one expected junction skip and 24 failures;
-an isolated `test_signed_tokens_https_then_restart_offline[rsa]` retry still
-failed with `AuthenticationError`. These failures remain outside this skip
-policy change and have no new allowances. The four-module run is not claimed
-as green. Full gates, hosted runners and Windows deployment DACL acceptance
-remain separate integration checks.
+The initial WSL OIDC run exposed 24 failures caused by incomplete loopback TLS
+fixture certificates. The fixtures now include the certificate extensions
+required by strict TLS validation; production trust checks were not weakened.
+The corrected focused Linux OIDC run passed 229 tests with one documented
+Windows-junction skip. Browser-session and API identity checks subsequently
+passed 123 tests on each platform without skips; see [BROWSER_IDENTITY](BROWSER_IDENTITY.md).
+Full exact-commit gates, hosted Python 3.12 runners and Windows deployment DACL
+acceptance remain separate checks.

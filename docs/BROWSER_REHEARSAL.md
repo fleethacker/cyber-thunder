@@ -54,3 +54,10 @@ not live OIDC/CAC acceptance, a real model evaluation, a platform certification,
 or a scan/remediation test against a physical host, VM or cluster. Those tests
 remain separate. The ordinary unit-test gate does not silently skip or substitute
 this explicit browser rehearsal.
+
+Validation on 2026-11-06 UTC: source commit `a61fff8` passed all four scenarios
+on Windows with Chromium: normal and forced-verification-failure recovery for
+both JSON and SQLite. The runner started and stopped each fixture, and every
+receipt confirmed the finding lifecycle and audit chain. Repeat this check on
+the final integrated release commit; later identity and workflow changes need
+their own evidence.

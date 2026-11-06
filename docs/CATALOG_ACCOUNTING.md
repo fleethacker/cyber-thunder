@@ -107,11 +107,15 @@ filtering. File and SQLite state stores are covered by the tests.
   recovery, refusal to persist an unverified ID, empty/unusable index rejection,
   changed-page unavailability, preserved successful state, and explicit offline
   snapshot comparison.
-- External acceptance remains pending: a connected canary against the deployed
-  public index has not been run. The coordination contract restricts this worker
-  to fixtures and isolated loopback tests. A connected authorized check must
-  establish compatibility with the page and Apex deployment present at that
-  time; these tests do not claim that evidence.
+- Connected metadata acceptance: a bounded canary at 2026-11-06 02:06:38 UTC,
+  against source commit `24489ca4e331a60817e0406335bdf22d2163857d`, used the
+  normal HTTPS client and the public catalog endpoint. The response contained
+  417 entries, all accounted for: 242 supported, 59 unsupported and 116 sunset.
+  It transferred 16,059 compressed bytes (192,854 decoded bytes) in 0.594
+  seconds. The known class ID still worked; rediscovery remained fixture-tested.
+  No benchmarks were downloaded or imported, and no targets were contacted.
+  This is evidence for that deployment and time, not a guarantee of future
+  availability or measured physical link bandwidth.
 
 Focused regression coverage is in
 `tests/ingest/test_catalog_accounting.py`, the existing content index/selection/
