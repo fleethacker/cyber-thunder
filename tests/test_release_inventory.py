@@ -269,6 +269,78 @@ class ReleaseInventoryTests(unittest.TestCase):
         self.assertFalse(output.exists())
         self.assertFalse(receipt.exists())
 
+    def test_root_application_identity(self):
+        result = self.generate()
+        root = result["metadata"]["component"]
+        self.assertEqual((root["name"], root["version"]), ("sample-app", "0.1.0"))
+        self.assertNotIn(root["bom-ref"], [c["bom-ref"] for c in result["components"]])
+
+    def test_json_depth_bound_before_parser(self):
+        data = b'{"unused":' + b'[' * 65 + b'0' + b']' * 65 + b'}'
+        with patch.object(inventory.json, "loads", side_effect=AssertionError("decoder reached")), \
+                self.assertRaises(inventory.InventoryError):
+            inventory.json_object(data)
+
+    def test_json_depth_boundary_and_escaped_strings(self):
+        data = '{"unused":' + '[' * 63 + '0' + ']' * 63 + '}'
+        self.assertIsInstance(inventory.json_object(data), dict)
+        value = '[{"quoted": "\\\\\\\""}]' * 100
+        self.assertEqual(inventory.json_object(json.dumps({"value": value})), {"value": value})
+        for data in ('{"unused":NaN}', '{"a":1,"a":2}', '{"a":[}'):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                inventory.json_object(data)
+
+    def test_schema_version_length(self):
+        self.lock["packages"]["node_modules/runtime"]["version"] = "v" * 1025
+        self.write_lock()
+        with self.assertRaises(inventory.InventoryError):
+            self.generate()
+        self.lock["packages"]["node_modules/runtime"]["version"] = "v" * 1024
+        self.write_lock()
+        self.assertEqual(len(next(c for c in self.generate()["components"] if c["name"] == "runtime")["version"]), 1024)
+
+    def test_executed_generator_provenance(self):
+        self.write("scripts/release_inventory.py", "# different repository copy\n")
+        result = properties(self.generate()["metadata"])
+        self.assertEqual(result["generator-sha256"], hashlib.sha256(MODULE.read_bytes()).hexdigest())
+        sources = json.loads(result["sources"])
+        repo_copy = next(s for s in sources if s["path"] == "scripts/release_inventory.py")
+        self.assertNotEqual(repo_copy["sha256"], result["generator-sha256"])
+
+    def test_missing_root_identity_is_explicit(self):
+        self.write("pyproject.toml", "[project]\n")
+        self.assertIn("identity incomplete", properties(self.generate()["metadata"])["unresolved"])
+        (self.root / "pyproject.toml").unlink()
+        result = self.generate()
+        self.assertNotIn("component", result["metadata"])
+        self.assertIn("pyproject.toml", properties(result["metadata"])["unresolved"])
+
+    def test_dirty_bytes_do_not_masquerade_as_head(self):
+        clean = properties(self.generate()["metadata"])
+        self.write("requirements.txt", "sample==9\n")
+        first = properties(self.generate()["metadata"])
+        self.write("requirements.txt", "sample==10\n")
+        second = properties(self.generate()["metadata"])
+        self.assertEqual(clean["source-commit"], second["source-commit"])
+        self.assertEqual(clean["source-head-tree"], second["source-head-tree"])
+        self.assertEqual(first["source-status-sha256"], second["source-status-sha256"])
+        self.assertNotEqual(first["source-set-sha256"], second["source-set-sha256"])
+        self.assertEqual(second["source-dirty"], "true")
+
+    def test_hard_linked_asset_rejected(self):
+        linked = self.root / "cyberthunder/ui/dist/hardlink.js"
+        linked.hardlink_to(self.root / "cyberthunder/ui/dist/assets/app.js")
+        with self.assertRaises(inventory.InventoryError):
+            self.generate()
+
+    def test_deep_json_cli_emits_no_artifact(self):
+        self.write("cyberthunder/ui/package-lock.json", '{"unused":' + '[' * 1000 + '0' + ']' * 1000 + '}')
+        output, receipt = Path(self.temp.name) / "deep.json", Path(self.temp.name) / "deep.receipt.json"
+        self.assertEqual(inventory.main(["--repo", str(self.root), "--output", str(output),
+                                        "--receipt", str(receipt)]), 2)
+        self.assertFalse(output.exists())
+        self.assertFalse(receipt.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

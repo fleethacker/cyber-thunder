@@ -67,6 +67,13 @@ remain present even when all expected local files exist. Missing ordinary inputs
 produce gaps; malformed present inputs fail the run. Missing explicitly requested
 external metadata fails the run.
 
+The repository application is the BOM's `metadata.component`, with its declared
+name/version from `pyproject.toml`; it is not duplicated in `components`. A missing
+project file leaves the root absent with an explicit gap; missing name/version
+also produces an identity gap. The CLI component count covers the `components`
+array only, excluding this root. Component versions are limited to 1,024 characters
+to conform to the CycloneDX 1.6 schema.
+
 Manifest extraction is deliberately limited to literal line forms, including
 `- image:`, and indented block `images:` lists. It does not parse YAML anchors,
 flow collections, Helm templates, compose services, build recipes, or shell logic.
@@ -117,7 +124,8 @@ Limits are constants, not user-expandable CLI options: 8 MiB text/Git output,
 128 MiB per binary input, 512 MiB cumulative input, 10,000 traversed directory
 entries/source files/components, 10,000 ZIP entries, 8 MiB ZIP central directory,
 256 MiB expanded bytes per wheel, 200:1 per-member expansion ratio, 1 MiB METADATA,
-4,096-character scalar metadata, and 32 MiB encoded BOM. ZIP directory counts are
+4,096-character scalar metadata, 64 JSON container levels (checked before decoding,
+including unused fields), and 32 MiB encoded BOM. ZIP directory counts are
 checked before allocating ZIP member objects. Encrypted, linked, duplicate
 (case-insensitive), ZIP64/multipart, or non-stored/non-deflated members are rejected.
 No archive extraction occurs. Large legitimate inputs may require a separately
@@ -125,7 +133,11 @@ reviewed bounds change. Files under private `.build` directories are never scann
 
 Metadata includes exact HEAD commit and HEAD tree, dirty status, SHA-256/size for
 each consumed source, and a SHA-256 of the canonical source list. The generator
-itself is hashed when present in the expected location. Sources and Git status
+in the target repository is hashed when present in the expected location.
+The separate `generator-sha256` hashes the executing script's file, even when
+`--repo` points at another checkout; no absolute execution path is recorded.
+This assumes the script file was not changed between loading and hashing.
+Sources, the executing script file, and Git status
 are checked again after collection. This detects ordinary concurrent changes;
 it is not an atomic filesystem snapshot or protection against a malicious process
 mutating files during reads. Use a fixed isolated checkout for release evidence.

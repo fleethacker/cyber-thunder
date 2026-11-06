@@ -27,6 +27,7 @@ MAX_FILES = 10000
 MAX_EXPANDED = 256 * 1024 * 1024
 MAX_METADATA = 1024 * 1024
 MAX_RATIO = 200
+MAX_JSON_DEPTH = 64
 LIMITATIONS = [
     "FUTURE candidate for ATO-02; partial inventory, not release approval.",
     "Declared versions are not installed versions. Wheel presence does not prove installation or dependency closure.",
@@ -103,6 +104,27 @@ def object_pairs(pairs):
 
 
 def json_object(data):
+    if len(data) > MAX_TEXT:
+        raise InventoryError("JSON byte budget exceeded")
+    # Scan before recursive decoding, including fields that will not be consumed.
+    document = data.decode("utf-8") if isinstance(data, bytes) else data
+    depth, quoted, escaped = 0, False, False
+    for char in document:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise InventoryError("JSON nesting budget exceeded")
+        elif char in "]}":
+            depth -= 1
     result = json.loads(data, object_pairs_hook=object_pairs,
                         parse_constant=lambda _: (_ for _ in ()).throw(InventoryError("non-finite JSON")))
     if not isinstance(result, dict):
@@ -260,6 +282,7 @@ class Inventory:
         self.reader = Reader(root)
         self.components = []
         self.gaps = []
+        self.application = None
 
     def add(self, kind, name, source, version=None, sha=None, **evidence):
         if len(self.components) >= MAX_FILES:
@@ -269,7 +292,7 @@ class Inventory:
                      "properties": props(source=source, artifact_evidence="complete-observed-bytes" if sha else "declaration-only",
                                          component_coverage="incomplete", **evidence)}
         if version is not None:
-            component["version"] = text(version)
+            component["version"] = text(version, limit=1024)
         if sha:
             component["hashes"] = [{"alg": "SHA-256", "content": sha}]
         self.components.append(component)
@@ -294,6 +317,9 @@ class Inventory:
                      optional_dependencies=project.get("optional-dependencies", {}),
                      build_system=config.get("build-system", {}),
                      requires_python=project.get("requires-python", "unknown"))
+            self.application = self.components.pop()
+            if not project.get("name") or not project.get("version"):
+                self.missing("pyproject.toml", "application name/version absent or empty; identity incomplete")
         for name in ("requirements.txt", "requirements-dev.txt"):
             data = self.read(name)
             if data is not None:
@@ -429,6 +455,8 @@ class Inventory:
 
     def generate(self, external_metadata=None):
         root = self.reader.root
+        generator = Reader(Path(__file__).resolve().parent)
+        generator_bytes = generator.read(Path(__file__).name)
         top = Path(git(root, "rev-parse", "--show-toplevel").decode().strip()).resolve()
         if top != root:
             raise InventoryError("repo must be the Git worktree root")
@@ -451,9 +479,12 @@ class Inventory:
         if (git(root, "rev-parse", "HEAD").decode().strip() != commit
                 or git(root, "status", "--porcelain=v1", "-z", "--untracked-files=normal") != status):
             raise InventoryError("repository changed during inventory")
+        if generator.read(Path(__file__).name) != generator_bytes:
+            raise InventoryError("generator changed during inventory")
         return {"$schema": SCHEMA, "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
-                "metadata": {"properties": props(
+                "metadata": {**({"component": self.application} if self.application else {}), "properties": props(
                     candidate="FUTURE / ATO-02", coverage="partial", source_commit=commit,
+                    generator_sha256=digest(generator_bytes),
                     source_head_tree=tree, source_dirty=bool(status), source_status_sha256=digest(status),
                     sources=sources, source_set_sha256=digest(encoded(sources)),
                     limitations=LIMITATIONS, unresolved=sorted(self.gaps, key=lambda gap: (gap["source"], gap["reason"])))},
