@@ -1,7 +1,7 @@
 # Person-association implementation review
 
 Review baseline: `9bab76a9940a574d734767c96118d48cb1e887f7`.
-Reviewer and change author: Joshua Ott <Joshua.ott@outlook.com>.
+Commit author: Joshua Ott <Joshua.ott@outlook.com>.
 Review date: 2026-11-06.
 
 ## Findings and fixes

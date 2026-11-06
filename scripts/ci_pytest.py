@@ -218,6 +218,18 @@ NATIVE_OPERATOR_SKIPS = {
 }
 
 
+SCAP_IMPORT_SKIPS = {
+    "win32": {
+        "tests/ingest/test_scap_review.py::test_fifo_is_rejected_before_open": "requires native POSIX FIFO",
+        "tests/ingest/test_scap_review.py::test_database_writer_wait_rechecks_authority[json]": "SQLite writer contention only",
+        "tests/ingest/test_scap_review.py::test_file_replacement_cannot_turn_a_regular_file_into_a_blocking_pipe": "requires native POSIX FIFO replacement"
+    },
+    "linux": {
+        "tests/ingest/test_scap_review.py::test_database_writer_wait_rechecks_authority[json]": "SQLite writer contention only"
+    }
+}
+
+
 def expected_skips(platform: str) -> dict[str, str]:
     if platform not in {"linux", "win32"}:
         raise ValueError(f"Unsupported CI platform: {platform}")
@@ -297,6 +309,7 @@ def expected_skips(platform: str) -> dict[str, str]:
     allowed.update(NODE_HARDENING_SKIPS[platform])
     allowed.update(CREDENTIAL_RESOLVER_SKIPS[platform])
     allowed.update(NATIVE_OPERATOR_SKIPS[platform])
+    allowed.update(SCAP_IMPORT_SKIPS[platform])
     if platform == "linux":
         # The native Windows command boundary runs on the Windows matrix leg.
         allowed["tests/ops/test_wsl_keepalive.py::test_keepalive_operator_and_task_boundaries"] = "native Windows PowerShell task-boundary fixture"

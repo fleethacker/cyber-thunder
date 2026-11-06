@@ -1,0 +1,20 @@
+{
+  "commit": "c6c8ed38e538c7c36dda3ceed363a553bc08c294",
+  "files": {
+    "scap-review-handoff.md": "e9e93c754bab119b3db9c6d6c5cbfc74f7efff806d94ba627f1187d00619cfa8",
+    "scap-review-receipts.json": "285d2f0a6706f5035f79563ea3c8d37c8b16ebb09521005f18f8832453a458c3",
+    "scap-review-final.xml": "d43fd9ca33f609036b6f7f9fad61729d098573f249b7f260bc4fd09eed0f2fd3",
+    "scap-review-publication-final.xml": "8d98c9370ae64d22a5111282d472b7b005007e222093c7c6b29a4dfce9c47070",
+    "scap-review-posix-final.xml": "32e1667e863392ea36691a6f930d502e76111ccf0c33d11a77b884fa0183170b"
+  },
+  "skips": {
+    "win32": {
+      "tests/ingest/test_scap_review.py::test_fifo_is_rejected_before_open": "requires native POSIX FIFO",
+      "tests/ingest/test_scap_review.py::test_database_writer_wait_rechecks_authority[json]": "SQLite writer contention only",
+      "tests/ingest/test_scap_review.py::test_file_replacement_cannot_turn_a_regular_file_into_a_blocking_pipe": "requires native POSIX FIFO replacement"
+    },
+    "linux": {
+      "tests/ingest/test_scap_review.py::test_database_writer_wait_rechecks_authority[json]": "SQLite writer contention only"
+    }
+  }
+}

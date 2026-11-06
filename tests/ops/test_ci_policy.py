@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 112 and len(windows) == 84
+    assert len(linux) == 113 and len(windows) == 87
     native_acl = {node: reason for node, reason in linux.items()
                   if node.startswith("tests/security/test_windows_file_trust.py::")}
     assert len(native_acl) == 46
@@ -374,3 +374,14 @@ def test_workflow_has_read_only_triggers_full_matrix_and_immutable_actions():
             action, sha = step["uses"].split("@")
             assert action in {"actions/checkout", "actions/setup-python", "actions/setup-node", "actions/upload-artifact"}
             assert len(sha) == 40 and all(char in "0123456789abcdef" for char in sha)
+
+
+@pytest.mark.parametrize("platform,count", [("linux", 1), ("win32", 3)])
+def test_scap_import_skips_match_review_receipts(platform, count):
+    receipt = json.loads((ROOT / "docs/scap-import-platform-skips.json").read_text())
+    actual = {node: reason for node, reason in expected_skips(platform).items()
+              if node.startswith("tests/ingest/test_scap_review.py::")}
+    assert actual == receipt["skips"][platform] and len(actual) == count
+    common = set(expected_skips("linux")) & set(actual)
+    if platform == "win32":
+        assert common == {"tests/ingest/test_scap_review.py::test_database_writer_wait_rechecks_authority[json]"}
