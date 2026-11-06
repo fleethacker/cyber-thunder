@@ -125,6 +125,11 @@ def _benchmark(el: ET.Element) -> dict:
     elif version and (match := re.fullmatch(r"([0-9]{1,6})\.([0-9]{1,6})", version)):
         # DISA SCAP releases use padded major.release values such as 002.010.
         pair = (int(match[1]), int(match[2]))
+    # A version spelling must not override a contradictory internal release claim.
+    release_claims = [int(value) for text in releases
+                      for value in re.findall(r"\bRelease:\s*([0-9]{1,6})\b", text, re.I)]
+    if pair and any(value != pair[1] for value in release_claims):
+        raise ContentUploadError("Conflicting internal release claims")
     return {"benchmark_id": bid, "title": fields["title"][0] if fields["title"] else None,
             "version": version, "release_info": release, "catalog_version": list(pair) if pair else None,
             "status": [{"value": _text(c), "date": c.get("date")} for c in el if _local(c) == "status"],

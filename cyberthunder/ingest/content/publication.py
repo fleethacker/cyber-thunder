@@ -91,11 +91,14 @@ def index(store):
         if doc["publications"] and doc["generation"] not in doc["publications"]:
             raise PublicationError("Missing current publication")
         expected_floors = {}
+        active_keys = set()
         for gid, publication in doc["publications"].items():
             if not isinstance(publication, dict) or publication.get("record", {}).get("generation") != gid:
                 raise PublicationError("Invalid publication history")
             if doc["files"].get(gid) != publication["record"]:
                 raise PublicationError("Publication record differs from committed history")
+            if publication.get("activated"):
+                active_keys.update(item["key"] for item in publication["lineages"])
             if publication.get("trusted") and publication.get("activated"):
                 for item in publication["lineages"]:
                     if item["release"]:
@@ -104,6 +107,8 @@ def index(store):
                             expected_floors[item["key"]] = {**item, "sha256": publication["record"]["sha256"]}
         if expected_floors != doc["floors"]:
             raise PublicationError("Content release floor is inconsistent; recovery is required")
+        if set(doc["active"]) != active_keys:
+            raise PublicationError("Missing or inconsistent active lineage; recovery is required")
         # Validate the active generation's references, never substitute older bytes.
         for key, generation in doc["active"].items():
             publication = doc["publications"].get(generation)
@@ -111,6 +116,8 @@ def index(store):
                 raise PublicationError("Missing active publication")
             if not publication.get("activated") or key not in {item["key"] for item in publication["lineages"]}:
                 raise PublicationError("Invalid active lineage reference")
+            if any(doc["active"].get(item["key"]) != generation for item in publication["lineages"]):
+                raise PublicationError("Incomplete active multi-benchmark publication; recovery is required")
             verify_artifacts(store, publication)
     return doc
 

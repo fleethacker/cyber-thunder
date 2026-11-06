@@ -142,7 +142,9 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
   }
   const epoch = publicationEpoch.current;
   const samePublication = () => sameAccount() && publicationEpoch.current === epoch && epoch.authority === authorityRevision();
-  const changeSelection = () => { publicationEpoch.current = { ...publicationEpoch.current }; clearPublication(); };
+  const selectionEpoch = useRef({});
+  const selection = selectionEpoch.current;
+  const changeSelection = () => { selectionEpoch.current = {}; publicationEpoch.current = { ...publicationEpoch.current }; clearPublication(); };
   const validPublication = publication && publication.account === account && publication.authority === authorityRevision()
     && publication.libraryGeneration === library.held.generation ? publication : null;
   currentPublication.current = validPublication;
@@ -150,7 +152,7 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
     currentPublication.current = null; setPublication(null); setPublicationReason(''); setPublicationConfirmed(false);
   };
   useEffect(() => { clearPublication(); }, [account, authorityRevision(), library.held.generation]);
-  useEffect(() => () => { currentPublication.current = null; publicationEpoch.current = { ...publicationEpoch.current }; }, []);
+  useEffect(() => () => { currentPublication.current = null; selectionEpoch.current = {}; publicationEpoch.current = { ...publicationEpoch.current }; }, []);
   const capturePublication = (error: unknown, target: { file?: File; folder?: string }) => {
     const review = publicationReview(error);
     if (!review || !samePublication()) return false;
@@ -229,9 +231,13 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
     const intent = { ...exception.current };
     importException(intent, true);
     if (!samePublication()) return;
+    // Refreshes caused by this batch may advance the library generation. A new
+    // session, selection or mounted view still needs a new explicit upload action.
+    const sameBatch = () => sameAccount() && epoch.authority === authorityRevision() && selectionEpoch.current === selection;
     const batch: UploadItem[] = publicationInputs.current.files.map((file) => ({ file, state: 'queued' }));
     setUploads(batch);
     for (let i = 0; i < batch.length; i++) {
+      if (!sameBatch()) return;
       const item = batch[i];
       const reason = importException(intent, true);
       try {
@@ -240,20 +246,20 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
         batch[i] = { ...item, state: 'uploading' };
         setUploads([...batch]);
         const result = await api.uploadContent(item.file, reason);
-        if (!sameAccount()) return;
+        if (!sameBatch()) return;
         requireAction('import');
         batch[i] = { ...item, state: 'done', result };
         setUploads([...batch]);
-        await onRefresh().catch((e) => { if (sameAccount()) setError(`File imported, but the library could not refresh: ${errorText(e)}`); });
+        await onRefresh().catch((e) => { if (sameBatch()) setError(`File imported, but the library could not refresh: ${errorText(e)}`); });
       } catch (e) {
-        if (!sameAccount()) return;
+        if (!sameBatch()) return;
         const needsReview = capturePublication(e, { file: item.file });
         batch[i] = { ...item, state: 'failed', error: needsReview ? 'Review this release before activation.' : errorText(e) };
         setUploads([...batch]);
         if (needsReview) break;
       }
     }
-    if (samePublication()) setFiles(batch.filter((item) => item.state !== 'done').map((item) => item.file));
+    if (sameBatch()) setFiles(batch.filter((item) => item.state !== 'done').map((item) => item.file));
   };
 
   const confirmPublication = async (pending: PendingPublication) => {
@@ -272,14 +278,16 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
     try {
       if (pending.file) {
         const result = await api.uploadContent(pending.file, authenticityReason, intent);
+        if (!samePublication()) return;
         requireAction('import'); setUploads([{ file: pending.file, state: 'done', result }]); if (samePublication()) setFiles([]);
       } else if (pending.folder) {
         const result = await api.importDir(pending.folder, authenticityReason, intent);
+        if (!samePublication()) return;
         requireAction('import'); setImported(result);
       }
       await onRefresh();
     } catch (error) {
-      if (sameAccount()) {
+      if (samePublication()) {
         const needsReview = capturePublication(error, { file: pending.file, folder: pending.folder });
         setError(needsReview ? 'Publication state changed. Review the current release and confirm again.' : errorText(error));
       }
@@ -383,9 +391,11 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
             try {
               if (!samePublication()) return;
               const result = await api.importDir(publicationInputs.current.folder.trim(), importException());
+              if (!samePublication()) return;
               requireAction('import');
               setImported(result); await onRefresh();
             } catch (error) {
+              if (!samePublication()) return;
               if (!capturePublication(error, { folder: folder.trim() })) throw error;
             }
           })}>Import folder</Button>

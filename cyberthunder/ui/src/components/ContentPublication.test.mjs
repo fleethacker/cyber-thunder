@@ -21,10 +21,10 @@ async function setup(t, target = 'folder') {
   const { ApiError } = load(new URL('../api/client.ts', import.meta.url));
   const props = { library: libraryFixture(), view: 'transfers', dirty: false, disabled: false, onRefresh: async () => {} };
   props.library.held.generation = hash('a');
-  let nextError = null, waiting = null;
+  let nextError = null, waiting = null, normalUploads = false;
   const send = async (...args) => {
     calls.push(args);
-    if (!args[3]) throw new ApiError(409, JSON.stringify(review()));
+    if (!args[3] && !normalUploads) throw new ApiError(409, JSON.stringify(review()));
     if (waiting) await waiting;
     if (nextError) throw nextError;
     return args[0] === 'upload' ? { record: { filename: 'fixture.xml', version_label: 'V2R11',
@@ -50,6 +50,7 @@ async function setup(t, target = 'folder') {
     await panel.click('Import folder');
   }
   return { ...panel, props, calls, identity, file, ApiError, fail: error => { nextError = error; },
+    allowNormalUploads() { normalUploads = true; },
     hold() { let release; waiting = new Promise(resolve => { release = resolve; }); return release; },
     async confirm() {
       await panel.change('Reason for exceptional activation', 'Reviewed older release for this fixture');
@@ -57,6 +58,59 @@ async function setup(t, target = 'folder') {
     },
   };
 }
+
+for (const changed of ['session', 'selection', 'unmount']) test(`an upload batch stops after ${changed} changes while a file is pending`, async t => {
+  const panel = await setup(t, 'file');
+  panel.allowNormalUploads();
+  await panel.change('Choose content files', [panel.file, new File(['second'], 'second.xml')]);
+  const changeFiles = panel.control('Choose content files').props.onChange;
+  const release = panel.hold();
+  await panel.click('Upload 2 files');
+  assert.equal(panel.calls.length, 2);
+  if (changed === 'session') panel.identity.setSessionIdentity({ ...human('alice'), csrf_token: 'replacement-session' });
+  if (changed === 'selection') changeFiles([new File(['replacement'], 'replacement.xml')]);
+  if (changed === 'unmount') panel.unmount();
+  await panel.settle(); release(); await panel.settle();
+  assert.equal(panel.calls.length, 2, 'the remaining file needs a new explicit action');
+  if (changed === 'selection') assert.equal(panel.control('Choose content files').props.value[0].name, 'replacement.xml');
+});
+
+test('a batch continues across its own library refreshes and clears completed files', async t => {
+  const panel = await setup(t, 'file');
+  panel.allowNormalUploads();
+  let refreshes = 0;
+  panel.props.onRefresh = async () => {
+    refreshes++;
+    await panel.rerender({ ...panel.props, library: { ...panel.props.library,
+      held: { ...panel.props.library.held, generation: hash(refreshes === 1 ? 'e' : 'f') } } });
+  };
+  await panel.rerender(panel.props);
+  await panel.change('Choose content files', [panel.file, new File(['second'], 'second.xml')]);
+  await panel.click('Upload 2 files');
+  for (let tick = 0; tick < 10 && panel.control('Choose content files').props.value.length; tick++) await panel.settle();
+  assert.equal(panel.calls.length, 3);
+  assert.equal(refreshes, 2);
+  assert.deepEqual(panel.control('Choose content files').props.value, []);
+});
+
+for (const target of ['file', 'folder']) for (const changed of ['session', 'selection'])
+  test(`late ${target} success cannot replace state after ${changed} changes`, async t => {
+    const panel = await setup(t, target);
+    await panel.confirm();
+    const change = panel.control(target === 'file' ? 'Choose content files' : 'Import folder on the server').props.onChange;
+    let refreshes = 0;
+    panel.props.onRefresh = async () => { refreshes++; };
+    await panel.rerender(panel.props);
+    const release = panel.hold();
+    await panel.click('Confirm this activation');
+    if (changed === 'session') panel.identity.setSessionIdentity({ ...human('alice'), csrf_token: 'replacement-session' });
+    else if (target === 'file') change([new File(['replacement'], 'replacement.xml')]);
+    else change({ currentTarget: { value: 'replacement-folder' } });
+    await panel.settle(); release(); await panel.settle();
+    assert.equal(panel.calls.length, 2);
+    assert.equal(refreshes, 0, 'the obsolete callback must not refresh the replacement view');
+    assert.ok(!panel.nodes().some(node => text(node).includes('Content committed; audit outcome')));
+  });
 
 for (const target of ['file', 'folder']) test(`${target} review needs a separate reason and confirmation, sends exact binding once`, async t => {
   const panel = await setup(t, target);
