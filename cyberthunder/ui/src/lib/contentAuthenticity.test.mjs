@@ -53,8 +53,10 @@ test('missing artifact text never downgrades a verified or unknown session to a 
 
 test('content client preserves export bytes through JSON and sends exceptions only when provided', async (t) => {
   const { manifestText } = helpers();
+  const identity = evaluate(new URL('../api/identity.ts', import.meta.url));
+  identity.setSessionIdentity({ mode: 'dev', authenticated: false, permissions: [] });
   const { api } = evaluate(new URL('../api/client.ts', import.meta.url), {
-    './identity': { sessionIdentity: () => ({ mode: 'dev' }), sessionHeaders: () => ({}) },
+    './identity': identity,
   });
   // Include escaped Unicode, quotes and a backslash to catch parse/re-serialize or double-escape changes.
   const artifact = '{"items":[],"node":"\\u00e9\\ud83d\\ude80\\\"\\\\"}';
