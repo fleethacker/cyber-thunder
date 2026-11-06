@@ -6,7 +6,7 @@ they do not freeze writers across document, proposal, snapshot and queue owners.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta, timezone
 import hashlib
 import io
@@ -269,6 +269,8 @@ def _snapshot(root, backend, limits):
 
     def add(key, data, origin):
         nonlocal total
+        if key in payload:
+            _fail("duplicate source document")
         total += len(data)
         if len(data) > limits.file_bytes or total > limits.total_bytes or len(payload) >= limits.files:
             _fail("retention source limit exceeded")
@@ -303,6 +305,10 @@ def _snapshot(root, backend, limits):
         for key in ("state.db", "state.db-wal"):
             if key in tree:
                 guards[key] = _sha(_read(root / key, limits.total_bytes, sqlite_shared=True))
+        if "state.db-shm" in tree:
+            # Read marks are volatile, but SQLite also trusts this file's contents.
+            # Require the same native owner/write boundary as the DB and WAL.
+            _read(root / "state.db-shm", limits.total_bytes, sqlite_shared=True)
         # Never instantiate SqliteBackend: its constructor creates/updates schema.
         # query_only + mode=ro preserve documents. SQLite may manage its SHM read marks.
         with _parent(db):
@@ -319,8 +325,9 @@ def _snapshot(root, backend, limits):
                     _fail("unsupported SQLite tables")
                 if connection.execute("SELECT 1 FROM sqlite_master WHERE type IN ('view', 'trigger')").fetchone():
                     _fail("unsupported SQLite views or triggers")
-                if [row[1:3] for row in connection.execute("PRAGMA table_info(documents)")] != [
-                        ("path", "TEXT"), ("body", "TEXT"), ("updated_at", "REAL")]:
+                if [row[1:] for row in connection.execute("PRAGMA table_info(documents)")] != [
+                        ("path", "TEXT", 0, None, 1), ("body", "TEXT", 1, None, 0),
+                        ("updated_at", "REAL", 1, None, 0)]:
                     _fail("unsupported SQLite columns")
                 for key, body, updated in connection.execute("SELECT path, body, updated_at FROM documents ORDER BY path"):
                     _logical(key)
@@ -418,7 +425,8 @@ def _plan(snapshot, backend, cutoff, limits):
                     _fail("invalid scan completion time")
             runs[sid], reasons[sid] = doc, set()
         elif parts[2] == "findings.json":
-            if not isinstance(doc, dict) or doc.keys() - {"schema_version", "generated_at", "meta", "findings"}:
+            if (not isinstance(doc, dict) or doc.keys() - {"schema_version", "generated_at", "meta", "findings"}
+                    or not isinstance(doc.get("findings"), list)):
                 _fail("unsupported findings record")
             findings[sid] = findings_from_doc(doc)
     if set(runs) != set(findings):
@@ -459,14 +467,19 @@ def _plan(snapshot, backend, cutoff, limits):
                 reasons[sid].add("unclassified-observation")
             if finding.raw_ref:
                 _reference(finding.raw_ref, snapshot, sid)
+    incomplete = set()
     for sid, run in runs.items():
         if run["status"] != "done":
             reasons[sid].add("incomplete-scan")
         elif _utc(run["finished_at"]) >= cutoff:
             reasons[sid].add("cutoff")
-        if run.get("coverage_incomplete") is True or run.get("error") or any(
-                item.get("status") != "done" or item.get("errors") for item in run.get("results", {}).values()):
+        if (run.get("coverage_incomplete") is True or run.get("error")
+                or set(run.get("results", {})) != set(run["targets"]) or any(
+                    item.get("status") != "done" or item.get("errors") or
+                    (item.get("coverage") is not None and item["coverage"].get("complete") is not True)
+                    for item in run.get("results", {}).values())):
             reasons[sid].add("incomplete-coverage-or-results")
+            incomplete.add(sid)
     ordered = sorted(runs, key=lambda sid: (_utc(runs[sid]["started_at"]), sid), reverse=True)
     if ordered:
         reasons[ordered[0]].add("latest-scan")
@@ -480,7 +493,11 @@ def _plan(snapshot, backend, cutoff, limits):
             if key not in seen:
                 reasons[sid].add("latest-target-producer")
                 seen.add(key)
-    view = _View(snapshot.root, snapshot.docs, runs)
+    # Project incomplete evidence as a non-completing overlay, including scoped
+    # cluster observations. Keep the captured/exported status and bytes unchanged.
+    projection_runs = {sid: {**run, "coverage_incomplete": True, "status": "error"} if sid in incomplete else run
+                       for sid, run in runs.items()}
+    view = _View(snapshot.root, snapshot.docs, projection_runs)
     current, _ = view.projected_observations()
     for fid in current:
         for sid in owners.get(fid, ()):
@@ -511,7 +528,7 @@ def _plan(snapshot, backend, cutoff, limits):
     return {"format": "scan-retention-plan-v1", "backend": backend,
             "cutoff_utc": cutoff.isoformat(), "source_fingerprint": snapshot.fingerprint,
             "eligible": eligible, "pinned": {sid: sorted(v) for sid, v in sorted(reasons.items()) if v},
-            "source_manifest": entries, "limits": limits.__dict__, "deletion_enabled": False}
+            "source_manifest": entries, "limits": asdict(limits), "deletion_enabled": False}
 
 
 @contextmanager
@@ -549,17 +566,87 @@ def read_plan(path):
         return _json(_read(_absolute(path), Limits().file_bytes, private=True))
 
 
-def _verify(data, expected_sha256, limits):
-    if not isinstance(expected_sha256, str) or not _HASH.fullmatch(expected_sha256) or _sha(data) != expected_sha256:
-        _fail("archive digest mismatch")
-    # Our bounded exports need neither ZIP64 nor comments/multi-volume records.
-    # Check the central-directory count before ZipFile allocates member objects.
+def _zip_envelope(data, limits):
+    """Validate actual records before ZipFile allocates its directory objects.
+
+    Accept only the contiguous stored layout emitted below, with matching local
+    and central headers. ZIP extensions and unaccounted bytes have no v1 meaning.
+    """
     if len(data) < 22 or data[-22:-18] != b"PK\x05\x06":
         _fail("unsupported archive envelope")
     disk, start_disk, count, total_count, size, offset, comment = struct.unpack("<4H2LH", data[-18:])
     if (disk or start_disk or comment or count != total_count or not 1 <= count <= limits.files + 1
-            or offset + size != len(data) - 22 or size > (limits.files + 1) * 2048):
+            or offset + size != len(data) - 22 or size > (limits.files + 1) * (46 + 4096)
+            or len(data) > limits.archive_bytes):
         _fail("unsupported archive directory")
+    position, local_end, total = offset, 0, 0
+    for _ in range(count):
+        if position + 46 > len(data) - 22:
+            _fail("unsupported archive directory")
+        (signature, made, version, flags, method, clock, date, crc, compressed, expanded,
+         name_size, extra, comment, disk, internal, external, local) = struct.unpack_from(
+             "<4s6H3L5H2L", data, position)
+        total += expanded
+        if (signature != b"PK\x01\x02" or made != (3 << 8 | 20) or version != 20
+                or flags not in {0, 0x800} or method or extra or comment or disk or internal
+                or compressed != expanded or expanded > limits.file_bytes or total > limits.total_bytes
+                or stat.S_IFMT(external >> 16) != stat.S_IFREG or not 1 <= name_size <= 4096
+                or position + 46 + name_size > len(data) - 22 or local != local_end or local + 30 > offset):
+            _fail("unsupported archive directory member")
+        name = data[position + 46:position + 46 + name_size]
+        _logical(name.decode("utf-8" if flags & 0x800 else "ascii"))
+        header = struct.unpack_from("<4s5H3L2H", data, local)
+        if (header != (b"PK\x03\x04", version, flags, method, clock, date, crc,
+                       compressed, expanded, name_size, 0)
+                or data[local + 30:local + 30 + name_size] != name):
+            _fail("archive local header mismatch")
+        local_end = local + 30 + name_size + expanded
+        if local_end > offset:
+            _fail("archive member overlaps directory")
+        position += 46 + name_size
+    if position != len(data) - 22 or local_end != offset:
+        _fail("archive directory count or layout mismatch")
+
+
+def _archive_plan(selected):
+    if (not isinstance(selected, dict) or set(selected) != {
+            "format", "backend", "cutoff_utc", "source_fingerprint", "eligible", "pinned",
+            "source_manifest", "limits", "deletion_enabled"}
+            or selected["format"] != "scan-retention-plan-v1" or selected["deletion_enabled"] is not False
+            or selected["backend"] not in {"json", "sqlite"}
+            or not isinstance(selected["source_fingerprint"], str)
+            or not _HASH.fullmatch(selected["source_fingerprint"])):
+        _fail("unsupported archive plan")
+    _utc(selected["cutoff_utc"])
+    if set(selected["limits"]) != {f.name for f in fields(Limits)}:
+        _fail("unsupported archive limits")
+    limits = Limits(**selected["limits"])
+    eligible, pinned, entries = selected["eligible"], selected["pinned"], selected["source_manifest"]
+    if (not isinstance(eligible, list) or not eligible or len(eligible) > limits.files
+            or any(not isinstance(sid, str) or not _ID.fullmatch(sid) for sid in eligible)
+            or len(set(eligible)) != len(eligible) or not isinstance(pinned, dict)
+            or len(pinned) + len(eligible) > limits.files or set(eligible) & pinned.keys()
+            or any(not _ID.fullmatch(sid) or not isinstance(reasons, list) or not reasons
+                   or any(not isinstance(reason, str) or not reason for reason in reasons)
+                   for sid, reasons in pinned.items())
+            or not isinstance(entries, list) or not 1 <= len(entries) <= limits.files):
+        _fail("invalid archived selection")
+    for entry in entries:
+        if (not isinstance(entry, dict) or set(entry) != {"path", "bytes", "sha256", "origin"}
+                or type(entry["bytes"]) is not int or not 0 <= entry["bytes"] <= limits.file_bytes
+                or not isinstance(entry["sha256"], str) or not _HASH.fullmatch(entry["sha256"])):
+            _fail("invalid archive source manifest")
+        path = _logical(entry["path"])
+        origin = "sqlite-body-utf8" if selected["backend"] == "sqlite" and is_document(path) else "file"
+        if entry["origin"] != origin:
+            _fail("invalid archive storage origin")
+    return limits
+
+
+def _verify(data, expected_sha256, limits):
+    if not isinstance(expected_sha256, str) or not _HASH.fullmatch(expected_sha256) or _sha(data) != expected_sha256:
+        _fail("archive digest mismatch")
+    _zip_envelope(data, limits)
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         infos = archive.infolist()
         if not 1 <= len(infos) <= limits.files + 1 or len({i.filename.casefold() for i in infos}) != len(infos):
@@ -576,14 +663,14 @@ def _verify(data, expected_sha256, limits):
         if manifest.get("format") != "scan-retention-archive-v1" or set(manifest) != {"format", "plan"}:
             _fail("unsupported archive manifest")
         selected = manifest["plan"]
-        if selected.get("format") != "scan-retention-plan-v1" or selected.get("deletion_enabled") is not False:
-            _fail("unsupported archive plan")
+        declared = _archive_plan(selected)
+        if (len(data) > declared.archive_bytes or len(infos) > declared.files + 1
+                or total > declared.total_bytes or any(i.file_size > declared.file_bytes for i in infos)):
+            _fail("archive exceeds declared limits")
         entries = selected["source_manifest"]
         if {i.filename for i in infos} != {"manifest.json", *(e["path"] for e in entries)} or len(entries) != len(infos) - 1:
             _fail("archive members do not match manifest")
         eligible = selected["eligible"]
-        if not eligible or any(not _ID.fullmatch(sid) for sid in eligible):
-            _fail("invalid archived selection")
         for entry in entries:
             path = _logical(entry["path"])
             parts = path.split("/")

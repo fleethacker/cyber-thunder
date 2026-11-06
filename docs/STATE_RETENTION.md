@@ -11,7 +11,11 @@ restore-to-live-state, or retention policy for other kinds of state.
 explicit backend. Supply exactly one exclusive UTC completion cutoff or positive
 integer age in days. Age is resolved to a UTC cutoff in the returned plan. A scan
 must have `status=done`, valid explicit UTC start/completion timestamps, both
-state documents, and a completion time strictly before that cutoff.
+state documents, and a completion time strictly before that cutoff. Every declared
+target must have a successful result with no errors. A supplied target coverage
+object must explicitly say `complete=true`; missing target results or reported
+coverage gaps keep the scan pinned. Legacy results without a coverage object are
+accepted, so these checks do not attest that a scanner assessed every control.
 
 The planner reads a bounded snapshot twice. The returned JSON contains eligible
 scan IDs, reasons for pinned scans, the resolved cutoff, limits, an opaque source
@@ -45,11 +49,17 @@ the enclosing scan and every listed artifact to a present raw file in that scan.
 Unknown collector fields and missing/foreign collector paths are refused.
 
 The planner uses the existing observation projection with captured documents; it
-does not create an application context or initialize a state backend. The SQLite
+projects incomplete target results as non-completing overlays, including scoped
+cluster observations, so they cannot release older evidence. This changes only
+the retention view; captured documents and the owning store remain unchanged.
+It does not create an application context or initialize a state backend. The SQLite
 reader opens the existing version-1 documents database with `mode=ro` and
 `query_only`. It can participate in SQLite SHM read-mark management; it does not
 update rows, migrate schemas, or checkpoint the audit log. A JSON source with a
 database, or SQLite with leftover JSON documents, is deliberately refused.
+SQLite document column constraints and unique logical paths are checked. Existing
+SHM files must also pass native owner/write-protection checks before SQLite opens
+them; their volatile read marks remain excluded from the source fingerprint.
 
 ## Exact export and verification
 
@@ -87,7 +97,13 @@ inspection count against bounds. Callers can lower limits, never raise these har
 ceilings. ZIP64, compression, encryption, comments, multi-volume archives, duplicate
 or unsafe members, missing/extra members and invalid hashes are refused. Inspection
 checks the central-directory bounds before allocating member objects and never
-extracts files.
+extracts files. It checks the actual record count, contiguous member layout, and
+agreement between local and central headers before constructing `ZipFile`.
+Member comments, extra fields, data descriptors, prefixes, gaps and ZIP64 local
+headers are outside this format. Manifest structure, unique selections, storage
+origins, fingerprint syntax and declared limits are checked as well as hashes.
+Returned plans hold a copy of the limits, so editing a plan cannot change later
+operations' limits.
 
 The writer flushes and fsyncs its file, reopens it through the private-file boundary,
 checks the whole-file digest and every member against the manifest, then captures
@@ -186,3 +202,45 @@ python -m pytest tests/state/test_retention.py tests/state/test_backends.py test
   The final documentation-only addition records these results; implementation and
   test bytes remain those tested. Local sanitized receipts, hashes, complete source
   archive and Git recovery bundle are under `.build/state-retention-20261106-a2a33c6/`.
+
+## Independent retention review
+
+The review against `2d86d05` reproduced and corrected these failures:
+
+- Missing target results and explicit incomplete coverage could still select a
+  scan for export. Incomplete successor scans could also release older current
+  observations, including scoped cluster findings.
+- Empty objects or strings in place of the findings list were interpreted as an
+  empty scan. Duplicate SQLite document rows could silently replace captured bytes.
+- A writable SQLite SHM file was accepted despite the native source boundary.
+- Editing a returned plan's limits mutated the limits object used to create it.
+- ZIP inspection trusted the advertised count before allocating entries, accepted
+  inconsistent local headers and unsupported ZIP metadata, and accepted malformed
+  selection/fingerprint/limit fields in the manifest.
+
+Regression fixtures first ran against the original implementation. Additional
+adversarial checks cover source-directory permissions, mutation during capture,
+post-verification output byte/permission/hardlink changes, excluded-file reads,
+Unicode evidence names, and refusal of all three CLI actions in OIDC, mesh and
+fleet modes before storage access. Review receipts, failures and source SHA-256
+records are retained privately in `.build/state-retention-review/`.
+
+The same focused selection listed above passed after the review changes on
+2026-11-06:
+
+- Windows Python 3.12.10: **273 passed**, 128.61 seconds.
+- Native Linux Python 3.12.16, serial on CPU 1: **273 passed**, 14.32 seconds.
+- No skips; the existing Starlette/httpx deprecation warning remains on both.
+- The original module failed 42 regression cases on both platforms (40 plus two
+  scoped-observation cases in the Windows calibration). The final native original
+  comparison additionally passed 25 boundary/control cases.
+- All 845 files in the focused native source export matched their recorded
+  SHA-256 values. Only this results paragraph was added after the final tests;
+  implementation and test bytes remain those validated. No dependencies changed.
+
+Acceptance remains limited to bounded fixture exports and observed mutation
+refusal. It is not a cross-process freeze, a proof of absence of every race, a
+content-based credential filter, an authenticated authorization workflow, or
+permission to purge. The archive remains unencrypted; its digest establishes byte
+agreement with a separately trusted receipt, not provenance. Complete SCL-04,
+schedules, live-state recovery and the other interfaces listed above remain open.

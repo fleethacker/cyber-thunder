@@ -14,7 +14,7 @@ import pytest
 
 from cyberthunder.control.approvals import Proposal
 from cyberthunder.findings.schema import Finding, findings_doc
-from cyberthunder.scan import ScanRun
+from cyberthunder.scan import ScanRun, TargetScanResult
 from cyberthunder.state import retention as r
 from cyberthunder.store import StateStore
 
@@ -32,7 +32,8 @@ def history(state_dir, tmp_path):
     for sid, day, host in (("old", "01", "a"), ("live", "02", "b"), ("new", "03", "a")):
         run = ScanRun(id=sid, targets=[host], status="done",
                       started_at=f"2026-01-{day}T00:00:00+00:00",
-                      finished_at=f"2026-01-{day}T01:00:00+00:00")
+                      finished_at=f"2026-01-{day}T01:00:00+00:00",
+                      results={host: TargetScanResult(target_id=host, status="done")})
         raw = store.scan_dir(sid) / "raw" / "result.bin"
         raw.write_bytes(b"exact\x00evidence\xff\r\n" + sid.encode())
         rows = [] if sid == "new" else [Finding(
@@ -563,3 +564,285 @@ def test_exact_noncanonical_document_text(history):
     r.archive(store.root, make_plan(store), output)
     with zipfile.ZipFile(output) as archive:
         assert archive.read(key) == text.encode("utf-8")
+
+
+@pytest.mark.parametrize("sid", ["old", "new"])
+@pytest.mark.parametrize("results", [{}, {"a": {"target_id": "a", "status": "done",
+                                               "coverage": {"complete": False}}}])
+def test_review_incomplete_results_cannot_release_history(history, sid, results):
+    store, _ = history
+    put_run(store, sid, results=results)
+    selected = make_plan(store)
+    assert "incomplete-coverage-or-results" in selected["pinned"][sid]
+    assert "old" not in selected["eligible"]
+    if sid == "new":
+        assert "current-observation" in selected["pinned"]["old"]
+
+
+@pytest.mark.parametrize("value", [{}, ""])
+def test_review_malformed_findings_collection_refused(history, value):
+    store, _ = history
+    key = "scans/new/findings.json"
+    document = store.docs.get(key)
+    document["findings"] = value
+    store.docs.put(key, document)
+    with pytest.raises(r.RetentionError):
+        make_plan(store)
+
+
+def test_review_sqlite_duplicate_documents_refused(history):
+    store, _ = history
+    if store.backend_name != "sqlite":
+        return
+    with sqlite3.connect(store.root / "state.db") as conn:
+        conn.execute("ALTER TABLE documents RENAME TO original_documents")
+        conn.execute("CREATE TABLE documents (path TEXT, body TEXT, updated_at REAL)")
+        conn.execute("INSERT INTO documents SELECT * FROM original_documents")
+        conn.execute("INSERT INTO documents SELECT * FROM original_documents WHERE path='scans/old/run.json'")
+        conn.execute("DROP TABLE original_documents")
+    with pytest.raises(r.RetentionError):
+        make_plan(store)
+
+
+def test_review_sqlite_unsafe_shm_refused(history):
+    store, _ = history
+    if store.backend_name != "sqlite":
+        return
+    path = store.root / "state.db-shm"
+    assert path.exists()
+    if os.name == "nt":
+        from tests.windows_acl import set_dacl, protected_aces
+        set_dacl(path, protected_aces() + "(A;;FW;;;WD)")
+    else:
+        path.chmod(0o666)
+    with pytest.raises(r.RetentionError):
+        make_plan(store)
+
+
+@pytest.mark.parametrize("variation", ["count", "member-comment", "central-extra", "zip64",
+                                      "local-crc", "local-size", "local-flags", "prefix"])
+def test_review_noncanonical_zip_refused(history, variation):
+    import struct
+    store, private = history
+    path = private / "envelope.zip"
+    r.archive(store.root, make_plan(store), path)
+    original = path.read_bytes()
+    if variation in {"member-comment", "central-extra", "zip64"}:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(original)) as source, zipfile.ZipFile(buffer, "w") as target:
+            for index, entry in enumerate(source.infolist()):
+                content = source.read(entry.filename)
+                if index == 0 and variation == "member-comment":
+                    entry.comment = b"untracked metadata"
+                if index == 0 and variation == "central-extra":
+                    entry.extra = struct.pack("<HH", 0xCAFE, 0)
+                with target.open(entry, "w", force_zip64=variation == "zip64") as stream:
+                    stream.write(content)
+        data = bytearray(buffer.getvalue())
+    else:
+        data = bytearray(original)
+        if variation == "count":
+            struct.pack_into("<HH", data, len(data) - 14, 1, 1)
+        elif variation == "local-crc":
+            struct.pack_into("<L", data, 14, 0)
+        elif variation == "local-size":
+            struct.pack_into("<L", data, 18, 0)
+        elif variation == "local-flags":
+            struct.pack_into("<H", data, 6, 8)
+        else:
+            prefix = b"untracked prefix"
+            data = bytearray(prefix) + data
+            directory = struct.unpack_from("<L", data, len(data) - 6)[0] + len(prefix)
+            struct.pack_into("<L", data, len(data) - 6, directory)
+            position = directory
+            while data[position:position + 4] == b"PK\x01\x02":
+                offset = struct.unpack_from("<L", data, position + 42)[0]
+                struct.pack_into("<L", data, position + 42, offset + len(prefix))
+                name, extra, comment = struct.unpack_from("<3H", data, position + 28)
+                position += 46 + name + extra + comment
+    path.write_bytes(data)
+    with pytest.raises(r.RetentionError):
+        r.inspect_archive(path, digest(data))
+
+
+def test_review_directory_count_checked_before_zipfile(history, monkeypatch):
+    import struct
+    store, private = history
+    path = private / "count.zip"
+    r.archive(store.root, make_plan(store), path)
+    data = bytearray(path.read_bytes())
+    struct.pack_into("<HH", data, len(data) - 14, 1, 1)
+    path.write_bytes(data)
+
+    def forbidden_allocation(*args, **kwargs):
+        pytest.fail("ZipFile allocated entries before directory count validation")
+
+    monkeypatch.setattr(r.zipfile, "ZipFile", forbidden_allocation)
+    with pytest.raises(r.RetentionError):
+        r.inspect_archive(path, digest(data))
+
+
+@pytest.mark.parametrize("mode", [{"CT_AUTH_MODE": "oidc"}, {"CT_AUTH_MODE": "mesh"},
+                                  {"CT_SECURITY_MODE": "fleet"}])
+@pytest.mark.parametrize("action", ["plan", "archive", "inspect"])
+def test_review_retention_cli_verified_mode_refused(tmp_path, monkeypatch, capsys, mode, action):
+    from cyberthunder.cli import main
+    monkeypatch.setenv("CT_AUTH_MODE", "dev")
+    monkeypatch.setenv("CT_SECURITY_MODE", "range")
+    for key, value in mode.items():
+        monkeypatch.setenv(key, value)
+
+    def forbidden_access(*args, **kwargs):
+        pytest.fail("verified local CLI reached retention storage")
+
+    for name in ("plan", "read_plan", "archive", "inspect_archive"):
+        monkeypatch.setattr(r, name, forbidden_access)
+    args = {"plan": ["--backend", "json", "--cutoff-utc", CUTOFF],
+            "archive": ["--plan-file", str(tmp_path / "plan.json"), "--output", str(tmp_path / "out.zip")],
+            "inspect": [str(tmp_path / "out.zip"), "--sha256", "0" * 64]}[action]
+    assert main(["--state-dir", str(tmp_path / "state"), "state", "retention", action, *args]) == 2
+    output = capsys.readouterr()
+    assert "authenticated API" in output.err and not output.out
+    assert not (tmp_path / "state").exists()
+
+
+def test_review_plan_does_not_expose_live_limits(history):
+    store, _ = history
+    limits = r.Limits()
+    selected = make_plan(store, limits=limits)
+    selected["limits"]["files"] = 10001
+    assert limits.files == 10000
+    assert make_plan(store)["limits"]["files"] == 10000
+
+
+@pytest.mark.parametrize("field,value", [("source_fingerprint", "bad"), ("eligible", ["old", "old"]),
+                                        ("limits", {"files": 10001})])
+def test_review_malformed_archive_plan_refused(history, field, value):
+    store, private = history
+    path = private / "manifest.zip"
+    r.archive(store.root, make_plan(store), path)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(path) as source, zipfile.ZipFile(buffer, "w") as target:
+        for entry in source.infolist():
+            data = source.read(entry.filename)
+            if entry.filename == "manifest.json":
+                manifest = json.loads(data)
+                manifest["plan"][field] = value
+                data = json.dumps(manifest).encode()
+            target.writestr(entry, data)
+    path.write_bytes(buffer.getvalue())
+    with pytest.raises(r.RetentionError):
+        r.inspect_archive(path, digest(path.read_bytes()))
+
+
+def test_review_unsafe_source_ancestor_refused(history):
+    store, _ = history
+    parent = store.root / "scans/old/raw"
+    if os.name == "nt":
+        from tests.windows_acl import set_dacl, protected_aces
+        set_dacl(parent, protected_aces(directory=True) + "(A;;FW;;;WD)")
+    else:
+        parent.chmod(0o777)
+    with pytest.raises(r.RetentionError):
+        make_plan(store)
+
+
+def test_review_source_mutation_during_read_refused(history, monkeypatch):
+    store, private = history
+    original = r._read
+    path = store.root / "scans/old/raw/result.bin"
+    changed = False
+
+    def mutate_after_read(file, *args, **kwargs):
+        nonlocal changed
+        data = original(file, *args, **kwargs)
+        if file == path and not changed:
+            changed = True
+            path.write_bytes(b"mutated fixture")
+        return data
+
+    monkeypatch.setattr(r, "_read", mutate_after_read)
+    with pytest.raises(r.RetentionError, match="source changed"):
+        make_plan(store)
+    assert changed and not list(private.iterdir())
+
+
+@pytest.mark.parametrize("mutation", ["bytes", "permissions", "hardlink"])
+def test_review_output_tampering_after_verification_refused(history, monkeypatch, mutation):
+    store, private = history
+    selected = make_plan(store)
+    path = private / "unaccepted.zip"
+    original = r.inspect_archive
+    changed = False
+
+    def tamper_after_verification(*args, **kwargs):
+        nonlocal changed
+        receipt = original(*args, **kwargs)
+        if not changed:
+            changed = True
+            if mutation == "bytes":
+                path.write_bytes(b"altered private fixture")
+            elif mutation == "hardlink":
+                os.link(path, private / "linked.zip")
+            elif os.name == "nt":
+                from tests.windows_acl import set_dacl, protected_aces
+                set_dacl(path, protected_aces() + "(A;;FR;;;WD)")
+            else:
+                path.chmod(0o644)
+        return receipt
+
+    monkeypatch.setattr(r, "inspect_archive", tamper_after_verification)
+    with pytest.raises(r.RetentionError):
+        r.archive(store.root, selected, path)
+    assert changed and path.exists() and store.load_scan_run("old") is not None
+
+
+def test_review_excluded_sources_are_never_opened_for_export(history, monkeypatch):
+    store, private = history
+    keys = ["audit.jsonl", "targets.yaml", "policy.json", "credentials/private.pem",
+            "sessions/session.json", "tokens/access.json"]
+    for key in keys:
+        path = store.root / key
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b"private fixture marker")
+    original = r._read
+    reads = []
+
+    def checked_read(path, *args, **kwargs):
+        if path.is_relative_to(store.root):
+            key = path.relative_to(store.root).as_posix()
+            assert key not in keys
+            reads.append(key)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(r, "_read", checked_read)
+    selected = make_plan(store)
+    path = private / "private.zip"
+    r.archive(store.root, selected, path)
+    assert reads and b"private fixture marker" not in path.read_bytes()
+
+
+def test_review_unicode_raw_name_roundtrip(history):
+    store, private = history
+    path = store.root / "scans/old/raw/r\u00e9sultat.bin"
+    path.write_bytes(b"unicode name fixture")
+    output = private / "unicode.zip"
+    receipt = r.archive(store.root, make_plan(store), output)
+    assert r.inspect_archive(output, receipt["archive_sha256"])["verified"]
+    with zipfile.ZipFile(output) as archive:
+        assert archive.read("scans/old/raw/r\u00e9sultat.bin") == path.read_bytes()
+
+
+def test_review_incomplete_cluster_results_cannot_release_observations(history):
+    store, _ = history
+    key = "scans/old/findings.json"
+    doc = store.docs.get(key)
+    doc["findings"][0].update(source="trivy", collection_provenance={
+        "producer": "cluster_vulnerabilities", "observation_scope": "fixture-scope"})
+    store.docs.put(key, doc)
+    put_run(store, "old", trigger="cluster_vulnerabilities")
+    put_run(store, "new", trigger="cluster_vulnerabilities", results={},
+            summary={"cluster_vulnerabilities": {"assessed_scopes": ["fixture-scope"]}})
+    selected = make_plan(store)
+    assert "old" not in selected["eligible"]
+    assert "current-observation" in selected["pinned"]["old"]
