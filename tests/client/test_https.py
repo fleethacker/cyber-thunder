@@ -57,6 +57,39 @@ def test_total_deadline_stops_header_trickle(https_server, profile_factory, cert
     assert time.monotonic() - start < 3
 
 
+def test_real_connection_timeout_remains_poll_backoff_signal(profile_factory):
+    import socket
+    import threading
+    stopped = threading.Event()
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        server.settimeout(5)
+        def stall():
+            connection, _ = server.accept()
+            with connection: stopped.wait(5)
+        worker = threading.Thread(target=stall, daemon=True)
+        worker.start()
+        try:
+            profile = profile_factory("https://127.0.0.1:" + str(server.getsockname()[1]))
+            started = time.monotonic()
+            with pytest.raises(ClientError, match="request_timeout"):
+                Transport(profile).request("token_endpoint", payload={"client_id": "fixture"})
+            assert time.monotonic() - started < 6
+        finally:
+            stopped.set()
+            worker.join(timeout=6)
+            assert not worker.is_alive()
+
+
+def test_stepup_challenge_keeps_required_schema():
+    from cyberthunder.client.http import Response
+    body = {"error": "insufficient_user_authentication", "step_up":
+            {"reason": "authentication_too_old", "max_age": 300, "acr_values": "urn:a"}}
+    with pytest.raises(ClientError, match="api_response_invalid"):
+        require_api(Response(401, body))
+
+
 def test_worker_receives_credentials_only_over_pipe(profile, monkeypatch):
     import subprocess
     captured = {}

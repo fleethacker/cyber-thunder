@@ -71,5 +71,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except TimeoutError:
+        sys.exit(3)
     except Exception:
         sys.exit(2)

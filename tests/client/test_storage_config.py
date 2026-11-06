@@ -71,6 +71,23 @@ def test_interrupted_refresh_cannot_redeem_old_token(store):
     assert "never-replay" not in store.data.read_text()
 
 
+def test_failed_publication_preserves_previous_generation_and_removes_temporary(store, monkeypatch):
+    with store.locked():
+        record = store.empty()
+        store.save(record)
+        previous = store.data.read_bytes()
+        attempted = []
+        def fail(*args, **kwargs):
+            attempted.append(True)
+            raise OSError("fixture publication failed")
+        monkeypatch.setattr("cyberthunder.client.store.os.replace", fail)
+        with pytest.raises(ClientError):
+            store.save({**record, "phase": "ready", "session": {"access_token": "new-private"}})
+        assert attempted == [True]
+        assert store.data.read_bytes() == previous
+        assert not list(store.root.glob(".client-*"))
+
+
 def test_file_privacy_is_native_and_no_silent_repair(store):
     with store.locked():
         store.save(store.empty())

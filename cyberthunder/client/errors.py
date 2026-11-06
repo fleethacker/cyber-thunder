@@ -24,6 +24,20 @@ def text(value, maximum=512):
             and not any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in value))
 
 
+def redact(value, *credentials):
+    """Redact JSON values before encoding, including escaped strings and keys."""
+    if isinstance(value, str):
+        for credential in credentials:
+            if credential:
+                value = value.replace(credential, "[redacted]")
+        return value
+    if isinstance(value, list):
+        return [redact(item, *credentials) for item in value]
+    if isinstance(value, dict):
+        return {redact(key, *credentials): redact(item, *credentials) for key, item in value.items()}
+    return value
+
+
 def decode(raw: bytes, maximum=65536):
     if len(raw) > maximum:
         raise ClientError("response_invalid")

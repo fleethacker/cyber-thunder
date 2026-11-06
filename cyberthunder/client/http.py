@@ -61,6 +61,9 @@ class Transport:
             return Response(envelope["status"], decode(raw, maximum) if raw else {})
         except subprocess.TimeoutExpired:
             raise ClientError("request_timeout", outcome=4, source=kind) from None
+        except subprocess.CalledProcessError as error:
+            code = "request_timeout" if error.returncode == 3 else "https_request_failed"
+            raise ClientError(code, outcome=4, source=kind) from None
         except ClientError:
             raise
         except (OSError, ValueError, TypeError, subprocess.SubprocessError):
@@ -77,7 +80,8 @@ def require_api(response):
         from cyberthunder.security.step_up import StepUpPolicy, REASONS
         value = response.body.get("step_up")
         try:
-            if not isinstance(value, dict) or value.keys() != {"reason", "max_age", "acr_values"} or value["reason"] not in REASONS:
+            if (not isinstance(value, dict) or value.keys() != {"reason", "max_age", "acr_values"}
+                    or value["reason"] not in REASONS or not isinstance(value["acr_values"], list)):
                 raise ValueError()
             policy = StepUpPolicy(value["max_age"], tuple(value["acr_values"]))
             challenge = {"reason": value["reason"], "max_age": policy.max_age, "acr_values": list(policy.acr_values)}
