@@ -95,11 +95,26 @@ Install runtime and test dependencies (online):
 python -m pip install -r requirements-dev.txt
 ```
 
-Or offline, from the wheels in `vendor/`:
+For **64-bit Windows with CPython 3.12**, install offline from the runtime and
+test wheels in `vendor/`. `vendor/SHA256SUMS` records their exact bytes:
 
 ```bash
 python -m pip install --no-index --find-links vendor -r requirements-dev.txt
 ```
+
+The bundled native wheels do not cover Linux, other architectures or other
+Python versions. On a connected machine matching the intended native platform,
+prepare its wheel folder, then transfer that folder with the source checkout:
+
+```bash
+python -m pip download --only-binary=:all: -r requirements-dev.txt -d wheelhouse
+```
+
+On the disconnected machine, use `--find-links wheelhouse` in the offline install
+command. Prepare runtime-only installations with `requirements.txt` instead.
+Container deployments carry their Linux dependencies in the built image; native
+wheels do not replace that image. Scanner databases, benchmarks and model files
+must also be provisioned for the intended offline workflow.
 
 Run the tests:
 
