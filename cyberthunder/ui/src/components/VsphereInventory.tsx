@@ -1,5 +1,5 @@
-import { Alert, Badge, Button, Drawer, Group, ScrollArea, Stack, Table, Text } from '@mantine/core';
-import { useEffect, useRef, useState } from 'react';
+import { Alert, Badge, Button, Drawer, Group, NativeSelect, ScrollArea, Stack, Table, Text, TextInput } from '@mantine/core';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, errorText } from '../api/client';
 import { authorityRevision } from '../api/identity';
 import type { DiscoveredAsset, Target, VsphereRun, VsphereRunSummary } from '../api/types';
@@ -45,7 +45,77 @@ function reportedIPs(asset: DiscoveredAsset): string {
     ? ips.filter(ip => typeof ip === 'string' && ip).join(', ') : 'Not reported';
 }
 
-/** Pure presentation is also rendered in fixtures with real table and alert widgets. */
+const kinds = ['VirtualMachine', 'HostSystem'];
+const powers = ['poweredOn', 'poweredOff', 'suspended', 'standBy'];
+const kindOf = (asset: DiscoveredAsset) => kinds.includes(String(asset.facts.vsphere_kind)) ? String(asset.facts.vsphere_kind) : 'unknown';
+const powerOf = (asset: DiscoveredAsset) => powers.includes(String(asset.facts.power_state)) ? String(asset.facts.power_state) : 'unknown';
+
+/** Paging preserves snapshot order; only the displayed rows create evidence elements. */
+export function VsphereObservations({ observations }: { observations: DiscoveredAsset[] }) {
+  const [search, setSearch] = useState('');
+  const [kind, setKind] = useState('all');
+  const [power, setPower] = useState('all');
+  const [size, setSize] = useState(25);
+  const [page, setPage] = useState(1);
+  const filtered = useMemo(() => {
+    const query = search.trim().normalize('NFKC').toLowerCase();
+    return observations.filter(asset => (kind === 'all' || kindOf(asset) === kind)
+      && (power === 'all' || powerOf(asset) === power)
+      && (!query || [asset.hostname ?? '', asset.facts.vsphere_ref ?? '', reportedIPs(asset)]
+        .join(' ').normalize('NFKC').toLowerCase().includes(query)));
+  }, [observations, search, kind, power]);
+  const pages = Math.max(1, Math.ceil(filtered.length / size));
+  const currentPage = Math.min(page, pages);
+  const start = (currentPage - 1) * size;
+  const visible = filtered.slice(start, start + size);
+  return <Stack gap="sm">
+    <Group align="flex-end" grow>
+      <TextInput label="Search name, object ID or reported IP" value={search} maxLength={256}
+        onChange={event => { setSearch(event.currentTarget.value); setPage(1); }} />
+      <NativeSelect label="Inventory type" value={kind} data={[{ value: 'all', label: 'All types' },
+        { value: 'VirtualMachine', label: 'VM' }, { value: 'HostSystem', label: 'ESXi host' }, { value: 'unknown', label: 'Unknown' }]}
+        onChange={event => { setKind(event.currentTarget.value); setPage(1); }} />
+      <NativeSelect label="Reported power state" value={power} data={[{ value: 'all', label: 'All power states' },
+        { value: 'poweredOn', label: 'Powered on' }, { value: 'poweredOff', label: 'Powered off' },
+        { value: 'suspended', label: 'Suspended' }, { value: 'standBy', label: 'Standby' }, { value: 'unknown', label: 'Other / not reported' }]}
+        onChange={event => { setPower(event.currentTarget.value); setPage(1); }} />
+      <NativeSelect label="Observations per page" value={String(size)} data={['25', '50', '100']}
+        onChange={event => {
+          const next = Number(event.currentTarget.value);
+          if ([25, 50, 100].includes(next)) { setSize(next); setPage(1); }
+        }} />
+    </Group>
+    <Text size="sm" role="status" aria-live="polite">
+      Showing {filtered.length ? start + 1 : 0}–{Math.min(start + size, filtered.length)} of {filtered.length} matching observations;
+      {' '}{observations.length} observations in this complete saved snapshot. Pages and filters do not describe the entire vCenter inventory.
+    </Text>
+    <Group>
+      <Button variant="default" size="xs" disabled={currentPage === 1} onClick={() => setPage(Math.max(1, currentPage - 1))}>Previous page</Button>
+      <Text size="sm">Page {currentPage} of {pages}</Text>
+      <Button variant="default" size="xs" disabled={currentPage >= pages} onClick={() => setPage(Math.min(pages, currentPage + 1))}>Next page</Button>
+      <Button variant="subtle" size="xs" disabled={!search && kind === 'all' && power === 'all'}
+        onClick={() => { setSearch(''); setKind('all'); setPower('all'); setPage(1); }}>Reset filters</Button>
+    </Group>
+    {filtered.length === 0 ? <Alert color="blue">No observations match these filters. The saved snapshot contains {observations.length} observations.</Alert>
+      : <ScrollArea.Autosize mah={550}>
+        <Table striped withTableBorder miw={850} aria-label="vSphere inventory observations">
+          <Table.Thead><Table.Tr><Table.Th>Name</Table.Th><Table.Th>Type</Table.Th><Table.Th>Reported IP</Table.Th>
+            <Table.Th>Power state</Table.Th><Table.Th>Evidence</Table.Th></Table.Tr></Table.Thead>
+          <Table.Tbody>{visible.map(asset => <Table.Tr key={asset.id}>
+            <Table.Td><Text size="sm" fw={600}>{asset.hostname || value(asset.facts.vsphere_ref)}</Text>
+              <Text size="xs" c="dimmed">{value(asset.facts.vsphere_ref)}</Text></Table.Td>
+            <Table.Td>{kindOf(asset) === 'VirtualMachine' ? 'VM' : kindOf(asset) === 'HostSystem' ? 'ESXi host' : 'Unknown'}</Table.Td>
+            <Table.Td>{reportedIPs(asset)}</Table.Td>
+            <Table.Td>{value(asset.facts.power_state)}</Table.Td>
+            <Table.Td><Stack gap={2}>{asset.evidence.map((e, i) => <Text key={i} size="sm">{e}</Text>)}
+              {asset.notes && <Text size="sm" c="dimmed">{asset.notes}</Text>}</Stack></Table.Td>
+          </Table.Tr>)}</Table.Tbody>
+        </Table>
+      </ScrollArea.Autosize>}
+  </Stack>;
+}
+
+/** The observation subtree resets its controls with account, target ownership and run changes. */
 export function VsphereSnapshot({ run }: { run: VsphereRun }) {
   const complete = run.status === 'finished' && run.complete;
   return <Stack gap="sm">
@@ -58,21 +128,8 @@ export function VsphereSnapshot({ run }: { run: VsphereRun }) {
       No complete inventory is available from this run. This is not evidence of an empty inventory.
     </Alert> : run.observations.length === 0 ? <Alert color="blue" title="Complete empty inventory">
       This completed collection returned no observations visible to the configured source account within the saved ranges.
-    </Alert> : <ScrollArea>
-      <Table striped withTableBorder miw={850} aria-label="vSphere inventory observations">
-        <Table.Thead><Table.Tr><Table.Th>Name</Table.Th><Table.Th>Type</Table.Th><Table.Th>Reported IP</Table.Th>
-          <Table.Th>Power state</Table.Th><Table.Th>Evidence</Table.Th></Table.Tr></Table.Thead>
-        <Table.Tbody>{run.observations.map(asset => <Table.Tr key={asset.id}>
-          <Table.Td><Text size="sm" fw={600}>{asset.hostname || value(asset.facts.vsphere_ref)}</Text>
-            <Text size="xs" c="dimmed">{value(asset.facts.vsphere_ref)}</Text></Table.Td>
-          <Table.Td>{asset.facts.vsphere_kind === 'VirtualMachine' ? 'VM' : asset.facts.vsphere_kind === 'HostSystem' ? 'ESXi host' : 'Unknown'}</Table.Td>
-          <Table.Td>{reportedIPs(asset)}</Table.Td>
-          <Table.Td>{value(asset.facts.power_state)}</Table.Td>
-          <Table.Td><Stack gap={2}>{asset.evidence.map((e, i) => <Text key={i} size="sm">{e}</Text>)}
-            {asset.notes && <Text size="sm" c="dimmed">{asset.notes}</Text>}</Stack></Table.Td>
-        </Table.Tr>)}</Table.Tbody>
-      </Table>
-    </ScrollArea>}
+    </Alert> : <VsphereObservations key={JSON.stringify([authorityRevision(), run.target_id, run.authorization_scope, run.id])}
+      observations={run.observations} />}
   </Stack>;
 }
 

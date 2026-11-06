@@ -62,7 +62,8 @@ test('VM and ESXi observations show reported data, retain offline/missing-IP inv
     'poweredOff', 'Not reported', '10.20.0.20', '2001:db8::2', 'Fixture inventory evidence for vm-1', 'UTC']) assert.ok(html.includes(expected), expected);
   assert.match(html, /&lt;script&gt;inventory&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>|>Online<|>Reachable</);
-  assert.doesNotMatch(html, /<button\b/);
+  assert.match(html, /Previous page/); assert.match(html, /Next page/);
+  assert.doesNotMatch(html, />Accept<|>Register<|>Scan<|>Collect inventory</);
 });
 
 for (const status of ['failed', 'stopped', 'running', 'finished']) test(`incomplete ${status} never renders partial observations as an empty or complete snapshot`, () => {

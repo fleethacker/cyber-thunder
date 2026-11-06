@@ -19,6 +19,32 @@ addresses are inventory claims and do not establish guest reachability. Text is
 rendered as escaped React content. There is no acceptance, registration or scan
 control in this drawer.
 
+## Bounded observation rendering
+
+The observation table renders **25 rows by default**, with local page sizes of
+25, 50 or 100. Only the selected page creates row, evidence and note elements;
+the scroll viewport is also height-limited. Snapshot order is preserved across
+pages. Pagination does not request additional data or change the saved run.
+
+Search matches names, object references and reported IPs, with case-insensitive
+Unicode normalization. Fixed type and reported-power selectors combine with the
+search. Evidence and notes are not searched or summarized from hidden rows.
+Changing a filter or page size returns to page one. **Reset filters** clears
+search/type/power and returns to page one while retaining the chosen page size.
+
+Counts distinguish the visible range, number of matches and total observations
+in the complete saved snapshot. They do not claim that a page, a filtered set
+or the saved source snapshot describes all vCenter inventory. No matches has a
+separate explanation from a complete empty inventory. Filter options are fixed;
+they do not expose hidden names or metadata through generated menus.
+
+The observation subtree is keyed by current account authority, target ownership
+and run ID. Selecting another run or changing account/ownership creates fresh
+controls with empty filters, page one and 25 rows. Existing parent permission,
+request cleanup and authority checks remain in force. The full authorized
+snapshot is still held in memory; this is a DOM rendering bound, not server-side
+pagination or a new network/body limit.
+
 ## Request and display boundaries
 
 The three typed client methods use the existing authenticated request wrapper:
@@ -91,12 +117,12 @@ the parent's combined UI build/full gate remain separate checks.
 Run from `cyberthunder/ui`:
 
 ```powershell
-node --test src/components/VsphereInventory.test.mjs src/components/VsphereInventoryRendering.test.mjs src/components/PermissionControlsRendering.test.mjs src/components/DiscoverySetup.test.mjs src/api/identityAuthority.test.mjs src/state/Identity.test.mjs
+node --test src/components/VsphereInventory.test.mjs src/components/VsphereInventoryRendering.test.mjs src/components/VsphereInventoryPagination.test.mjs src/components/PermissionControlsRendering.test.mjs src/components/DiscoverySetup.test.mjs src/api/identityAuthority.test.mjs src/state/Identity.test.mjs
 npm run typecheck
 ```
 
-On Windows with Node 26.13.0, the focused command passed **76 tests, zero
-failures and zero skips** in **18.78 seconds**, including **43 new source UI
+On Windows with Node 26.13.0, the focused command passed **83 tests, zero
+failures and zero skips** in **19.03 seconds**, including **50 source UI
 cases**. The final `npm run typecheck` completed successfully. No production
 distribution build was run.
 
@@ -104,13 +130,31 @@ The handler tests execute the component's real handlers/effects together with
 the actual API wrapper and identity authority module. Only HTTP responses and
 widget layout are fixtures. Separate rendering tests use real Mantine buttons,
 tables, alerts and permission providers, with drawer layout inlined for server
-rendering. They verify disabled controls and their ARIA explanations; they do
-not claim an interactive browser keyboard or focus-trap acceptance run.
+rendering. They verify disabled controls, ARIA explanations, exact paged row
+content and absence of excluded evidence/notes in the rendered markup.
+
+An explicit native-browser fixture uses the real Mantine drawer, identity
+provider and client. It serves only its UI through a temporary loopback Vite
+server. All API responses are intercepted; non-fixture HTTP requests are blocked.
+It does not contact an identity provider, backend discovery service or vCenter.
+Run it with an already available Playwright module and native Chromium browser:
+
+```powershell
+$env:CT_PLAYWRIGHT_MODULE='file:///C:/Users/joshu/.codex/worktrees/scope-recipes/cyber-thunder/.build/scope-recipes-browser/node_modules/playwright-core/index.mjs'
+$env:CT_VSPHERE_BROWSER='C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
+node src/components/VsphereInventory.browser.mjs
+```
+
+The native Windows Edge run passed: readonly controls, Enter/Space paging,
+25/50/100 row bounds, local search/type/power filters, absence of hidden row
+metadata, run/account control resets and close/reopen. Paging/filtering made
+no API requests; every intercepted API request was a source-specific GET.
+Playwright is a fixture tool, not an added production dependency.
 
 Coverage includes readonly accounts, explicit collection and duplicate
 suppression, history failure versus empty history, complete-empty versus failed
 snapshots, offline/addressless inventory, escaped metadata, no acceptance/scan
 requests, bounded history, failed requests, late body decoding, account changes,
 permission revocation, target generation/address changes, close/reopen and
-unmount while requests are pending. All fixtures are local; no service, loopback
-probe or vCenter connection is started by these tests.
+unmount while requests are pending. All fixtures are local; no inventory scan,
+loopback discovery probe or vCenter connection is started by these tests.
