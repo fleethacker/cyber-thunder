@@ -243,7 +243,9 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/AUTHORIZATION.md](docs/AUTHORIZATION.md) | authentication modes, browser login, roles, target policy and explicit credentials |
 | [docs/ACCOUNT_ACCESS.md](docs/ACCOUNT_ACCESS.md) | exact policy schema, per-account examples, target credentials and original artifact ownership |
 | [docs/PERSON_ASSOCIATION.md](docs/PERSON_ASSOCIATION.md) | explicit normal/admin account associations for approval counting without combining privileges |
+| [docs/PERSON_ACCOUNT_LIVE.md](docs/PERSON_ACCOUNT_LIVE.md) | real local identity-provider checks of separate accounts, person quorums and revocation, with acceptance limits |
 | [docs/CREDENTIAL_RESOLVERS.md](docs/CREDENTIAL_RESOLVERS.md) | protected password sources, account-bound leases, rotation and native deployment acceptance |
+| [docs/SSH_KEY_CREDENTIALS.md](docs/SSH_KEY_CREDENTIALS.md) | protected static SSH key files, exact key parsing, explicit authentication and remaining certificate/broker work |
 | [docs/CLI_AUTH.md](docs/CLI_AUTH.md) | human device login, protected client tokens and authenticated API commands |
 | [docs/AUDIT_ANCHORS.md](docs/AUDIT_ANCHORS.md) | explicit signed checkpoints and local anchor verification; independent retention remains separate |
 | [docs/WINDOWS_FILE_TRUST.md](docs/WINDOWS_FILE_TRUST.md) | native owner/DACL checks, protected-path provisioning and deployment limits |
@@ -259,6 +261,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/REMEDIATION_PLAN.md](docs/REMEDIATION_PLAN.md) | static change previews, declared capture paths, verification and rollback instructions |
 | [docs/MAINTENANCE_WINDOWS.md](docs/MAINTENANCE_WINDOWS.md) | protected apply windows, separately authorized one-time exceptions and recovery after expiry |
 | [docs/CHANGE_HISTORY.md](docs/CHANGE_HISTORY.md) | persistent change history, finding status after rollback, restore guards and coverage limits |
+| [docs/CHANGE_TIMELINE.md](docs/CHANGE_TIMELINE.md) | recorded apply, verification and recovery milestones without inventing progress from failed or incomplete records |
 | [docs/KUBERNETES_FIX_SAFETY.md](docs/KUBERNETES_FIX_SAFETY.md) | investigation-first Kubernetes guidance, retired deletion actions and recovery limits |
 | [docs/HOST_SCOPE.md](docs/HOST_SCOPE.md) | container-host setup, explicit host access and reviewed IP/range scope |
 | [docs/WSL_KEEPALIVE.md](docs/WSL_KEEPALIVE.md) | optional per-user startup task for the Windows test environment, status and removal |

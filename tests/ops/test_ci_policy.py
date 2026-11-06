@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 95 and len(windows) == 88
+    assert len(linux) == 109 and len(windows) == 101
     native_acl = {node: reason for node, reason in linux.items()
                   if node.startswith("tests/security/test_windows_file_trust.py::")}
     assert len(native_acl) == 46
@@ -402,3 +402,34 @@ def test_scap_import_skips_match_review_receipts(platform, count):
     common = set(expected_skips("linux")) & set(actual)
     if platform == "win32":
         assert common == {"tests/ingest/test_scap_review.py::test_database_writer_wait_rechecks_authority[json]"}
+
+
+@pytest.mark.parametrize("platform,count", [("linux", 14), ("win32", 13)])
+def test_ssh_key_skip_policy_matches_opposite_platform_evidence(platform, count):
+    rows = json.loads((ROOT / "docs/ssh-key-platform-skips.json").read_text())
+    source_platform = "windows" if platform == "win32" else platform
+    selected = [row for row in rows if row["skip_on"] == source_platform]
+    expected = {row["nodeid"]: row["reason"] for row in selected}
+    actual = {node: reason for node, reason in expected_skips(platform).items()
+              if node.startswith("tests/security/test_ssh_key_credentials.py::")}
+    assert actual == expected and len(selected) == len(actual) == count
+    opposite = "linux" if platform == "win32" else "win32"
+    for row in selected:
+        assert row["passes_on"] == ("linux" if opposite == "linux" else "windows")
+        assert len(row["evidence_sha256"]) == 64
+        assert row["nodeid"] not in expected_skips(opposite)
+    for node, reason in actual.items():
+        for host, candidate, explanation, phase, accepted in (
+            (platform, node, reason, "setup", True),
+            (opposite, node, reason, "setup", False),
+            (platform, node + "[new]", reason, "setup", False),
+            (platform, node, reason + " changed", "setup", False),
+            (platform, node, reason, "teardown", False),
+        ):
+            policy = RegressionPolicy(ROOT, host)
+            policy.pytest_runtest_logreport(SimpleNamespace(
+                nodeid=candidate, when=phase, outcome="skipped", skipped=True,
+                longrepr=("file.py", 1, "Skipped: " + explanation),
+            ))
+            assert policy.skips[0]["allowed"] is accepted
+            assert bool(policy.errors) is not accepted

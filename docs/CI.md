@@ -190,7 +190,14 @@ per runner: its FIFO test runs on Linux, and its Windows handle-lifetime test
 runs on Windows. Their node IDs and reasons are documented in the
 [independent review](RELEASE_VULNERABILITY_REVIEW.md); no broader helper skips are allowed.
 
-That permits at most **95 skipped cases on Linux and 88 on Windows**, with every
+The selected SSH-key boundary adds 13 exact POSIX cases on Windows and 14 exact
+Windows cases on Linux. Each passed on the opposite native platform with the
+same reviewed sources; [the retained map](ssh-key-platform-skips.json) records
+literal node IDs, reasons and opposite-platform XML hashes. The independent
+[key review](SSH_KEY_REVIEW.md) added no further platform exceptions. Changed
+reasons, new parameters, wrong-platform skips and teardown skips remain refused.
+
+That permits at most **109 skipped cases on Linux and 101 on Windows**, with every
 case individually constrained. Missing Git or Bash is not an allowed skip on
 either runner. Windows runs the command-shell and file-sharing tests that
 Linux skips.

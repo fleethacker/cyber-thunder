@@ -94,9 +94,10 @@ containers, realms and preexisting ignored evidence were untouched.
 
 **Private fixture cleanup is incomplete.** Windows policy trust required a new
 protected state directory outside the checkout's unsuitable ancestor permissions:
-`C:\ct-person-account-46b022f51d01`. Automatic approval review rejected both recursive
+`C:\ct-person-account-46b022f51d01`. Tool-execution policy rejected both recursive
 removal and deletion of its three explicit credential files with only the reason
-`blocked by policy`. The protected directory still contains temporary fixture
+`blocked by policy`. The tool supplied no further rationale; this was not a
+Windows file-permission error. The protected directory still contains temporary fixture
 passwords, its TLS private key and application state; the corresponding IdP realm
 no longer exists. These private files are excluded from the sanitized evidence.
 `cleanup.json` records this unresolved deletion separately from the passing checks.

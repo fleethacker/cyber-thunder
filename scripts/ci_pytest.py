@@ -230,6 +230,41 @@ SCAP_IMPORT_SKIPS = {
 }
 
 
+SSH_KEY_SKIPS = {
+    "win32": {
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[416]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[388]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[400]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[386]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[leaf]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[parent]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[fifo]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[writable-parent]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[replace]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[mutate]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[chmod]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[parent-swap]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_foreign_owner_denied": "requires native POSIX ownership, modes and descriptor traversal"
+    },
+    "linux": {
+        "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[GR]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[GW]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[SD]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[WD]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[WO]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[parent-write]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[delete-child]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[junction]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[unavailable-api]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[untrusted-owner]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[replace]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[mutate]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[parent-swap]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[dacl]": "requires native Windows SID/DACL and file sharing"
+    }
+}
+
+
 def expected_skips(platform: str) -> dict[str, str]:
     if platform not in {"linux", "win32"}:
         raise ValueError(f"Unsupported CI platform: {platform}")
@@ -306,6 +341,7 @@ def expected_skips(platform: str) -> dict[str, str]:
     allowed.update(CREDENTIAL_RESOLVER_SKIPS[platform])
     allowed.update(NATIVE_OPERATOR_SKIPS[platform])
     allowed.update(SCAP_IMPORT_SKIPS[platform])
+    allowed.update(SSH_KEY_SKIPS[platform])
     if platform == "linux":
         # The native Windows command boundary runs on the Windows matrix leg.
         allowed["tests/ops/test_wsl_keepalive.py::test_keepalive_operator_and_task_boundaries"] = "native Windows PowerShell task-boundary fixture"
