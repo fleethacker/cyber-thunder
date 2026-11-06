@@ -26,10 +26,15 @@ files in pre-provisioned protected directories.
 
 The service exposes:
 
-- `resolve_session(headers) -> dict | None`: validated access-token claims;
+- `resolve_session(headers, *, touch=True) -> dict | None`: validated access-token claims;
   `None` only when the session cookie is absent. Invalid, unknown and expired
   cookies raise the fixed `AuthenticationError`. Never fall back to a typed actor
   after that failure. Reject mixed cookie and Authorization credentials.
+- `resolve_session_with_lease(headers, *, touch=True) -> (claims, guard) | None`:
+  the atomic form, binding validated claims to their local session guard.
+- `session_guard(headers) -> Callable[[], None]`: compatibility hook after
+  resolution. Invoking the guard succeeds with `None` or raises a fixed,
+  sanitized `PermissionError`; it is not a boolean-returning protocol.
 - `csrf_check(method, headers) -> None`: for cookie authentication, call this
   **before** resolving unsafe requests, and before any action. It requires a live
   session, configured-origin `Origin`, and matching `X-CSRF-Token` for every
@@ -50,6 +55,11 @@ authenticated. The optional parent hook `ctx.session_status_identity(claims)`
 supplies `{principal, permissions}` from the parent's identity/policy mapping.
 Without that hook principal is omitted and permissions are empty. Disabled
 sessions report unauthenticated status, never an implicitly verified typed actor.
+`session_info()` and `/auth/status` always resolve with `touch=False`. Parent
+middleware must also use `touch=False` for passive API polling, including
+`GET /api/v1/status` and `GET /api/v1/audit/verify/stream`. Token refresh does not
+itself change the idle timestamp. Only successful resolution with `touch=True`
+records user activity; repeatedly checking status cannot keep a passive tab alive.
 
 Dependency addition: **OAuthLib 4.0.0**, wheel
 `oauthlib-4.0.0-py3-none-any.whl`, with no transitive requirements. It supplies
@@ -132,8 +142,13 @@ so rejected cross-site requests cannot refresh tokens or extend idle time:
 ```python
 if SESSION_COOKIE in request.cookies:
     session_service.csrf_check(request.method, request.headers)
-claims = session_service.resolve_session(request.headers)
-# Map claims through the normal principal and AccessPolicy checks.
+resolved = session_service.resolve_session_with_lease(
+    request.headers, touch=not is_passive_poll,
+)
+if resolved is not None:
+    claims, guard = resolved
+    # Map claims through normal principal and AccessPolicy checks, then carry
+    # the guard using principal_scope(principal, validity=guard).
 ```
 
 The service reparses original headers strictly; the initial cookie-presence check
@@ -144,6 +159,40 @@ CORS from other origins. XSS defenses and browser policy remain application work
 Development mode does not install sessions or verify a typed actor. Its status
 reports `mode=dev`, `authenticated=false`, and `login_available=false`; the
 existing development actor path must continue to label that identity unverified.
+
+## Background jobs and local session revocation
+
+Capture the raising guard while authenticating a cookie request and carry it in
+the parent's validity ContextVar alongside the principal context. Prefer the
+atomic `resolve_session_with_lease` API so a concurrent refresh cannot separate
+claim verification from the guard snapshot. Existing integration can use
+`resolve_session` followed by `session_guard`; retain the principal's own token
+expiry check in either case. `require_current` must invoke the guard before each
+sensitive operation and each new target command. Copying a principal without
+its validity context does not carry browser-session authorization.
+
+The guard checks, under the service lock, that the session still exists and that
+idle timeout, absolute timeout, clock validity, credential generation, original
+access-token expiry and original token-response lifetime permit continued use.
+It never touches idle time, refreshes tokens, validates another JWT or performs
+network I/O. Logout, replacement login, failed refresh, expiry and clock rollback
+invalidate existing guards. A browser refresh cannot revive a guard from the
+previous credentials or silently extend an immutable principal's authority.
+
+Guards retain only a weak service reference, a SHA-256 session fingerprint and
+numeric generation/expiry bounds. They do not capture request headers, cookies,
+JWTs, refresh tokens or token-bearing session objects. The optional
+`guard.fingerprint` is a non-credential audit correlation identifier; it cannot
+authenticate as a cookie. Put the callable in the ContextVar, never in Principal
+or audit serialization. The service's private fingerprint lookup remains bounded
+by the session cap and is removed on every session deletion. Losing the service
+instance invalidates its guards and does not retain token memory through jobs.
+
+After logout completes, any new guard invocation rejects the session. This
+boundary does not cancel a command already authorized or sent to a target; the
+parent must check immediately before each new command. Existing bearer-only
+jobs remain bounded by their principal's token expiry. Provider revocation and
+cross-process job cancellation remain separate work.
 
 ## Token exchange, refresh and resource bounds
 
@@ -228,20 +277,23 @@ idle/absolute expiry, restart loss and clock movement. FastAPI route tests verif
 cookie attributes, status projection, fixed redirects and safe logout.
 
 The separate self-review found and corrected expiry gaps around system suspend
-and time spent verifying a token. Regression tests cover both, alongside audience
-overlap rejection for multi-audience ID/access tokens. No parent-owned files or
-previous verifier code were changed.
+and time spent verifying a token. Follow-up review traced every deletion path to
+ensure the lease index is removed with its session, and checked that neither
+guards nor passive polling renew idle timestamps. Regression tests cover copied
+thread contexts rejecting the next command after logout, guard expiry/replacement,
+refresh without revival, service loss, and status polling through refresh to idle
+expiry. No parent-owned files or previous verifier code were changed.
 
 ```powershell
 $env:PYTHONPATH = 'C:/Users/joshu/.codex/worktrees/oidc-validation/cyber-thunder'
 & 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest tests/security/test_sessions.py -o addopts= -q --tb=short
 ```
 
-Measured on Windows CPython 3.12.10: **102 passed** in 35.76 seconds, no skips.
-One existing FastAPI/Starlette test-client deprecation warning concerns its httpx
-backend; it is not a runtime session warning. The staged whitespace check passed
-and all four new files use LF. This is focused session acceptance, not a full
-application or Linux gate.
+Measured after the lease/passive-idle follow-up on Windows CPython 3.12.10:
+**114 passed** in 80.13 seconds, no skips. One existing FastAPI/Starlette
+test-client deprecation warning concerns its httpx backend; it is not a runtime
+session warning. The staged whitespace check passed. This is focused session
+acceptance, not a full application or Linux gate.
 
 Remaining acceptance belongs to the combined application: middleware ordering
 and principal/AccessPolicy projection, UI integration, TLS termination and

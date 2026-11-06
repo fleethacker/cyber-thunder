@@ -2,9 +2,11 @@
 
 from base64 import b64decode, urlsafe_b64encode
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar, copy_context
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import hashlib
+import gc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import json
@@ -13,6 +15,7 @@ import ssl
 import threading
 import time
 import traceback
+import weakref
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -757,6 +760,218 @@ def test_callback_query_is_redacted_even_when_decoding_fails(browser):
     response = endpoint(request)
     assert response.status_code == 401 and request.scope["query_string"] == b""
     assert b"provider-private-query" not in response.body
+
+
+def logout_headers(service, headers):
+    _, info = service.session_info(headers)
+    return {**headers, "Origin": ORIGIN, "X-CSRF-Token": info["csrf_token"]}
+
+
+def test_guard_contains_no_credentials_and_fingerprint_cannot_authenticate(service, provider, monkeypatch):
+    headers = authenticated(service, provider)
+    headers["X-Unrelated-Private"] = "never-capture-this-request-value"
+    claims, lease = service.resolve_session_with_lease(headers)
+    other = service.session_guard(headers)
+    item = next(iter(service._sessions.values()))
+    cookie = headers["Cookie"].split("=", 1)[1]
+    assert claims["sub"] == "operator-123" and len(lease.fingerprint) == 64
+    assert lease.fingerprint == other.fingerprint
+    assert lease.fingerprint == hashlib.sha256(b"ct-session-lease-v1\0" + cookie.encode()).hexdigest()
+    assert isinstance(lease._service, weakref.ReferenceType)
+    assert not hasattr(lease, "__dict__")
+    for secret in (cookie, item.access_token, item.refresh_token, headers["X-Unrelated-Private"]):
+        assert secret not in repr(lease) and secret != lease.fingerprint
+    headers.clear()
+    before = item.last_used
+    monkeypatch.setattr(service, "_exchange", lambda *a: pytest.fail("Guard performed token exchange"))
+    monkeypatch.setattr(service.access_validator, "validate", lambda *a: pytest.fail("Guard revalidated JWT"))
+    assert lease() is None and other() is None
+    assert item.last_used == before
+    fail(lambda: service.resolve_session({"Cookie": f"{SESSION_COOKIE}={lease.fingerprint}"}))
+
+
+def test_background_context_guard_rejects_next_command_after_logout(service, provider):
+    headers = authenticated(service, provider)
+    claims, lease = service.resolve_session_with_lease(headers)
+    validity = ContextVar("fixture-session-validity")
+    validity.set(lease)
+    before_logout = threading.Event()
+    after_logout = threading.Event()
+    commands = []
+
+    def job():
+        validity.get()()
+        commands.append("before logout")
+        before_logout.set()
+        assert after_logout.wait(3)
+        validity.get()()
+        commands.append("after logout")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(copy_context().run, job)
+        try:
+            assert before_logout.wait(3)
+            service.logout(logout_headers(service, headers))
+        finally:
+            after_logout.set()
+        with pytest.raises(PermissionError, match="^The browser session is no longer authorized$"):
+            future.result(timeout=3)
+    assert commands == ["before logout"]
+    assert not service._sessions and not service._lease_index
+    with pytest.raises(PermissionError):
+        lease()
+    assert claims["exp"] > time.time()
+
+
+def test_compatibility_guard_raises_after_logout(service, provider):
+    headers = authenticated(service, provider)
+    assert service.resolve_session(headers)
+    guard = service.session_guard(headers)
+    assert guard() is None
+    service.logout(logout_headers(service, headers))
+    with pytest.raises(PermissionError):
+        guard()
+    assert service.resolve_session_with_lease({}) is None
+
+
+def test_replacement_login_revokes_old_guard(service, provider):
+    headers = authenticated(service, provider)
+    _, old_guard = service.resolve_session_with_lease(headers)
+    query, binding = begin(service, provider, headers)
+    new_cookie = service.complete_login(query, {"Cookie": headers["Cookie"] + "; " + binding["Cookie"]})
+    with pytest.raises(PermissionError):
+        old_guard()
+    _, new_guard = service.resolve_session_with_lease({"Cookie": f"{SESSION_COOKIE}={new_cookie}"})
+    assert new_guard() is None and old_guard.fingerprint != new_guard.fingerprint
+    assert len(service._lease_index) == len(service._sessions) == 1
+
+
+def test_guard_checks_do_not_extend_idle_timeout(configured, provider, monkeypatch):
+    config, access = configured
+    service = SessionService(replace(config, idle_timeout_s=30), OIDCValidator(access))
+    headers = authenticated(service, provider)
+    _, guard = service.resolve_session_with_lease(headers, touch=False)
+    original_last_used = next(iter(service._sessions.values())).last_used
+    for _ in range(5):
+        advance(monkeypatch, 5)
+        assert guard() is None
+        assert service.session_guard(headers)() is None
+    assert next(iter(service._sessions.values())).last_used == original_last_used
+    advance(monkeypatch, 6)
+    with pytest.raises(PermissionError):
+        guard()
+    assert not service._lease_index
+
+
+def test_guard_absolute_expiry_despite_real_activity(configured, provider, monkeypatch):
+    config, access = configured
+    service = SessionService(replace(config, idle_timeout_s=30, absolute_timeout_s=60), OIDCValidator(access))
+    headers = authenticated(service, provider)
+    _, guard = service.resolve_session_with_lease(headers)
+    for _ in range(2):
+        advance(monkeypatch, 20)
+        assert service.resolve_session(headers) and guard() is None
+    advance(monkeypatch, 21)
+    with pytest.raises(PermissionError):
+        guard()
+    assert not service._lease_index
+
+
+def test_guard_never_refreshes_or_revives_after_browser_refresh(service, provider, monkeypatch):
+    provider.expires_in = 1
+    headers = authenticated(service, provider)
+    _, old_guard = service.resolve_session_with_lease(headers)
+    original_idle = next(iter(service._sessions.values())).last_used
+    advance(monkeypatch, 2)
+    with pytest.raises(PermissionError):
+        old_guard()
+    assert len(provider.posts) == 1
+    provider.expires_in = 300
+    _, new_guard = service.resolve_session_with_lease(headers, touch=False)
+    assert len(provider.posts) == 2 and new_guard() is None
+    assert next(iter(service._sessions.values())).last_used == original_idle
+    with pytest.raises(PermissionError):
+        old_guard()
+
+
+def test_failed_refresh_revokes_guard_and_removes_index(service, provider, monkeypatch):
+    provider.expires_in = 1
+    headers = authenticated(service, provider)
+    _, guard = service.resolve_session_with_lease(headers)
+    provider.http_status = 400
+    advance(monkeypatch, 2)
+    fail(lambda: service.resolve_session(headers, touch=False))
+    with pytest.raises(PermissionError):
+        guard()
+    assert not service._sessions and not service._lease_index
+
+
+def test_guard_clock_rollback_and_service_loss(configured, provider, monkeypatch):
+    config, access = configured
+    temporary = SessionService(config, OIDCValidator(access))
+    _, orphan = temporary.resolve_session_with_lease(authenticated(temporary, provider))
+    reference = weakref.ref(temporary)
+    del temporary
+    gc.collect()
+    assert reference() is None
+    with pytest.raises(PermissionError):
+        orphan()
+    current = SessionService(config, OIDCValidator(access))
+    _, guard = current.resolve_session_with_lease(authenticated(current, provider))
+    wall = time.time()
+    monkeypatch.setattr(sessions.time, "time", lambda: wall - 61)
+    with pytest.raises(PermissionError):
+        guard()
+    assert not current._sessions and not current._lease_index
+
+
+def test_passive_resolution_and_status_do_not_extend_idle(configured, provider, monkeypatch):
+    config, access = configured
+    service = SessionService(replace(config, idle_timeout_s=30), OIDCValidator(access))
+    headers = authenticated(service, provider)
+    initial = next(iter(service._sessions.values())).last_used
+    for _ in range(5):
+        advance(monkeypatch, 5)
+        assert service.resolve_session(headers, touch=False)
+        assert service.resolve_session_with_lease(headers, touch=False)[1]() is None
+        assert service.session_info(headers)[1]["authenticated"]
+    assert next(iter(service._sessions.values())).last_used == initial
+    advance(monkeypatch, 6)
+    fail(lambda: service.session_info(headers))
+    assert not service._sessions and not service._lease_index
+
+
+def test_auth_status_polling_refresh_still_expires_idle(browser, provider, monkeypatch):
+    client, service, _ = browser
+    provider.expires_in = 1
+    assert browser_login(client, provider).status_code == 303
+    initial = next(iter(service._sessions.values())).last_used
+    provider.expires_in = 300
+    advance(monkeypatch, 2)
+    assert client.get("/auth/status").json()["authenticated"]
+    assert len(provider.posts) == 2
+    assert next(iter(service._sessions.values())).last_used == initial
+    for _ in range(14):
+        advance(monkeypatch, 60)
+        assert client.get("/auth/status").json()["authenticated"]
+        assert next(iter(service._sessions.values())).last_used == initial
+    advance(monkeypatch, 60)
+    assert not client.get("/auth/status").json()["authenticated"]
+    assert not service._sessions and not service._lease_index
+
+
+def test_active_requests_touch_idle_but_false_is_strict(configured, provider, monkeypatch):
+    config, access = configured
+    service = SessionService(replace(config, idle_timeout_s=30), OIDCValidator(access))
+    headers = authenticated(service, provider)
+    initial = next(iter(service._sessions.values())).last_used
+    advance(monkeypatch, 20)
+    assert service.resolve_session(headers)
+    assert next(iter(service._sessions.values())).last_used > initial
+    advance(monkeypatch, 20)
+    assert service.resolve_session_with_lease(headers)[1]() is None
+    fail(lambda: service.resolve_session(headers, touch="false"))
+    assert service.resolve_session(headers, touch=False)
 
 
 @pytest.mark.parametrize("mode", ["dev", "oidc", "mesh"])

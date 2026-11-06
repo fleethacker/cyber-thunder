@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from urllib.parse import parse_qsl, quote_plus, urlsplit
 
 from oauthlib.oauth2 import WebApplicationClient
@@ -154,6 +155,31 @@ class _Session:
     last_used: float
     access_deadline: float
     access_expiry: int
+    lease_fingerprint: str
+    generation: int = 0
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class SessionLease:
+    """A credential-free, non-renewing guard for copied principal contexts.
+
+    The fingerprint is an audit correlation value, never an authentication
+    credential. Weak ownership prevents an abandoned job from retaining sessions.
+    """
+
+    fingerprint: str
+    _service: weakref.ReferenceType
+    _generation: int
+    _access_deadline: float
+    _access_expiry: int
+
+    def __call__(self) -> None:
+        try:
+            service = self._service()
+            if service is None or not service._lease_active(self):
+                raise PermissionError()
+        except Exception:
+            raise PermissionError("The browser session is no longer authorized") from None
 
 
 def _header(headers, name):
@@ -216,6 +242,7 @@ class SessionService:
             self._lock = threading.RLock()
             self._pending = {}
             self._sessions = {}
+            self._lease_index = {}
             self._login_attempts = deque()
             self._token_attempts = deque()
             self._wall, self._mono = time.time(), time.monotonic()
@@ -232,6 +259,7 @@ class SessionService:
                 or mono < self._mono or wall + tolerance < projected):
             self._clock_failed = True
             self._sessions.clear()
+            self._lease_index.clear()
             self._pending.clear()
             raise AuthenticationError()
         # Some operating systems exclude suspend time from their monotonic
@@ -248,7 +276,14 @@ class SessionService:
         for key, item in list(self._sessions.items()):
             if (mono - item.issued >= self.config.absolute_timeout_s
                     or mono - item.last_used >= self.config.idle_timeout_s):
-                self._sessions.pop(key, None)
+                self._remove_session(key)
+
+    def _remove_session(self, session_id):
+        # Call only while holding the service lock. All revocation paths remove
+        # the lookup index as well as the token-bearing session record.
+        session = self._sessions.pop(session_id, None)
+        if session is not None:
+            self._lease_index.pop(session.lease_fingerprint, None)
 
     @staticmethod
     def _rate(queue, mono, maximum):
@@ -394,9 +429,12 @@ class SessionService:
                 if mono >= pending.deadline or mono >= deadline or wall >= claims["exp"]:
                     raise ValueError()
                 session_id = secrets.token_urlsafe(32)
-                self._sessions.pop(cookies.get(SESSION_COOKIE), None)
+                fingerprint = hashlib.sha256(b"ct-session-lease-v1\0" + session_id.encode("ascii")).hexdigest()
+                self._remove_session(cookies.get(SESSION_COOKIE))
                 self._sessions[session_id] = _Session(access, refresh, claims["sub"], pending.nonce,
-                                                      secrets.token_urlsafe(32), mono, mono, deadline, claims["exp"])
+                                                      secrets.token_urlsafe(32), mono, mono, deadline,
+                                                      claims["exp"], fingerprint)
+                self._lease_index[fingerprint] = session_id
                 return session_id
         except Exception:
             raise AuthenticationError() from None
@@ -426,10 +464,12 @@ class SessionService:
         except Exception:
             raise CSRFError() from None
 
-    def resolve_session(self, headers) -> dict | None:
+    def resolve_session(self, headers, *, touch: bool = True) -> dict | None:
         session_id = None
         try:
             with self._lock:
+                if type(touch) is not bool:
+                    raise AuthenticationError()
                 if SESSION_COOKIE not in _cookies(headers):
                     return None
                 self._origin_check(headers)
@@ -447,6 +487,7 @@ class SessionService:
                     self._live(headers)
                     session.access_token, session.refresh_token = access, refresh
                     session.access_deadline, session.access_expiry = deadline, claims["exp"]
+                    session.generation += 1
                 claims = self.access_validator.validate(session.access_token)
                 if claims["sub"] != session.subject or claims.get("azp") != self.config.client_id:
                     raise ValueError()
@@ -454,18 +495,64 @@ class SessionService:
                 self._live(headers)
                 if mono >= session.access_deadline or wall >= session.access_expiry:
                     raise ValueError()
-                session.last_used = mono
+                if touch:
+                    session.last_used = mono
                 return claims
         except Exception:
             if session_id is not None:
                 with self._lock:
-                    self._sessions.pop(session_id, None)
+                    self._remove_session(session_id)
             raise AuthenticationError() from None
+
+    def resolve_session_with_lease(self, headers, *, touch: bool = True) -> tuple[dict, SessionLease] | None:
+        """Atomically bind validated access claims to a revocable local guard.
+
+        Call the usual CSRF check first for unsafe cookie requests. The caller
+        carries the lease in its execution context, not in Principal or audit.
+        """
+        with self._lock:
+            claims = self.resolve_session(headers, touch=touch)
+            if claims is None:
+                return None
+            _, session = self._live(headers)
+            return claims, self._new_lease(session)
+
+    def session_guard(self, headers) -> SessionLease:
+        """Capture a non-renewing raising guard after cookie authentication.
+
+        Prefer resolve_session_with_lease when binding claims and their guard
+        atomically. This compatibility hook never retains the supplied headers.
+        """
+        with self._lock:
+            self._origin_check(headers)
+            _, session = self._live(headers)
+            return self._new_lease(session)
+
+    def _new_lease(self, session):
+        lease = SessionLease(session.lease_fingerprint, weakref.ref(self), session.generation,
+                             session.access_deadline, session.access_expiry)
+        lease()
+        return lease
+
+    def _lease_active(self, lease: SessionLease) -> bool:
+        # A lease never refreshes a token, revalidates JWTs or renews idle time.
+        # Its original credential deadline remains fixed even if the browser
+        # later obtains refreshed credentials and different claims/permissions.
+        try:
+            with self._lock:
+                wall, mono = self._now()
+                self._prune(mono)
+                session = self._sessions.get(self._lease_index.get(lease.fingerprint))
+                return (session is not None and session.generation == lease._generation
+                        and mono < lease._access_deadline and wall < lease._access_expiry
+                        and mono < session.access_deadline and wall < session.access_expiry)
+        except Exception:
+            return False
 
     def session_info(self, headers) -> tuple[dict, dict]:
         """Return validated claims separately from the safe browser metadata."""
         with self._lock:
-            claims = self.resolve_session(headers)
+            claims = self.resolve_session(headers, touch=False)
             if claims is None:
                 raise AuthenticationError()
             _, session = self._live(headers)
@@ -475,5 +562,5 @@ class SessionService:
         with self._lock:
             self.csrf_check("POST", headers)
             session_id, _ = self._live(headers)
-            self._sessions.pop(session_id, None)
+            self._remove_session(session_id)
             self._pending.pop(_cookies(headers).get(LOGIN_COOKIE), None)
