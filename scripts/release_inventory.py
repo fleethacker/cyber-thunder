@@ -16,6 +16,7 @@ import struct
 import subprocess
 import threading
 import tomllib
+from urllib.parse import quote, unquote, urlsplit
 import zipfile
 import zlib
 
@@ -33,6 +34,7 @@ LIMITATIONS = [
     "Declared versions are not installed versions. Wheel presence does not prove installation or dependency closure.",
     "Wheel CRC and hashes prove observed bytes, not trusted origin, signatures, or RECORD authenticity.",
     "npm lock declarations are not downloaded package verification; dev flags do not establish bundle membership.",
+    "Package URLs are identifier claims from corroborated wheel metadata or registry lock declarations, not installation or provenance.",
     "UI asset hashes do not establish the source commit or lockfile used to build them.",
     "Image references are declarations only; no registry resolution, layers, OS packages, or approved-image status.",
     "Manifest extraction covers literal FROM, image:, and block images: entries only; templates and other YAML forms need review.",
@@ -92,6 +94,89 @@ def relative(value):
     if not value or "\\" in value or ":" in value or any(p in ("", ".", "..") for p in parts):
         raise InventoryError("unsafe relative path")
     return PurePosixPath(value)
+
+
+def python_name(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?", value):
+        return None
+    return re.sub(r"[-_.]+", "-", value).lower()
+
+
+def wheel_purl(name, version, filename, metadata_path):
+    """A conservative exact PEP 440 subset; never guess missing/conflicting identity."""
+    normalized = python_name(name)
+    number = r"(?:0|[1-9][0-9]*)"
+    exact = (rf"(?:[1-9][0-9]*!)?{number}(?:\.{number})*(?:(?:a|b|rc){number})?"
+             rf"(?:\.post{number})?(?:\.dev{number})?(?:\+[a-z0-9]+(?:\.[a-z0-9]+)*)?")
+    if not normalized or not isinstance(version, str) or not re.fullmatch(exact, version):
+        return None
+    parts = filename.removesuffix(".whl").split("-")
+    if (not filename.endswith(".whl") or len(parts) not in (5, 6)
+            or python_name(parts[0]) != normalized or parts[1] != version
+            or (len(parts) == 6 and not re.fullmatch(r"[0-9][A-Za-z0-9_]*", parts[2]))
+            or any(not re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*", tag) for tag in parts[-3:])):
+        return None
+    folder, separator, member = metadata_path.partition("/")
+    dist, separator2, folder_version = folder.removesuffix(".dist-info").partition("-")
+    if (not separator or member != "METADATA" or not folder.endswith(".dist-info") or not separator2
+            or python_name(dist) != normalized or folder_version != version):
+        return None
+    return "pkg:pypi/" + quote(normalized, safe="") + "@" + quote(version, safe="")
+
+
+NPM_PART = r"[A-Za-z0-9~-][A-Za-z0-9._~-]*"
+NPM_NAME = rf"(?:@{NPM_PART}/)?{NPM_PART}"
+
+
+def npm_install_name(location):
+    # Match a whole directory segment; a scope may itself end in "node_modules".
+    return ("/" + location).rpartition("/node_modules/")[2] or location
+
+
+def npm_exclusions(documents):
+    """Conservatively omit a name anywhere it has an alias/non-registry declaration."""
+    excluded = set()
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        for field in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+            dependencies = document.get(field, {})
+            if not isinstance(dependencies, dict):
+                raise InventoryError("invalid npm dependency declarations")
+            for name, spec in dependencies.items():
+                if not isinstance(spec, str) or re.search(r"[:/@\\]", spec) or spec.startswith("."):
+                    excluded.add(name)
+    return excluded
+
+
+def npm_purl(location, entry, excluded):
+    # Only a node_modules chain, never a workspace directory or alias install name.
+    if not re.fullmatch(rf"(?:node_modules/{NPM_NAME}/)*node_modules/{NPM_NAME}", location):
+        return None
+    name = npm_install_name(location)
+    if len(name) > 214 or name in excluded or entry.get("name", name) != name or entry.get("link"):
+        return None
+    version = entry.get("version")
+    number = r"(?:0|[1-9][0-9]*)"
+    match = re.fullmatch(rf"{number}\.{number}\.{number}(?:-([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*))?"
+                         r"(?:\+[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)?", version) if isinstance(version, str) else None
+    if not match or any(p.isdigit() and len(p) > 1 and p[0] == "0" for p in (match[1] or "").split(".")):
+        return None
+    resolved = entry.get("resolved")
+    if (not isinstance(resolved, str) or not resolved.startswith("https://registry.npmjs.org/")
+            or "?" in resolved or "#" in resolved or re.search(r"%(?![0-9A-Fa-f]{2})", resolved)):
+        return None
+    try:
+        url = urlsplit(resolved)
+        path = unquote(url.path, errors="strict")
+    except (ValueError, UnicodeError):
+        return None
+    # A declaration only: npm may substitute a configured registry for this host.
+    expected = f"/{name}/-/{name.rsplit('/', 1)[-1]}-{version}.tgz"
+    if (url.scheme != "https" or url.netloc != "registry.npmjs.org" or url.query or url.fragment
+            or path != expected or any(ord(c) < 32 for c in resolved)):
+        return None
+    return "pkg:npm/" + "/".join(quote(part, safe="") for part in name.split("/")) + "@" + quote(version, safe="")
 
 
 def object_pairs(pairs):
@@ -274,7 +359,7 @@ def wheel(data):
             raise InventoryError("invalid wheel identity")
         declared = {key: [text(str(v)) for v in message.get_all(key, [])]
                     for key in ("Requires-Dist", "Requires-Python", "License-Expression")}
-        return name, version, declared
+        return name, version, declared, metadata[0].filename
 
 
 class Inventory:
@@ -284,7 +369,7 @@ class Inventory:
         self.gaps = []
         self.application = None
 
-    def add(self, kind, name, source, version=None, sha=None, **evidence):
+    def add(self, kind, name, source, version=None, sha=None, *, purl=None, **evidence):
         if len(self.components) >= MAX_FILES:
             raise InventoryError("component budget exceeded")
         key = source + "\0" + name + "\0" + str(len(self.components))
@@ -295,6 +380,8 @@ class Inventory:
             component["version"] = text(version, limit=1024)
         if sha:
             component["hashes"] = [{"alg": "SHA-256", "content": sha}]
+        if purl:
+            component["purl"] = purl
         self.components.append(component)
 
     def missing(self, source, reason):
@@ -332,15 +419,20 @@ class Inventory:
             self.missing("vendor/*.whl", "no wheels observed")
         for source in names:
             data = self.reader.read(source, MAX_FILE)
-            name, version, declared = wheel(data)
+            name, version, declared, metadata_path = wheel(data)
+            purl = wheel_purl(name, version, PurePosixPath(source).name, metadata_path)
             self.add("library", name, source, version, digest(data), evidence="wheel-bytes-and-metadata",
                      zip_integrity="all-members-crc-checked", declared_metadata=declared,
-                     installation="unknown", platform="wheel-filename-declaration-only")
+                     installation="unknown", platform="wheel-filename-declaration-only", purl=purl,
+                     purl_evidence="corroborated-wheel-identifier-claim" if purl else "unavailable")
+            if not purl:
+                self.missing(source, "PURL omitted: wheel identity conflict or unsupported exact version/filename")
         self.missing("python-dependency-closure", "not resolved; wheel versions/platforms may not satisfy declarations")
 
     def npm(self):
         source = "cyberthunder/ui/package.json"
         data = self.read(source)
+        package = {}
         if data is not None:
             package = json_object(data)
             self.add("application", package.get("name", "unknown-ui"), source, package.get("version"),
@@ -355,13 +447,14 @@ class Inventory:
                 raise InventoryError("only npm lockfile v2/v3 packages maps supported")
             if len(packages) > MAX_FILES:
                 raise InventoryError("npm package budget exceeded")
+            excluded = npm_exclusions([package, *packages.values()])
             for location, entry in sorted(packages.items()):
                 if not location:
                     continue
                 relative(location)
                 if not isinstance(entry, dict):
                     raise InventoryError("invalid npm package entry")
-                name = entry.get("name") or location.rsplit("node_modules/", 1)[-1]
+                name = entry.get("name") or npm_install_name(location)
                 for flag in ("dev", "devOptional", "optional", "inBundle", "link"):
                     if flag in entry and not isinstance(entry[flag], bool):
                         raise InventoryError("invalid npm flag")
@@ -369,6 +462,7 @@ class Inventory:
                 if entry.get("devOptional"):
                     role = "development-or-optional-runtime"
                 version = entry.get("version")
+                purl = npm_purl(location, entry, excluded)
                 self.add("library", name, source + "#" + location, version,
                          evidence="lock-declaration", dependency_role=role,
                          resolved=safe_reference(entry.get("resolved", "unknown")),
@@ -377,7 +471,11 @@ class Inventory:
                          lock_in_bundle=entry.get("inBundle", False), ui_bundle_membership="unknown",
                          dependencies=entry.get("dependencies", {}),
                          peer_dependencies=entry.get("peerDependencies", {}),
-                         optional_dependencies=entry.get("optionalDependencies", {}))
+                         optional_dependencies=entry.get("optionalDependencies", {}), purl=purl,
+                         purl_evidence="registry-lock-identifier-claim" if purl else "unavailable")
+                if not purl:
+                    self.missing(source + "#" + location,
+                                 "PURL omitted: ambiguous/non-registry identity or unsupported exact version")
                 if version is None or not entry.get("integrity") or entry.get("link"):
                     self.missing(source + "#" + location, "version/integrity absent or local link; package bytes unverified")
         assets = self.reader.files("cyberthunder/ui/dist", recursive=True)

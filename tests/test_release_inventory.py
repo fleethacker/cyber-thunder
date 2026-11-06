@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.parse import unquote
 import zipfile
 
 MODULE = Path(__file__).resolve().parents[1] / "scripts" / "release_inventory.py"
@@ -89,6 +90,11 @@ class ReleaseInventoryTests(unittest.TestCase):
         components = result["components"]
         wheel = next(c for c in components if c["name"] == "sample")
         self.assertEqual(wheel["version"], "1.2.3")
+        self.assertEqual(wheel["purl"], "pkg:pypi/sample@1.2.3")
+        runtime = next(c for c in components if c["name"] == "runtime")
+        self.assertEqual(runtime["purl"], "pkg:npm/runtime@2.1.0")
+        self.assertEqual(properties(runtime)["purl-evidence"], "registry-lock-identifier-claim")
+        self.assertEqual(properties(wheel)["installation"], "unknown")
         self.assertEqual(wheel["hashes"][0]["content"], hashlib.sha256(make_wheel()).hexdigest())
         self.assertEqual(properties(wheel)["zip-integrity"], "all-members-crc-checked")
         self.assertIn("child>=2", properties(wheel)["declared-metadata"])
@@ -118,6 +124,33 @@ class ReleaseInventoryTests(unittest.TestCase):
         changed = self.generate()
         self.assertEqual(properties(changed["metadata"])["source-dirty"], "true")
         self.assertNotEqual(first, changed)
+
+    def test_identifier_omissions_preserve_evidence_and_partial_coverage(self):
+        self.write("vendor/sample-1.2.3-py3-none-any.whl", make_wheel({
+            "sample-1.2.3.dist-info/METADATA": "Name: another\nVersion: 1.2.3\n"}))
+        self.lock["packages"][""]["dependencies"] = {"runtime": "npm:runtime@2.1.0"}
+        self.write_lock()
+        result = self.generate()
+        self.assertFalse(any("purl" in c for c in result["components"]))
+        self.assertTrue(any("hashes" in c for c in result["components"] if c["name"] == "another"))
+        self.assertIn("PURL omitted", properties(result["metadata"])["unresolved"])
+        self.assertEqual(result["compositions"], [{"aggregate": "incomplete"}])
+        self.assertEqual(properties(result["metadata"])["coverage"], "partial")
+
+    def test_scoped_and_nested_registry_claims_are_reproducible(self):
+        self.lock["packages"]["node_modules/parent/node_modules/@scope/tool"] = {
+            "version": "1.2.3-beta.1+Build.4", "resolved":
+            "https://registry.npmjs.org/@scope/tool/-/tool-1.2.3-beta.1%2BBuild.4.tgz"}
+        self.write_lock()
+        first = self.generate()
+        self.assertEqual(inventory.encoded(first), inventory.encoded(self.generate()))
+        tool = next(c for c in first["components"] if c["name"] == "@scope/tool")
+        self.assertEqual(tool["purl"], "pkg:npm/%40scope/tool@1.2.3-beta.1%2BBuild.4")
+        self.assertNotIn("hashes", tool)
+        self.assertNotIn("purl", first["metadata"]["component"])
+        for c in first["components"]:
+            if c["type"] != "library":
+                self.assertNotIn("purl", c)
 
     def test_missing_inputs_remain_explicit(self):
         (self.root / "vendor/sample-1.2.3-py3-none-any.whl").unlink()
@@ -234,6 +267,7 @@ class ReleaseInventoryTests(unittest.TestCase):
         result = inventory.Inventory(self.root).generate("external.json")
         model = next(c for c in result["components"] if c["type"] == "machine-learning-model")
         self.assertNotIn("hashes", model)
+        self.assertNotIn("purl", model)
         self.assertEqual(properties(model)["deployment"], "unknown")
         with self.assertRaises(inventory.InventoryError):
             inventory.Inventory(self.root).generate("../external.json")
@@ -340,6 +374,114 @@ class ReleaseInventoryTests(unittest.TestCase):
                                         "--receipt", str(receipt)]), 2)
         self.assertFalse(output.exists())
         self.assertFalse(receipt.exists())
+
+
+class PackageUrlTests(unittest.TestCase):
+    def test_python_name_normalization(self):
+        for name in ("Friendly-Bard", "friendly_bard", "friendly.bard", "FrIeNdLy-._--bArD"):
+            with self.subTest(name=name):
+                self.assertEqual(inventory.wheel_purl(name, "1.2.3", "friendly_bard-1.2.3-py3-none-any.whl",
+                                                     "friendly.bard-1.2.3.dist-info/METADATA"),
+                                 "pkg:pypi/friendly-bard@1.2.3")
+
+    def test_wheel_exact_versions_and_encoding(self):
+        for version in ("0", "1.2", "1.0a1", "1.0b2", "1.0rc1", "1.0.post2.dev3", "1!2.0+linux.1"):
+            with self.subTest(version=version):
+                purl = inventory.wheel_purl("Sample", version, f"sample-{version}-1-py2.py3-none-any.whl",
+                                            f"sample-{version}.dist-info/METADATA")
+                self.assertEqual(unquote(purl), "pkg:pypi/sample@" + version)
+                self.assertNotIn("!", purl)
+                self.assertNotIn("+", purl)
+        self.assertEqual(inventory.wheel_purl("sample", "1!2.0+cpu.1", "sample-1!2.0+cpu.1-py3-none-any.whl",
+                                             "sample-1!2.0+cpu.1.dist-info/METADATA"),
+                         "pkg:pypi/sample@1%212.0%2Bcpu.1")
+
+    def test_wheel_ambiguous_or_malicious_identity_has_no_purl(self):
+        baseline = ["sample", "1.2.3", "sample-1.2.3-py3-none-any.whl", "sample-1.2.3.dist-info/METADATA"]
+        for index, value in [(0, "bad/name"), (0, "sam%70le"), (0, "sämple"), (0, "sample-"),
+                             (0, "@sample"), (0, "sample\n"), (1, "1.2.3#payload"), (1, "1.2.3?x=1"),
+                             (1, "1.2.3/../../x"), (1, "1.2.3%2Bcpu"), (1, "1.2.3;exec"),
+                             (1, "1.*"), (1, ">=1"), (1, "v1.2.3"), (1, "01.2.3"), (1, "1.2.3RC1"),
+                             (2, "other-1.2.3-py3-none-any.whl"), (2, "sample-2-py3-none-any.whl"),
+                             (2, "sample-1.2.3-invalid-py3-none-any.whl"), (2, "sample-1.2.3.whl"),
+                             (3, "other-1.2.3.dist-info/METADATA"), (3, "sample-2.dist-info/METADATA"),
+                             (3, "sample-1.2.3.dist-info/other/METADATA")]:
+            arguments = baseline.copy()
+            arguments[index] = value
+            with self.subTest(index=index, value=value):
+                self.assertIsNone(inventory.wheel_purl(*arguments))
+
+    @staticmethod
+    def npm_entry(name="example", version="1.2.3"):
+        return {"version": version, "resolved": f"https://registry.npmjs.org/{name}/-/{name.rsplit('/', 1)[-1]}-{version}.tgz"}
+
+    def test_npm_scope_namespace_case_and_encoding(self):
+        for name, expected in [("example", "example"), ("@angular/core", "%40angular/core"),
+                               ("@node_modules/tool", "%40node_modules/tool"),
+                               ("@customnode_modules/tool", "%40customnode_modules/tool"),
+                               ("Legacy_Name", "Legacy_Name"), ("@Old.Scope/Legacy_Name", "%40Old.Scope/Legacy_Name")]:
+            entry = self.npm_entry(name, "1.2.3-alpha.0+Build.01")
+            for prefix in ("node_modules/", "node_modules/parent/node_modules/", "node_modules/@other/parent/node_modules/"):
+                with self.subTest(name=name, prefix=prefix):
+                    self.assertEqual(inventory.npm_purl(prefix + name, entry, set()),
+                                     "pkg:npm/" + expected + "@1.2.3-alpha.0%2BBuild.01")
+
+    def test_npm_scoped_encoded_registry_path(self):
+        entry = self.npm_entry("@scope/pkg")
+        for path in ("@scope/pkg", "%40scope/pkg", "@scope%2Fpkg", "%40scope%2fpkg"):
+            entry["resolved"] = "https://registry.npmjs.org/" + path + "/-/pkg-1.2.3.tgz"
+            self.assertEqual(inventory.npm_purl("node_modules/@scope/pkg", entry, set()), "pkg:npm/%40scope/pkg@1.2.3")
+
+    def test_npm_ambiguous_locations_and_names(self):
+        self.assertIsNone(inventory.npm_purl("node_modules/@node_modules/example", self.npm_entry(), set()))
+        for name in ("../example", "@scope", "@scope/extra/example", "%40scope/example", "_example", ".example",
+                     "example@payload", "example?x=1", "exämple", "example;payload", "a" * 215):
+            with self.subTest(name=name):
+                self.assertIsNone(inventory.npm_purl("node_modules/" + name, self.npm_entry(name), set()))
+        for location in ("packages/example", "workspace/node_modules/example", "node_modules/example/extra", "../node_modules/example"):
+            self.assertIsNone(inventory.npm_purl(location, self.npm_entry(), set()))
+        for name in ("alias-target", "Example", "", None):
+            entry = {**self.npm_entry(), "name": name}
+            self.assertIsNone(inventory.npm_purl("node_modules/example", entry, set()))
+
+    def test_npm_versions_are_exact_semver_not_requirements_or_sources(self):
+        for version in (None, 123, "", "1", "1.2", "v1.2.3", "01.2.3", "1.2.3-01", "1.2.3-alpha.01",
+                        "^1.2.3", "~1.2.3", "1.2.x", "latest", "npm:example@1.2.3", "file:example",
+                        "workspace:*", "git+https://example/repo", "1.2.3+../x", "1.2.3?x=1", "1.2.3%00"):
+            with self.subTest(version=version):
+                self.assertIsNone(inventory.npm_purl("node_modules/example", self.npm_entry(version=version), set()))
+
+    def test_npm_registry_url_must_corroborate_identity(self):
+        for resolved in (None, "", "git+https://registry.npmjs.org/example", "file:example", "workspace:*",
+                         "http://registry.npmjs.org/example/-/example-1.2.3.tgz",
+                         "https://registry.npmjs.org.evil/example/-/example-1.2.3.tgz",
+                         "https://registry.npmjs.org@evil/example/-/example-1.2.3.tgz",
+                         "https://user:secret@registry.npmjs.org/example/-/example-1.2.3.tgz",
+                         "https://registry.npmjs.org:443/example/-/example-1.2.3.tgz",
+                         "https://registry.npmjs.org/other/-/example-1.2.3.tgz",
+                         "https://registry.npmjs.org/example/-/example-2.0.0.tgz",
+                         "https://registry.npmjs.org/example/-/example-1.2.3.tgz?token=private",
+                         "https://registry.npmjs.org/example/-/example-1.2.3.tgz#payload",
+                         "https://registry.npmjs.org/example/-/example-1.2.3.tgz#",
+                         "https://registry.npmjs.org/example/-/example-1.2.3.tgz?",
+                         " https://registry.npmjs.org/example/-/example-1.2.3.tgz",
+                         "https://registry.npmjs.org/exam\nple/-/example-1.2.3.tgz",
+                         "https://registry.npmjs.org/%2565xample/-/example-1.2.3.tgz",
+                         "https://registry.npmjs.org/ex%GGample/-/example-1.2.3.tgz",
+                         "https://registry.npmjs.org/ex%FFample/-/example-1.2.3.tgz"):
+            with self.subTest(resolved=resolved):
+                self.assertIsNone(inventory.npm_purl("node_modules/example", {**self.npm_entry(), "resolved": resolved}, set()))
+        self.assertIsNone(inventory.npm_purl("node_modules/example", {**self.npm_entry(), "link": True}, set()))
+
+    def test_nonregistry_declarations_exclude_even_same_name_aliases(self):
+        for field in ("dependencies", "optionalDependencies", "devDependencies", "peerDependencies"):
+            for spec in ("npm:example@1.2.3", "file:../example", "link:example", "workspace:*", "owner/repo", "git@host:repo", "https://host/file", None):
+                with self.subTest(field=field, spec=spec):
+                    excluded = inventory.npm_exclusions([{field: {"example": spec}}])
+                    self.assertIsNone(inventory.npm_purl("node_modules/example", self.npm_entry(), excluded))
+        self.assertEqual(inventory.npm_exclusions([{"dependencies": {"example": "^1.2.3", "other": "latest"}}]), set())
+        with self.assertRaises(inventory.InventoryError):
+            inventory.npm_exclusions([{"dependencies": []}])
 
 
 if __name__ == "__main__":

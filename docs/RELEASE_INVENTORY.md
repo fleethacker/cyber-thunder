@@ -52,9 +52,9 @@ dirty status produce different evidence even at the same commit.
 | --- | --- | --- |
 | `pyproject.toml` | Project name/version, Python requirements, build-system and optional dependency declarations; source SHA-256 | Resolved or installed versions; build dependency closure |
 | `requirements.txt`, `requirements-dev.txt` | Literal declarations and file SHA-256 | Included requirements files and direct URLs are not followed; no solver runs |
-| Direct `vendor/*.whl` | Whole-wheel SHA-256, exactly one top-level dist-info METADATA identity, Requires-Dist/Requires-Python/License-Expression declarations, CRC check of every ZIP member | Installation, platform compatibility, signature/origin, RECORD authenticity, dependency closure, verified licenses |
+| Direct `vendor/*.whl` | Whole-wheel SHA-256, exactly one top-level dist-info METADATA identity, conditional PyPI PURL, Requires-Dist/Requires-Python/License-Expression declarations, CRC check of every ZIP member | Installation, platform compatibility, signature/origin, RECORD authenticity, dependency closure, verified licenses |
 | `cyberthunder/ui/package.json` | UI identity and direct runtime/dev requirements | Actual install/build state |
-| `cyberthunder/ui/package-lock.json` v2/v3 | Every non-root packages entry, exact version when present, resolved reference, integrity string, path, dependency maps, optional/link/inBundle flags | Downloaded tarball integrity and dependency graph resolution |
+| `cyberthunder/ui/package-lock.json` v2/v3 | Every non-root packages entry, exact version when present, conditional npm PURL, resolved reference, integrity string, path, dependency maps, optional/link/inBundle flags | Downloaded tarball integrity and dependency graph resolution |
 | `cyberthunder/ui/dist/**` | SHA-256 of each actual regular asset | Build provenance and which packages contributed to each bundle |
 | `Dockerfile`, `Containerfile`, tracked YAML under `deploy/` and `packages/` | Source digests; literal FROM/image/images references and line numbers; digest-pinned flag; ARG names ending VERSION and declared defaults | Image contents, approved-image status, registry resolution, deployment, OS packages, fetched binaries |
 | Explicit optional metadata | Local model/runtime declarations | Actual deployment, artifact bytes, trust, completeness |
@@ -91,6 +91,69 @@ Referenced paths are never followed. Example/range package references may appear
 they are not declarations that those images ship in the application release.
 Tag-only image references are explicitly unresolved; even digest-pinned references
 do not prove that image bytes were available or inspected.
+
+## Bounded Package URL claims
+
+Standard `purl` fields make a subset of this partial inventory addressable by
+package scanners. A PURL is an **identifier claim**, not evidence of installation,
+trusted provenance, presence on a public registry, complete dependency closure,
+or vulnerability status. All existing coverage and declared-versus-observed
+properties remain in place; the composition remains incomplete.
+
+For wheels, `Name` and `Version` in the single METADATA file must agree with both
+the wheel filename and the `.dist-info` directory. Names use
+[Python name normalization](https://packaging.python.org/en/latest/specifications/name-normalization/):
+lowercase and collapse runs of `.`, `_`, and `-` to `-`. This follows the Python
+ecosystem conventions referenced by the
+[PyPI PURL type](https://raw.githubusercontent.com/package-url/purl-spec/main/types/pypi-definition.json)
+and [wheel filename rules](https://packaging.python.org/en/latest/specifications/binary-distribution-format/#escaping-and-unicode).
+For example, `Friendly._Bard` becomes `pkg:pypi/friendly-bard@1.2.3`.
+This names the distribution, not an import namespace.
+
+Version handling is deliberately a conservative exact
+[PEP 440](https://packaging.python.org/en/latest/specifications/version-specifiers/) subset:
+numeric releases, nonzero epochs, lowercase `a`/`b`/`rc` prereleases, `.post` and
+`.dev` releases, and lowercase dot-separated local labels. Noncanonical spellings,
+unsupported filename forms, or conflicting identities retain the observed wheel
+evidence but receive no PURL, with an explicit unresolved entry. No version is
+inferred from requirements or repaired to match another field.
+
+For npm, an entry must have a conventional `node_modules` chain, an exact
+[SemVer 2.0.0](https://semver.org/) version, no link flag, and a matching
+`https://registry.npmjs.org/<name>/-/<basename>-<version>.tgz` declaration. An explicit
+entry name must agree with the install-path name. Percent-encoded registry paths
+are decoded once and compared exactly; alternate hosts, credentials, ports,
+queries, fragments, conflicting names/versions and malformed escapes do not qualify.
+Registry presence and tarball bytes are not fetched or verified. The
+[npm lockfile specification](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/#packages)
+also permits the default registry host to stand for a configured registry, so the
+URL is not promoted to verified public origin. Missing integrity remains an explicit
+byte-verification gap even when the identifier qualifies.
+
+The [npm PURL type](https://raw.githubusercontent.com/package-url/purl-spec/main/types/npm-definition.json)
+preserves name/scope/version case, including legacy mixed-case package names.
+Scopes are namespaces: `@scope/tool` at `1.2.3` becomes
+`pkg:npm/%40scope/tool@1.2.3`. Each component is percent-encoded under
+[ECMA-427 sections 5.3–5.6](https://ecma-international.org/wp-content/uploads/ECMA-427_1st_edition_december_2025.pdf);
+literal version `+` and `!` become `%2B` and `%21`. Separating `/` and `@` remain
+structural. No qualifiers or subpaths are invented.
+
+Aliases, git/local/link/workspace sources, nonstandard package locations, unresolved
+requirements, project/application declarations, image references and model/runtime
+declarations receive no invented PURL. To avoid silently resolving aliases, a name
+with an alias or non-registry dependency declaration anywhere in the manifest/lock
+is conservatively excluded everywhere. This can omit an otherwise identifiable
+copy elsewhere in the lock; the collector does not run a resolver. Omitted wheel/npm
+identifiers have `purl-evidence=unavailable` and an unresolved reason. Included
+identifiers record `corroborated-wheel-identifier-claim` or
+`registry-lock-identifier-claim`; they do not change any installation/provenance label.
+
+[Trivy's SBOM documentation](https://trivy.dev/docs/latest/guide/target/sbom/)
+warns that third-party SBOMs can lack properties needed for accurate detection.
+PURLs alone therefore do not establish recognition or coverage. Retain an actual
+offline scanner receipt with recognized package counts and reported matches, and
+keep the earlier zero-PURL unavailable result as calibration. A zero-match report
+can only describe the scanned partial inventory.
 
 ## Optional external declarations
 
