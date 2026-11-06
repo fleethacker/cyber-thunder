@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -26,6 +27,10 @@ TRANSPORTS = ("ssh", "winrm", "local", "fixture", "simulated", "file", "kubeconf
 
 class ScopeViolation(PermissionError):
     pass
+
+
+class _InventoryChanged(Exception):
+    """A completed read no longer describes the file currently at its path."""
 
 
 @dataclass
@@ -109,7 +114,22 @@ class Inventory:
 
     @staticmethod
     def read_persisted(p: Path) -> dict[str, dict]:
-        """Bounded, explicit declarations for registration and connection authorization."""
+        """Read current declarations, retrying at most eight changed snapshots.
+
+        Concurrent atomic inventory saves can invalidate an otherwise well-formed
+        snapshot. Every retry reopens and validates the current file; missing or
+        invalid declarations fail immediately and never fall back to cached scope.
+        """
+        for attempt in range(8):
+            try:
+                return Inventory._read_persisted_once(p)
+            except _InventoryChanged:
+                if attempt < 7:
+                    time.sleep(0.01)
+        raise ScopeViolation("persisted inventory is missing, unreadable or invalid")
+
+    @staticmethod
+    def _read_persisted_once(p: Path) -> dict[str, dict]:
         try:
             flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
             with os.fdopen(os.open(p, flags), "rb") as stream:
@@ -146,8 +166,10 @@ class Inventory:
                 Target.from_dict(row)
             after = p.stat()
             if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
-                raise ValueError("inventory changed while reading")
+                raise _InventoryChanged()
             return {row["id"]: row for row in rows}
+        except _InventoryChanged:
+            raise
         except Exception:
             raise ScopeViolation("persisted inventory is missing, unreadable or invalid") from None
 
