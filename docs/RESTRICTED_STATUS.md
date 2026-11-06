@@ -45,6 +45,9 @@ node --test src/components/RestrictedStatusRendering.test.mjs src/components/Con
 npm run typecheck -- --force
 ```
 
-These are local fixture checks. End-to-end acceptance still requires the
-sanitized backend response and production account/permission wiring to be
-integrated, then a limited account exercised against its actual target grants.
+`IdentityProvider` supplies the same `can(action)` function to the identity
+context and its nested `PermissionProvider`, connecting account permissions to
+the action controls.
+
+These are local fixture checks. End-to-end acceptance still requires a limited
+account exercised against its actual target grants.
