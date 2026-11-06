@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 110 and len(windows) == 79
+    assert len(linux) == 111 and len(windows) == 84
     native_acl = {node: reason for node, reason in linux.items()
                   if node.startswith("tests/security/test_windows_file_trust.py::")}
     assert len(native_acl) == 46
@@ -339,6 +339,16 @@ def test_credential_skip_allowances_match_native_receipts_and_fail_closed(platfo
             ))
             assert policy.skips[0]["allowed"] is accepted
             assert bool(policy.errors) is not accepted
+
+
+@pytest.mark.parametrize("platform,count", [("linux", 1), ("win32", 5)])
+def test_operator_skip_allowances_match_native_receipts(platform, count):
+    receipt = json.loads((ROOT / "docs/operator-platform-skips.json").read_text())
+    actual = {node: reason for node, reason in expected_skips(platform).items()
+              if node.startswith(("tests/audit/test_anchor_review.py::", "tests/client/"))}
+    assert actual == receipt["skips"][platform] and len(actual) == count
+    other = "linux" if platform == "win32" else "win32"
+    assert not set(actual).intersection(expected_skips(other))
 
 
 def test_workflow_has_read_only_triggers_full_matrix_and_immutable_actions():

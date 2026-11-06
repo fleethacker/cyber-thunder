@@ -177,8 +177,8 @@ shows the step timeline: scope check, before-state captured, applied, verified.
 For verified use, configure [identity/browser access](docs/AUTHORIZATION.md), the protected
 [account policy](docs/ACCOUNT_ACCESS.md), and [fresh authentication](docs/STEP_UP.md), then choose
 **Sign in** on the HTTPS UI. Signing in alone does not permit a target operation. Browser sessions use
-one worker/process; restart requires login. Verified CLI use is limited to `serve` and emergency
-`kill engage`; use authenticated UI/API operations for other work.
+one worker/process; restart requires login. [CLI device login](docs/CLI_AUTH.md) and the explicit
+`api` commands use the same verified API and permissions. A typed local actor cannot replace login.
 
 Open **STIG Library** for Downloaded, Maintained, Updates, Browse all and Import/transfer views, with versions and separate live-check/download/import times.
 Subscriptions default to inventory matches; choose manual product/type checkboxes and **Save selections**
@@ -226,6 +226,8 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/AUTHORIZATION.md](docs/AUTHORIZATION.md) | authentication modes, browser login, roles, target policy and explicit credentials |
 | [docs/ACCOUNT_ACCESS.md](docs/ACCOUNT_ACCESS.md) | exact policy schema, per-account examples, target credentials and original artifact ownership |
 | [docs/CREDENTIAL_RESOLVERS.md](docs/CREDENTIAL_RESOLVERS.md) | protected password sources, account-bound leases, rotation and native deployment acceptance |
+| [docs/CLI_AUTH.md](docs/CLI_AUTH.md) | human device login, protected client tokens and authenticated API commands |
+| [docs/AUDIT_ANCHORS.md](docs/AUDIT_ANCHORS.md) | explicit signed checkpoints and local anchor verification; independent retention remains separate |
 | [docs/WINDOWS_FILE_TRUST.md](docs/WINDOWS_FILE_TRUST.md) | native owner/DACL checks, protected-path provisioning and deployment limits |
 | [docs/STEP_UP.md](docs/STEP_UP.md) | fresh authentication requirements for privileged actions |
 | [docs/SEPARATION_OF_DUTIES.md](docs/SEPARATION_OF_DUTIES.md) | independent human approvals and CAT I quorum |

@@ -297,8 +297,11 @@ issuance, rotation and remote privilege verification remain operator responsibil
 `CT_AUTH_MODE=dev` bypasses verified role/account isolation and records typed actors
 as unverified. Keep it on loopback with scratch state for local rehearsal; a forwarded
 port does not add authentication. `fleet` refuses development authentication.
-Verified CLI use is limited to `serve` and emergency `kill engage`; use authenticated
-UI/API operations for target work. A typed `--actor` cannot substitute for login.
+For verified remote CLI operations, use [human device login and the authenticated
+API command namespace](CLI_AUTH.md). Ordinary local state-changing commands remain
+restricted; serving the API, emergency `kill engage` and the read-only local node
+assessment have distinct documented purposes. A typed `--actor` cannot substitute
+for login or grant access to target operations.
 
 Native and container servers enforce the same policy. Browser sessions currently
 require one process/worker; source deployment manifests also use one replica and an

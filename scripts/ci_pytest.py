@@ -204,6 +204,20 @@ CREDENTIAL_RESOLVER_SKIPS = {
 }
 
 
+NATIVE_OPERATOR_SKIPS = {
+    "win32": {
+        "tests/audit/test_anchor_review.py::test_native_posix_file_protection[fifo]": "requires native POSIX mode and inode protection",
+        "tests/audit/test_anchor_review.py::test_native_posix_file_protection[key_symlink]": "requires native POSIX mode and inode protection",
+        "tests/audit/test_anchor_review.py::test_native_posix_file_protection[lock_symlink]": "requires native POSIX mode and inode protection",
+        "tests/audit/test_anchor_review.py::test_native_posix_file_protection[unsafe_parent]": "requires native POSIX mode and inode protection",
+        "tests/client/test_storage_config.py::test_linux_symlink_and_unsafe_parent": "native Linux symlink and mode checks"
+    },
+    "linux": {
+        "tests/client/test_storage_config.py::test_windows_inherited_public_read_never_receives_token_bytes": "native Windows inherited DACL privacy"
+    }
+}
+
+
 def expected_skips(platform: str) -> dict[str, str]:
     if platform not in {"linux", "win32"}:
         raise ValueError(f"Unsupported CI platform: {platform}")
@@ -282,6 +296,7 @@ def expected_skips(platform: str) -> dict[str, str]:
             allowed[f"tests/state/test_file_read_sharing.py::{name}"] = SHARING_REASON
     allowed.update(NODE_HARDENING_SKIPS[platform])
     allowed.update(CREDENTIAL_RESOLVER_SKIPS[platform])
+    allowed.update(NATIVE_OPERATOR_SKIPS[platform])
     return allowed
 
 

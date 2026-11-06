@@ -19,7 +19,7 @@ Completed documentation/reporting work: COV-01 now ships as `report coverage`, t
 | Who is acting? | Verified issuer/subject in OIDC or mesh mode; caller-supplied names cannot replace it | `control/principal.py`, `api/auth.py` |
 | Login and sessions | Signed access tokens or server-held browser sessions with PKCE, CSRF, idle/absolute expiry and local logout | [AUTHORIZATION](AUTHORIZATION.md), [BROWSER_IDENTITY](BROWSER_IDENTITY.md) |
 | UI identity | Verified name, roles and permission explanations; development name remains labeled unverified | `ui/src/state/Identity.tsx`, `components/ActorChip.tsx` |
-| CLI identity | Typed actor is development-only; most CLI operations refuse verified mode until CLI login exists | ZT-06, `cli.py` |
+| CLI identity | Human device login and authenticated API commands preserve server authorization; local typed-actor operations remain development-only | ZT-06, [CLI_AUTH](CLI_AUTH.md) |
 | Roles and human decisions | Viewer, analyst, approver, admin and auditor; workload accounts cannot approve/apply/rollback | `control/roles.py` |
 | Resource authorization | Exact account/group grants by target, environment and operation; node administration is separate | [ACCOUNT_ACCESS](ACCOUNT_ACCESS.md) |
 | Global history | Unfiltered node views require explicit `read.all`; audit is an explicit node-wide permission; target export is separate | `api/access.py`, `control/access.py` |
@@ -60,7 +60,7 @@ Implementation tests use isolated identity and transport fixtures. Actual local 
 - Done when: a 10-minute-old token cannot approve and the refusal is audited; after re-login it can; a password-only login cannot approve when the floor is set to the CAC level.
 
 **ZT-06 CLI authentication.** Pillars: User, Device. Step: 60 days. Effort: 4-6 days. Depends: ZT-02, ZT-03.
-- Today: Development CLI still uses a typed actor. Verified mode refuses ordinary CLI state-changing commands; serving the authenticated API and local emergency kill engagement remain available. Device/interactive login and a verified API client remain open.
+- Today: Implemented `auth login/status/logout` using human device authorization and an explicit verified `api` command namespace. Protected per-OS-user token files, rotating refresh, logout generations and bounded HTTPS retain server role/resource/step-up/approval enforcement ([CLI_AUTH](CLI_AUTH.md)). Native Windows/Linux fixtures pass; actual realm/public-client acceptance, peer-OS-user isolation and immediate bearer revocation remain open. Ordinary local state-changing commands still refuse verified mode.
 - Target: `cyberthunder login` (OAuth device authorization grant, RFC 8628), token cached 0600 or in the OS store; human-only commands call the API. For a console with no browser: OS peer identity (`SO_PEERCRED` on Linux, named pipe client token on Windows), which is the operator's own smart-card logon. `--actor` survives in dev mode only.
 - Done when: `approve <id> --actor bob` in oidc mode exits non-zero naming the login command; after login it records bob's subject; in peer mode another OS user gets their own identity.
 
@@ -171,7 +171,7 @@ The goal is that a target's own log names the person who approved the change and
 - Done when: an oidc approve records the token's sub and acr; hand-editing `principal.name` fails `audit verify`; a mixed v1/v2 log verifies; a report lists subject and seq per approval.
 
 **ZT-24 Signed checkpoints and off-node anchors.** Pillars: Visibility, Data. Step: 90 days; PIV approval signing at 180 days. Effort: 4-5 days, plus 1 week for PIV. Depends: ZT-17, ZT-23.
-- Today: hashes are unkeyed and the `.head` checkpoint is plain JSON beside the log (`audit/chain.py:180-184`); anyone who can write the state directory can rewrite both consistently. Recording the head off the node is a manual checklist item (`docs/ADAPTING.md:252`).
+- Today: Implemented an explicit protected operator utility for Ed25519 checkpoint export/verification, full-chain comparison and monotonic local anchor import ([AUDIT_ANCHORS](AUDIT_ANCHORS.md), [native review](AUDIT_ANCHORS_REVIEW.md)). Ordinary `.head` files remain unsigned. Automatic app-event signing, outbox integration, acknowledged independent off-node retention and hardware key custody remain open; local imports explicitly do not claim delivery or resistance to privileged whole-store rollback.
 - Target: signed checkpoint records (node key) every N records, at every approval and kill-switch event; heads queued in the outbox so shore holds anchors the ship cannot rewrite; `audit verify --keys`.
 - Done when: a log and checkpoint rewritten without the key fail `verify --keys` after seq N; a shore import detects a head that disagrees with an earlier anchor.
 

@@ -96,6 +96,12 @@ native platform. The allowances do not waive actual service-logon provisioning,
 kubelet mount acceptance or remote authentication. See
 [credential resolver validation](CREDENTIAL_RESOLVERS.md#focused-validation-and-compatibility-migration).
 
+The operator utilities add four exact POSIX audit-anchor protection cases and
+one POSIX client-storage case skipped on Windows, plus one native Windows
+client-storage case skipped on Linux. [Their receipt hashes and exact reasons](operator-platform-skips.json)
+are mirrored in `NATIVE_OPERATOR_SKIPS`. Signed-checkpoint and authenticated-client
+fixtures do not establish independent off-node custody or a live enclave login.
+
 The exact UDS method allowlist is also stored as `UDS_TESTS` in the helper:
 
 ```text
