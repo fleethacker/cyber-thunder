@@ -153,9 +153,11 @@ def test_approval_uses_verified_subject_and_hash_covered_provenance(verified_app
     assert not verify_file(ctx.audit.path).ok
 
 
-@pytest.mark.parametrize("person", [identity(roles=("admin",)), identity(kind="workload")])
-def test_admin_role_and_service_accounts_cannot_approve(verified_app, person):
+@pytest.mark.parametrize("identity_options", [{"roles": ("admin",)}, {"kind": "workload"}])
+def test_admin_role_and_service_accounts_cannot_approve(verified_app, identity_options):
     ctx, proposals, tokens, client, _ = verified_app
+    # Mint the short-lived fixture when the case runs, not during suite collection.
+    person = identity(**identity_options)
     response = client.post(f"/api/v1/proposals/{proposals['alpha'].id}/approve",
                            headers=headers(tokens, person), json={})
     assert response.status_code == 403
