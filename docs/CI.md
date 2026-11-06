@@ -185,7 +185,12 @@ Windows-only cases on Linux. Their literal IDs and reasons are listed in
 [the native review receipts](NODE_HARDENING_REVIEW.md). These are individual
 case allowances, not module omissions.
 
-That permits at most **94 skipped cases on Linux and 87 on Windows**, with every
+The offline release-evidence helper adds one exact native-platform exception
+per runner: its FIFO test runs on Linux, and its Windows handle-lifetime test
+runs on Windows. Their node IDs and reasons are documented in the
+[independent review](RELEASE_VULNERABILITY_REVIEW.md); no broader helper skips are allowed.
+
+That permits at most **95 skipped cases on Linux and 88 on Windows**, with every
 case individually constrained. Missing Git or Bash is not an allowed skip on
 either runner. Windows runs the command-shell and file-sharing tests that
 Linux skips.

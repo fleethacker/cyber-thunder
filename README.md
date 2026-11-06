@@ -273,6 +273,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/API.md](docs/API.md) | HTTP API v1 |
 | [docs/STATE.md](docs/STATE.md) | the state directory: documents (json files or SQLite) and files, `state migrate` and `state info`, WAL on a local volume only, backups |
 | [docs/RELEASE_INVENTORY.md](docs/RELEASE_INVENTORY.md) | partial offline component inventory, CI artifacts and unverified dependency/image coverage |
+| [docs/RELEASE_VULNERABILITY_EVIDENCE.md](docs/RELEASE_VULNERABILITY_EVIDENCE.md) | bounded offline dependency scans, retained scanner/database hashes and explicit coverage limits |
 | [docs/UI.md](docs/UI.md) | screens and behaviour |
 | [docs/FINDINGS.md](docs/FINDINGS.md) | finding categories, filters, search, sorting and saved views |
 | [docs/DEMO.md](docs/DEMO.md) | 10-minute demo runbook |

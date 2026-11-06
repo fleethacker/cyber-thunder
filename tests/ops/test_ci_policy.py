@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 94 and len(windows) == 87
+    assert len(linux) == 95 and len(windows) == 88
     native_acl = {node: reason for node, reason in linux.items()
                   if node.startswith("tests/security/test_windows_file_trust.py::")}
     assert len(native_acl) == 46
@@ -225,6 +225,22 @@ def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     assert [skip["allowed"] for skip in policy.skips] == [True, False]
     with pytest.raises(ValueError, match="Unsupported CI platform"):
         expected_skips("unknown")
+
+
+@pytest.mark.parametrize("platform,node,reason", [
+    ("win32", "tests/test_release_vulnerability_evidence.py::EvidenceTests::test_fifo_is_rejected_without_open", "POSIX special file"),
+    ("linux", "tests/test_release_vulnerability_evidence.py::ProcessTests::test_retained_traceback_cannot_retain_open_process_handle", "Windows native handle lifetime"),
+])
+def test_release_evidence_skips_require_the_exact_native_case(platform, node, reason):
+    other = "linux" if platform == "win32" else "win32"
+    for host, case, detail, accepted in (
+        (platform, node, reason, True), (other, node, reason, False),
+        (platform, node + "_new", reason, False), (platform, node, reason + " changed", False),
+    ):
+        policy = RegressionPolicy(ROOT, host)
+        policy.pytest_runtest_logreport(SimpleNamespace(nodeid=case, when="call", outcome="skipped", skipped=True,
+            longrepr=("file.py", 1, "Skipped: " + detail)))
+        assert policy.skips[0]["allowed"] is accepted
 
 
 @pytest.mark.parametrize("platform,node,reason", [

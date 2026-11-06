@@ -309,6 +309,9 @@ def expected_skips(platform: str) -> dict[str, str]:
     if platform == "linux":
         # The native Windows command boundary runs on the Windows matrix leg.
         allowed["tests/ops/test_wsl_keepalive.py::test_keepalive_operator_and_task_boundaries"] = "native Windows PowerShell task-boundary fixture"
+        allowed["tests/test_release_vulnerability_evidence.py::ProcessTests::test_retained_traceback_cannot_retain_open_process_handle"] = "Windows native handle lifetime"
+    if platform == "win32":
+        allowed["tests/test_release_vulnerability_evidence.py::EvidenceTests::test_fifo_is_rejected_without_open"] = "POSIX special file"
     return allowed
 
 
