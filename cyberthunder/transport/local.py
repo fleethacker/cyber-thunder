@@ -7,9 +7,33 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 from .base import CommandResult, Transport, TransportError, sudo_wrap
+
+
+def command_environment(source: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Pass platform essentials, never ambient credentials or shell startup hooks."""
+    explicit = source is not None
+    source = os.environ if source is None else source
+    if not isinstance(source, Mapping):
+        raise TransportError("local command environment must be a mapping")
+    names = {"path": "PATH", "systemroot": "SystemRoot", "windir": "WINDIR",
+             "comspec": "COMSPEC", "pathext": "PATHEXT", "temp": "TEMP", "tmp": "TMP",
+             "tmpdir": "TMPDIR", "lang": "LANG", "lc_all": "LC_ALL",
+             "lc_ctype": "LC_CTYPE", "tz": "TZ"}
+    result = {}
+    for name, value in source.items():
+        canonical = names.get(name.casefold()) if isinstance(name, str) else None
+        if canonical is None:
+            if explicit:
+                raise TransportError("local command environment contains an unsupported variable")
+            continue
+        if canonical in result or not isinstance(value, str) or "\x00" in value or len(value) > 32768:
+            raise TransportError("local command environment contains an invalid platform variable")
+        result[canonical] = value
+    return result
 
 
 class LocalTransport(Transport):
@@ -18,14 +42,19 @@ class LocalTransport(Transport):
     def __init__(self, shell: str | None = None, cwd: str | None = None, env: dict | None = None):
         self.shell = shell or ("powershell" if sys.platform == "win32" else "bash")
         self.cwd = cwd
-        self.env = env
+        self._env = dict(env) if isinstance(env, Mapping) else env
+
+    @property
+    def env(self) -> dict[str, str]:
+        # Dependency collection also reads this property before spawning a process.
+        return command_environment(self._env)
 
     def _argv(self, command: str) -> list[str]:
         if self.shell == "powershell":
             return ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
         if self.shell == "cmd":
-            return ["cmd", "/c", command]
-        return [self.shell, "-lc", command]
+            return ["cmd", "/d", "/c", command]
+        return [self.shell, "-c", command]
 
     def run(self, command: str, *, timeout: int = 120, sudo: bool = False) -> CommandResult:
         if sudo and sys.platform != "win32" and os.geteuid() != 0:  # type: ignore[attr-defined]

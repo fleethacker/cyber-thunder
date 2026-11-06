@@ -148,6 +148,7 @@ The goal is that a target's own log names the person who approved the change and
 - Done when: a scan succeeds with no `CT_CRED_*` set using keyring; fleet mode refuses `env:` at inventory load; a legacy `credential_ref=lab_root` still works in dev mode; no lease or secret prints its value.
 
 **ZT-20 No secrets on command lines, in temp files or picked up implicitly.** Pillars: Data, Device. Step: 30 days. Effort: 2 days. Depends: ZT-19.
+- Today: Verified SSH disables ambient key/agent fallback and bound Kubernetes subprocesses use a minimal environment. Local tool and dependency subprocesses now exclude server credentials and startup hooks, with a real-child regression. Other subprocess/provider paths and temporary credential handling still need platform-specific coverage ([SECRET_BOUNDARIES](SECRET_BOUNDARIES.md)).
 - Target: kubectl gets a 0600 kubeconfig in a private temp directory removed after the call, never `--token`; SSH `look_for_keys=False`, `allow_agent=False` outside interactive mode; child processes get an env allowlist with no `CT_CRED_*`.
 - Done when: a patched `subprocess.Popen` sees no canary in argv or child env; the temp file is gone after an exception; a key in a fake `HOME/.ssh` is not offered.
 
@@ -156,6 +157,7 @@ The goal is that a target's own log names the person who approved the change and
 - Done when: changing the mounted Secret between two scans takes effect with no restart; an overdue static credential produces a finding.
 
 **ZT-22 Canary tests: a secret never reaches disk, inventory, audit, logs, the model or the outbox.** Pillars: Data, Visibility. Step: 30 days. Effort: 2-3 days. Depends: ZT-19 (can start with env).
+- Today: Implemented a calibrated lifecycle canary through account-bound SSH discovery, scanning, explanation, approval, failed verification, rollback, reports, outbox and audit SSE on JSON and SQLite. It found and now guards against local discovery subprocess credential inheritance. WinRM/Kubernetes paths, real remote authentication and broader failure branches remain open ([SECRET_BOUNDARIES](SECRET_BOUNDARIES.md)).
 - Target: `tests/security/test_secret_canary.py` runs discover, scan, explain (capturing the model prompt), propose, approve, apply, forced verify failure, rollback, report, outbox and SSE with a canary secret, then searches the state directory, DEBUG logs, exceptions, prompt and responses for it in plain, base64 and percent-encoded form.
 - Done when: a deliberately planted leak makes the test fail.
 

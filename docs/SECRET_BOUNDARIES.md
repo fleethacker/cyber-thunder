@@ -1,28 +1,26 @@
 # Lifecycle secret boundary regression (ZT-22)
 
-This is a regression test and defect handoff, not a secret-isolation acceptance
-claim. The implementation base is `24489ca`. Production files are unchanged.
+This regression exercises a credential through the application lifecycle and
+checks its output boundaries. It is not a universal secret-isolation claim.
 
-## Confirmed defect and required owner change
+## Confirmed defect and correction
 
-The real discovery sweep passes the synthetic SSH credential to both local nmap
-child processes through their inherited environment. The regression remains a
-normal failing test, without an expected-failure marker or an output exclusion.
+The original discovery sweep passed the synthetic SSH credential to both local
+nmap child processes through their inherited environment. The regression caught
+the leak on both JSON and SQLite without an output exclusion.
 
-The owning path is `cyberthunder/transport/local.py`: `LocalTransport.__init__`
-defaults `env` to `None` (lines 18-21), and `run` passes that value to
-`subprocess.run` (lines 35-36). Python consequently inherits the entire server
-environment, including `CT_CRED_LIFECYCLE_CANARY`. Discovery constructs this
-default transport in `cyberthunder/discovery/service.py:375-377`; its ping and
-port scans at lines 398 and 404-406 both reach the affected boundary.
+`LocalTransport` now supplies an explicit environment containing only executable
+search paths, Windows platform paths, temporary paths, locale and timezone.
+Application credentials, proxy credentials, shell startup hooks, loader variables
+and credential-agent references are excluded. Explicit environment overrides use
+the same allow-list and reject unsupported or ambiguous entries. Dependency reads
+also use this filtered environment. Bash no longer starts as a login shell, CMD
+disables AutoRun, and PowerShell retains `-NoProfile`.
 
-The smallest concrete production fix belongs to the local transport owner:
-replace unrestricted default environment inheritance with an explicit, reviewed
-non-secret child environment. Preserve the platform variables required to find
-and launch tools. Local nmap requires no target credential. Tools needing
-credentials must receive only their explicitly authorized account material;
-changing account bindings or removing the canary from the test environment
-would not fix this defect. Other direct subprocess call sites need separate
+Local nmap requires no target credential. Tools needing credentials must receive
+only their explicitly authorized account material. The canary remains present in
+the server environment and reaches the intended SSH authentication sink. Other
+direct subprocess call sites and tools' own configuration lookup need separate
 review before making a project-wide isolation claim.
 
 ## What traverses real code
@@ -94,27 +92,27 @@ There is no secret-bearing configuration-file exemption.
 
 ## Reproduction and limits
 
-From the scope-recipes checkout in PowerShell:
+From the repository with its test dependencies installed:
 
-```powershell
-$env:PYTHONPATH='C:/Users/joshu/.codex/worktrees/scope-recipes/cyber-thunder'
-& 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest tests/security/test_secret_canary.py -v --tb=short --show-capture=no --disable-warnings
+```sh
+python -m pytest tests/security/test_secret_canary.py tests/security/test_local_environment.py -v --tb=short --show-capture=no --disable-warnings
 ```
 
-Measured on Windows with Python 3.12.10: **8 passed, 2 failed** in 19.88 seconds.
-Both failures are the lifecycle case, once for JSON and once for SQLite; all
-calibration tests pass. Nine existing framework deprecation warnings were emitted.
+Before the correction, Windows Python 3.12.10 recorded **8 passed, 2 failed**;
+both failures were the lifecycle case, once per backend. After the correction,
+**22 passed** in 19.41 seconds, with existing framework deprecation warnings.
+The additional tests launch a real Python child to verify environment exclusion,
+exercise the dependency-collector boundary, and check explicit override refusal.
 
-The lifecycle failure identifies `child 1 environment (plaintext)` and
-`child 2 environment (plaintext)`. The other captured boundaries contain no
-detected canary in this scenario. Keep these regressions failing until the owning
-production fix is integrated; rerun both state backends after that change.
+The original failure identified `child 1 environment (plaintext)` and
+`child 2 environment (plaintext)`. The corrected lifecycle contains no detected
+canary at those or the other captured output boundaries.
 
 This bounded scenario does not validate WinRM, Kubernetes credentials, real
 remote authentication, model HTTP authentication or response reflection,
 cryptographic token validation, browser-session/CSRF flows, every adapter and
 failure branch, or actual network outbox delivery. It does not prove the absence
 of arbitrary encodings, compression, fragmented log messages, or timing/memory
-side channels. OS process launch is captured rather than performed. Platform
-compatibility of a production environment fix needs Windows and Linux/container
-validation. Further expansion stopped on the confirmed production leak.
+side channels. The lifecycle captures process creation; the separate local
+environment test launches an actual Python child. Linux/container compatibility
+and the remaining credential paths still need their own validation.
