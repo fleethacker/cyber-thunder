@@ -61,8 +61,10 @@ review history against that scan's observation, without writing. This is a histo
 present time, not a reconstruction of which review existed when that scan ran.
 
 `PUT /api/v1/findings/{finding_id}/review` accepts `disposition`, `reason`, optional `supporting_evidence`,
-optional `expires_at`, `expected_revision`, and `evidence_fingerprint`. It requires `X-Actor` through
-`ActorDep`, repeats `require_human` in the service, and enforces the kill switch. `scan_id` on PUT is rejected.
+optional `expires_at`, `expected_revision`, and `evidence_fingerprint`. Verified mode binds
+`ActorDep` to the authenticated principal and requires `review` authority for the
+finding's target. The service repeats human/current-authority checks and enforces
+the kill switch. `X-Actor` is only development attribution. `scan_id` on PUT is rejected.
 The service rereads current persisted findings, including partial-scan overlays; historical fallback is
 never used for saving. Missing current finding returns 404. Stale revision or changed fingerprint returns
 409; reload both before another decision. Invalid input returns 400; an engaged kill switch returns 423.

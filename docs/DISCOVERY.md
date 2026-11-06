@@ -18,7 +18,7 @@ Discovery never adds anything to the inventory and never changes scope by itself
 | Accept needs a named human actor (`agent`, `llm`, `system` refused), an explicit in-scope decision and a reason | `require_human`, `accept` |
 | Accept is audited as `inventory.add` (source `discovery`, asset, in_scope, reason) and, when in scope, `scope.change` `{target, before: null, after: true, reason}` | `accept` |
 | An asset from a simulated sweep is accepted only as a simulated target (transport `simulated`, no credentials); it never becomes a live ssh/winrm target at an emulator address | `accept` |
-| `credential_ref` is a short name resolved as `CT_CRED_<ref>`: paths and names of other process environment variables are refused | `accept` |
+| Inventory `credential_ref` is an opaque short reference, never a password or path. Verified execution selects a separate authorized account binding; legacy range environment lookup uses only `CT_CRED_<ref>` | `accept`, [account access](ACCOUNT_ACCESS.md) |
 | Accept refuses an asset whose address or MAC an inventory target already holds, names that target and links the asset to it | `accept` |
 | Sweeps run only inside saved scopes; public space needs `allow_public` and a reason | `DiscoveryScope.validate`, `_sweep_scopes` |
 | Commands come from fixed tables; addresses on an nmap command line come from validated scopes or nmap's own ping sweep | `sources/nmap.py`, `render()` |
@@ -136,10 +136,17 @@ tcp/4444 listener; `range/answer_key/discovery.json` lists them with the rule_id
 | GET | `/findings` | `?run_id=` | findings of the latest (or given) run |
 | GET | `/applicable` | `?benchmark=` or `?title=` or `?product=` | `[{target, name, asset_type, rule, basis, reason}]` |
 
-The actor is the `X-Actor` header. Mutating routes refuse empty and machine actors with 400. Errors:
-kill switch 423, bad input 400, unknown id 404, refused actor 400.
+Verified requests use the authenticated principal and current node/resource
+grants; accepted targets do not acquire shared credentials or scope implicitly.
+`X-Actor` is unverified attribution only in loopback development mode, where
+empty and reserved machine actors are refused with 400. Other errors include
+authentication 401, refused authorization 403, kill switch 423, bad input 400 and
+unknown ID 404. See [account access](ACCOUNT_ACCESS.md).
 
 ## CLI
+
+These local commands are development/replay commands. Use authenticated discovery
+controls in the UI/API for verified mode; a typed local actor cannot bypass them.
 
 ```
 cyberthunder discover scopes [--add CIDR --reason TEXT] [--allow-public]

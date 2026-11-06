@@ -6,6 +6,8 @@ returned preview. It does not authorize a change or prove that a fix is safe.
 This is the bounded first part of COV-03; host validation and maintenance-window
 enforcement remain outside this change.
 
+Local development/replay example (verified use goes through the authenticated API):
+
 ```sh
 cyberthunder --actor "ITC Rivera" apply <proposal-id> --plan
 ```
@@ -16,9 +18,11 @@ proposal is ready to execute. Refusals return 2 on stderr. Combining `--plan` an
 `--simulate-verify-fail` is refused before opening application state. The plan
 branch never falls through to execution.
 
-The equivalent HTTP request is `POST /api/v1/proposals/{pid}/plan` with a named
-human `X-Actor` header. It returns 200 with the same JSON object. Missing or
-reserved machine/policy identities are rejected by `ActorDep` with 400. An
+The equivalent HTTP request is `POST /api/v1/proposals/{pid}/plan`. In verified
+mode it requires the authenticated human principal and current `plan` authority
+for the original proposal target. `X-Actor` supplies attribution only in local
+development mode. It returns 200 with the same JSON object. Failed verified
+authentication returns 401; refused authorization returns 403. An
 unknown proposal returns 404, invalid fix binding returns 409, and an engaged
 kill switch returns 423. A missing or unavailable planner returns 501. The engine also requires a named human actor and checks
 the kill switch when called directly.

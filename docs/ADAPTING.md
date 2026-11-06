@@ -11,8 +11,9 @@ controls. Source Kubernetes/UDS manifests require verified configuration and a p
 browser sessions require one process/worker. Follow [PACKAGE_IDENTITY.md](PACKAGE_IDENTITY.md) and the
 [container guide](../deploy/kubernetes/README.md), including build and live-acceptance limits.
 
-CLI commands below describe local development/replay where explicitly noted. Verified mode permits CLI
-`serve` and emergency `kill engage`; use the authenticated UI/API for other operations. A typed `--actor`
+CLI commands below describe local development/replay where explicitly noted. Verified remote CLI
+operations use [device login and the `api` namespace](CLI_AUTH.md); the guide lists supported commands.
+Use the authenticated UI/API for other operations. A typed `--actor`
 or an SSH-forwarded development port does not establish identity. Keep `CT_AUTH_MODE=dev` on loopback
 with scratch state; `CT_SECURITY_MODE=fleet` requires verified authentication.
 
@@ -64,8 +65,10 @@ authorize target scanning.
 
 Keep secret contents out of inventory and audit. In verified mode the protected
 `<CT_STATE_DIR>/auth/access.json` selects the account and credential reference for each action; inventory
-credentials, the process account and ambient keys are not fallbacks. Provision `CT_CRED_<ref>` or the
-explicit protected files on the runtime host separately. A group approval grant need not share a remote
+credentials, the process account and ambient keys are not fallbacks. Provision the selected protected
+credential sources or key/kubeconfig files separately; fleet SSH/WinRM password references require the
+[credential resolver](CREDENTIAL_RESOLVERS.md). Legacy range and vSphere environment references have
+their separately documented limits. A group approval grant need not share a remote
 account: [ACCOUNT_ACCESS.md](ACCOUNT_ACCESS.md#practical-policy-example) shows Alice scanning A while Bob
 approves/applies B with his own binding, and an administrator with no automatic target grant.
 
