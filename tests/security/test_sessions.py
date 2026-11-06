@@ -707,12 +707,14 @@ def test_token_http_is_bounded_and_has_no_redirects(service, provider, attack):
 
 def test_http_total_deadline_and_no_proxy_use(service, provider, monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy-user:proxy-credential@127.0.0.1:1")
-    monkeypatch.setattr(sessions, "HTTP_TIMEOUT_S", 1)
+    # Include child interpreter/TLS startup within the real production budget;
+    # a one-second override can expire before the server receives the request.
+    deadline = sessions.HTTP_TIMEOUT_S
     provider.slow = True
     query, headers = begin(service, provider)
     started = time.monotonic()
     fail(lambda: service.complete_login(query, headers))
-    assert 0.8 <= time.monotonic() - started < 3
+    assert deadline - 0.2 <= time.monotonic() - started < deadline + 5
     assert len(provider.posts) == 1
 
 

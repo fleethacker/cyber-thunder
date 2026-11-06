@@ -768,15 +768,18 @@ def test_http_protocol_rejections(environment, signing_keys, scenario):
 
 
 @pytest.mark.parametrize("scenario", ["slow_headers", "slow_body"])
-def test_total_deadline_stops_trickle_responses(environment, signing_keys, monkeypatch, scenario):
+def test_total_deadline_stops_trickle_responses(environment, signing_keys, scenario):
     config, server = environment
     server[scenario] = True
     server["omit_length"] = True
-    monkeypatch.setattr(oidc, "FETCH_TIMEOUT_S", 1)
+    # Exercise the production deadline, which includes isolated interpreter and
+    # TLS startup. A one-second override can expire before the request reaches
+    # the loopback server on a loaded host and never exercise the trickle.
+    deadline = oidc.FETCH_TIMEOUT_S
     started = time.monotonic()
     rejected(OIDCValidator(config), token(signing_keys))
     elapsed = time.monotonic() - started
-    assert 0.8 <= elapsed < 3
+    assert deadline - 0.2 <= elapsed < deadline + 5
     assert len(server["requests"]) == 1
 
 
