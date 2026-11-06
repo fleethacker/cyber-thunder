@@ -9,8 +9,8 @@ Effective UBI STIG evaluation remains unresolved.**
 | 1 | UID 1000, all capabilities dropped | 134 | Chroot denied; no XCCDF; import not exercised |
 | 2 | UID 0, all capabilities dropped except SYS_CHROOT | 0 | 393 raw notapplicable results; three RPM database diagnostics; import accepted on both state backends |
 
-The initial no-capability setting was a chosen harness constraint. The user
-subsequently authorized the single-capability revision for isolated testing.
+The initial no-capability setting was a chosen harness constraint. The second
+attempt added only SYS_CHROOT for the RPM probe in the isolated scanner.
 Exactly one new evaluation was performed. No attempt used privileged mode,
 host namespaces, host system mounts, target entrypoint execution or remediation.
 Neither outcome establishes a clean/compliant image or trustworthy RHEL host

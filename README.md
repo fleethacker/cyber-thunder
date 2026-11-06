@@ -53,6 +53,8 @@ The same range run detected 6/6 Podman seeds and 10/10 k3s seeds (28/28 across a
 
 The WSL2 UDS demo cluster was scanned over kubectl: 127 findings and no adapter errors.
 
+An isolated export of the public nginx-bad image produced 393 notapplicable OpenSCAP results and three RPM database diagnostics. JSON/SQLite import, reports and restart persistence preserved those observations plus a coverage warning. Effective image STIG checks and platform applicability remain unresolved; no live workload was changed.
+
 These are recorded real-target results, not full benchmark coverage. Windows/WinRM, Cisco device changes and other platform versions still need real testing. See the [validation matrix](docs/VALIDATION.md) for evidence and missing run metadata, and [coverage](docs/COVERAGE.md) for check/fix counts.
 <!-- validation-status:end -->
 
