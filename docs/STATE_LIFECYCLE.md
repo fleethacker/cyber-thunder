@@ -1,6 +1,10 @@
-# State lifecycle candidate
+# Application and state lifecycle
 
-This is a separate future candidate based on `e15e34b`, not a release change.
+Application owners can explicitly drain registered work and release state handles.
+Successful cleanup returns `True`; an exceeded deadline returns `False` and leaves
+state available for the outstanding workers and a later cleanup attempt. The
+evidence below records the original candidate based on `e15e34b`; integrated
+release validation is retained separately.
 
 ## Evidence and scope
 

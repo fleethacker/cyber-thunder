@@ -95,6 +95,17 @@ refused unless `--force` is given, which overwrites the copies and keeps what on
 `--to json` goes the other way. After migrating, set `CT_STATE_BACKEND` for every process that uses the
 directory: the API server, the CLI, and the container environment.
 
+## Application shutdown
+
+`AppContext.close(timeout=5)` stops registered producers, drains their workers and
+releases database handles after they finish. It returns `False` if the shared
+deadline expires; the owner must retain the context and retry after work finishes.
+The API closes contexts it creates; a context supplied by an embedding caller
+remains that caller's responsibility. Stop admitting requests and join external
+synchronous users before cleanup. See [STATE_LIFECYCLE](STATE_LIFECYCLE.md) for
+ownership, retries and supported limits. Closing handles is not a backup or a
+permanent prohibition on later store use.
+
 ## Backups
 
 The backup instructions in [CONTRIBUTING.md](CONTRIBUTING.md) cover the repository. Back up the **entire state
