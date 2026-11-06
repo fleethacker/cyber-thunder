@@ -17,7 +17,6 @@ from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.discovery.service import DiscoveryService, require_human, service_for
 from cyberthunder.discovery.recipes import ScopeRevisionConflict
 from cyberthunder.discovery.vsphere_runs import VsphereRuns
-from cyberthunder.discovery.sources.vsphere_client import VsphereError
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
 T = TypeVar("T")
@@ -179,22 +178,38 @@ def get_runs(request: Request):
     return [r.to_dict() for r in _svc(request).runs()]
 
 
+def _vsphere_call(fn: Callable[[], T], *, collecting=False) -> T:
+    # These bounded source routes must not echo storage, inventory or parser errors
+    # through the generic discovery mapper. Only fixed local codes cross this API.
+    try:
+        return fn()
+    except KillSwitchEngaged:
+        raise HTTPException(423, "vsphere:collection_stopped") from None
+    except PermissionError as exc:
+        code = "vsphere:collection_not_authorized" if collecting else "vsphere:history_not_authorized"
+        if collecting and str(exc) in {"vsphere:saved_scope_unavailable", "vsphere:no_saved_scope"}:
+            code = str(exc)
+        raise HTTPException(403, code) from None
+    except KeyError:
+        raise HTTPException(404, "unknown vSphere source or run") from None
+    except Exception:
+        code = "vsphere:publication_failed" if collecting else "vsphere:history_unavailable"
+        raise HTTPException(503, code) from None
+
+
 @router.post("/vsphere/{target_id}/collect")
 def collect_vsphere(target_id: str, request: Request, actor: str = Depends(require_actor)):
-    try:
-        return _call(lambda: VsphereRuns(request.app.state.ctx).collect(target_id, actor))
-    except VsphereError:
-        raise HTTPException(503, "vsphere:publication_failed") from None
+    return _vsphere_call(lambda: VsphereRuns(request.app.state.ctx).collect(target_id, actor), collecting=True)
 
 
 @router.get("/vsphere/{target_id}/runs")
 def vsphere_runs(target_id: str, request: Request, limit: int = Query(default=20, ge=1, le=100)):
-    return _call(lambda: VsphereRuns(request.app.state.ctx).runs(target_id, limit=limit))
+    return _vsphere_call(lambda: VsphereRuns(request.app.state.ctx).runs(target_id, limit=limit))
 
 
 @router.get("/vsphere/{target_id}/runs/{run_id}")
 def vsphere_run(target_id: str, run_id: str, request: Request):
-    return _call(lambda: VsphereRuns(request.app.state.ctx).get(target_id, run_id))
+    return _vsphere_call(lambda: VsphereRuns(request.app.state.ctx).get(target_id, run_id))
 
 
 @router.get("/runs/{run_id}")

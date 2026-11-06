@@ -1,10 +1,11 @@
-"""Target-owned, read-only source snapshots; independent of global discovery reconciliation."""
+"""Collector- and target-owned source snapshots, independent of global reconciliation."""
 from __future__ import annotations
 
 from copy import deepcopy
 import re
 from uuid import uuid4
 
+from cyberthunder.control.access import MAX_GRANTS
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.control.principal import authorize, current_principal, operation
 from cyberthunder.findings.schema import utcnow
@@ -43,13 +44,75 @@ class VsphereRuns:
         self.ctx = ctx
         self.directory = ctx.store.root / "discovery" / "vsphere"
 
-    def _directory(self, ownership):
-        # No caller-controlled string becomes a filesystem path, and listing one
-        # source does not enumerate another source's documents or old generations.
-        return self.directory / fingerprint(ownership)
+    def _collector(self):
+        if getattr(self.ctx.settings, "auth_mode", "dev") == "dev":
+            return {"version": 1, "mode": "dev"}
+        principal = current_principal()
+        if principal is None or not principal.verified:
+            raise PermissionError("vsphere:collector_unavailable")
+        # Sessions, roles and display names can change without changing the user.
+        # A shared source read grant does not establish equal remote VM visibility.
+        return {"version": 1, "mode": "verified", "iss": principal.issuer, "sub": principal.subject}
+
+    @staticmethod
+    def _binding_digest(binding):
+        evidence = binding.evidence()
+        return fingerprint({key: evidence[key] for key in (
+            "username", "sudo", "credential_source", "credential_fingerprint")})
+
+    def _declared_bindings(self, target):
+        # Inspect the strict, protected policy parser's declarations only. This
+        # neither grants discover nor selects/resolves a credential or transport.
+        entries, policy_digest = self.ctx.access._load()
+        principal = current_principal()
+        bindings, declarations = set(), set()
+        for entry in entries:
+            if entry.issuer != principal.issuer or not (
+                    entry.kind == "subject" and entry.selector == principal.subject
+                    or entry.kind == "group" and entry.selector in principal.groups):
+                continue
+            for grant in entry.grants:
+                if grant.credential is not None and any(
+                        grant.matches(action, target.id, target.environment) for action in ("read", "discover")):
+                    binding = self._binding_digest(grant.credential)
+                    bindings.add(binding)
+                    declarations.add(fingerprint((entry.identity, binding)))
+        return bindings, declarations, policy_digest
+
+    def _check_history_binding(self, run, target):
+        if run["collector_scope"]["mode"] == "dev":
+            return
+        captured = run.get("credential_scope")
+        if captured is None:
+            # Local failures before account/client construction contain no remote
+            # inventory. Missing evidence never authorizes collected observations.
+            if run["collection_started"] or run["complete"] or run["observation_count"] or run.get("observations"):
+                raise PermissionError("vsphere:account_mapping_unavailable")
+            return
+        if (not isinstance(captured, dict)
+                or set(captured) != {"version", "binding_sha256", "declaration_sha256s", "policy_sha256"}
+                or type(captured["version"]) is not int or captured["version"] != 1
+                or not isinstance(captured["declaration_sha256s"], list)
+                or not 1 <= len(captured["declaration_sha256s"]) <= MAX_GRANTS
+                or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                       for value in [captured["binding_sha256"], captured["policy_sha256"],
+                                     *captured["declaration_sha256s"]])):
+            raise PermissionError("vsphere:account_mapping_unavailable")
+        bindings, declarations, _ = self._declared_bindings(target)
+        # Removing discover/mapping declarations does not revoke an explicit read
+        # grant for one's own history. New selectors, replacement accounts or
+        # ambiguity do; remaining declarations must come from the captured policy.
+        if bindings and (bindings != {captured["binding_sha256"]}
+                         or not declarations <= set(captured["declaration_sha256s"])):
+            raise PermissionError("vsphere:account_mapping_changed")
+
+    def _directory(self, ownership, collector):
+        # No identity becomes a path component. Listing one user's source never
+        # enumerates other collectors' records, other sources or old generations.
+        return self.directory / fingerprint({"authorization_scope": ownership, "collector_scope": collector})
 
     def _path(self, run):
-        return self._directory(run["authorization_scope"]) / (run["id"] + ".json")
+        return self._directory(run["authorization_scope"], run["collector_scope"]) / (run["id"] + ".json")
 
     def _scopes(self):
         try:
@@ -71,6 +134,8 @@ class VsphereRuns:
         return target
 
     def _check(self, run, action, actor=None):
+        if run.get("collector_scope") != self._collector():
+            raise PermissionError("vsphere:collector_changed")
         target = self._target(run["target_id"], action, actor)
         # Check generations even in development, where authorize_artifact is a no-op.
         if target_scope(target) != run["authorization_scope"]:
@@ -81,6 +146,8 @@ class VsphereRuns:
         current = {fingerprint(s.to_dict()) for s in self._scopes()}
         if not run["scope_grants"] or not set(run["scope_grants"]) <= current:
             raise PermissionError("vsphere:scope_revoked")
+        if action == "read":
+            self._check_history_binding(run, target)
 
     @staticmethod
     def _public(run, *, observations=True):
@@ -109,7 +176,8 @@ class VsphereRuns:
             raise PermissionError("vsphere:no_saved_scope")
         principal = current_principal()
         run = {"version": 1, "id": "vsphere-" + uuid4().hex, "source": "vsphere", "target_id": target.id,
-               "authorization_scope": target_scope(target),
+               "authorization_scope": target_scope(target), "collector_scope": self._collector(),
+               "credential_scope": None,
                "source_configuration_sha256": fingerprint(_configuration(target)),
                "scope_grants": [fingerprint(s.to_dict()) for s in scopes],
                "requested_by": actor, "requested_principal": None,
@@ -124,6 +192,13 @@ class VsphereRuns:
         try:
             try:
                 guard = vsphere.source_guard(self.ctx, target, scopes, actor, self._scope_guard)
+                if guard.binding is not None:
+                    _, declarations, policy_digest = self._declared_bindings(target)
+                    if policy_digest != guard.binding.provenance.policy_sha256:
+                        raise PermissionError("vsphere:account_mapping_changed")
+                    run["credential_scope"] = {
+                        "version": 1, "binding_sha256": self._binding_digest(guard.binding),
+                        "declaration_sha256s": sorted(declarations), "policy_sha256": policy_digest}
                 saved = True
                 self._save(run, guard, actor)
                 # Missing credentials are a local failure, before client creation.
@@ -185,12 +260,13 @@ class VsphereRuns:
     def runs(self, target_id: str, *, limit: int = 20) -> list[dict]:
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
+        collector = self._collector()
         target = self._target(target_id, "read")
         ownership = target_scope(target)
         visible = []
-        for path in self.ctx.store.list_json(self._directory(ownership)):
+        for path in self.ctx.store.list_json(self._directory(ownership, collector)):
             run = self.ctx.store.read_json(path)
-            if not self._belongs(run, target_id, ownership):
+            if not self._belongs(run, target_id, ownership, collector):
                 continue
             try:
                 self._check(run, "read")
@@ -204,29 +280,33 @@ class VsphereRuns:
         # A revocation while loading cannot leave already-selected rows visible.
         for run in visible:
             self._check(run, "read")
-        self._same_reader(target)
+        self._same_reader(target, collector)
         return [self._public(run, observations=False) for run in visible]
 
     def get(self, target_id: str, run_id: str) -> dict:
+        collector = self._collector()
         target = self._target(target_id, "read")
         if not RUN_ID.fullmatch(run_id):
             raise KeyError("unknown vSphere run")
         ownership = target_scope(target)
-        run = self.ctx.store.read_json(self._directory(ownership) / (run_id + ".json"))
-        if not self._belongs(run, target_id, ownership):
+        run = self.ctx.store.read_json(self._directory(ownership, collector) / (run_id + ".json"))
+        if not self._belongs(run, target_id, ownership, collector):
             raise KeyError("unknown vSphere run")
         self._check(run, "read")
         result = self._public(run)
         self._check(run, "read")
-        self._same_reader(target)
+        self._same_reader(target, collector)
         return result
 
     @staticmethod
-    def _belongs(run, target_id, ownership):
+    def _belongs(run, target_id, ownership, collector):
         return (isinstance(run, dict) and run.get("version") == 1 and run.get("source") == "vsphere"
-                and run.get("target_id") == target_id and run.get("authorization_scope") == ownership)
+                and run.get("target_id") == target_id and run.get("authorization_scope") == ownership
+                and run.get("collector_scope") == collector)
 
-    def _same_reader(self, target):
+    def _same_reader(self, target, collector):
+        if self._collector() != collector:
+            raise PermissionError("vsphere:collector_changed")
         current = self._target(target.id, "read")
         if target_scope(current) != target_scope(target):
             raise PermissionError("vsphere:source_ownership_changed")

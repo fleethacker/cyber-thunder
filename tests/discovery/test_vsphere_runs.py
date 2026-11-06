@@ -258,7 +258,7 @@ def test_old_target_generation_never_relabels_history_for_reused_id(source, clie
     assert client.get(BASE + "vc/runs/" + first["id"]).status_code == 404
     assert documents(f)[0]["authorization_scope"] == original_owner
     # Even a misplaced old record cannot inherit the destination directory's owner.
-    f.ctx.store.write_json(f.runs._directory(target_scope(f.target)) / (first["id"] + ".json"), documents(f)[0])
+    f.ctx.store.write_json(f.runs._directory(target_scope(f.target), documents(f)[0]["collector_scope"]) / (first["id"] + ".json"), documents(f)[0])
     assert client.get(BASE + "vc/runs").json() == []
     assert client.get(BASE + "vc/runs/" + first["id"]).status_code == 404
 

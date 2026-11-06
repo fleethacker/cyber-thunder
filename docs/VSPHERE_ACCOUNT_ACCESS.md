@@ -97,8 +97,8 @@ authentication; development requests use the existing `X-Actor` header.
 | Method and path | Permission and response |
 | --- | --- |
 | `POST /discovery/vsphere/{target_id}/collect` | Target `discover` plus an explicit discover credential binding; no body; synchronous run result |
-| `GET /discovery/vsphere/{target_id}/runs?limit=20` | Target `read`; newest-first summary array; limit 1–100 |
-| `GET /discovery/vsphere/{target_id}/runs/{run_id}` | Target `read`; one run with observations |
+| `GET /discovery/vsphere/{target_id}/runs?limit=20` | Target `read` and collecting issuer/subject; newest-first summaries; limit 1-100 |
+| `GET /discovery/vsphere/{target_id}/runs/{run_id}` | Target `read` and collecting issuer/subject; one run with observations |
 
 The POST invokes only the explicitly selected source through the existing
 guarded account/client. It never invokes global sweep, passive collection, CIDR
@@ -169,24 +169,75 @@ claim. Calls retain the source's 60-second collection deadline and other wire
 limits; local authorization, storage and audit overhead is additional.
 
 Each UUID run lives under
-`discovery/vsphere/<original-ownership-digest>/<run-id>.json`, through StateStore
+`discovery/vsphere/<ownership-and-collector-digest>/<run-id>.json`, through StateStore
 on both JSON and SQLite. Concurrent requests write distinct documents; no
-shared latest-result document can overwrite another run. The original owner is
-the target ID, environment and authorization generation captured at start. The
-record also retains private digests of the source configuration and exact saved
+shared latest-result document can overwrite another run. The partition combines
+the original target ID, environment and authorization generation with the collecting
+verified issuer and subject. Those identities are captured in a private
+`collector_scope` field and checked on publication and reads; directory placement
+alone is not authority. Listing one collector never reads another collector's
+run documents. Development records use a separate development partition that
+cannot establish verified ownership. Old records without explicit collector
+ownership remain unavailable through these routes; there is no implicit migration
+or reassignment, and a fresh authorized collection is required.
+
+The record also retains private digests of the source configuration and exact saved
 range grants. These digests and global range declarations are not returned by
 the API. Address filtering uses the saved ranges, but no scanner is invoked.
 Replacing a captured range, even with a broader range or identical CIDR under a
 new grant, invalidates the old run for these source-history routes. Adding an
 unrelated range does not extend an in-flight collection's captured grants.
 
-History reads require a fresh valid identity/session and current target read
-grant. They also check the original generation, unchanged source configuration,
+History reads require a fresh valid identity/session, current target read grant
+and the same verified issuer/subject that collected the run. Sharing a source read
+grant, group, role, display name or even remote credential does not share cached
+visibility. For example, Alice's vCenter account may see fewer VMs than Bob's;
+Alice cannot read Bob's run or its summary merely because both can read the vCenter
+target. No equivalent-visibility sharing grant exists. A rotated session or display
+name for the same issuer/subject preserves access to that user's own history.
+The identity check is repeated before returning history, including an empty list.
+
+Reads also check the original generation, unchanged source configuration,
 in-scope target and retained range grants. Inaccessible/obsolete runs are filtered
 before limiting; a direct obsolete run request is denied or not found. Reusing a
 target ID cannot reassign its old runs. Removing discover credentials while
-retaining read rights permits reading historical evidence; it cannot authorize
-a new collection. Original ownership is never inferred from today's inventory.
+retaining read rights permits reading that collector's own historical evidence;
+it cannot authorize a new collection. Original ownership is never inferred from
+today's inventory. Historical reads do not log in to vCenter or re-evaluate each
+VM's current remote permissions. Revoke application read access when a user's
+own prior observations must also become inaccessible.
+
+Runs also retain private `credential_scope` digests of the selected account identity,
+credential reference/options, matching account selectors and original policy document.
+History compares the account and declaration digests with current credential
+declarations matching this user, source and environment for `read` or `discover`.
+Remaining declarations must name the selected account and belong to the captured
+set. A changed username, credential reference, new selector or ambiguous replacement
+hides the old run and denies direct reads. Separate read/discover selectors for the
+same account are captured together; retiring a discover declaration while retaining
+an unchanged read declaration does not require a new discover grant. This inspects the protected policy parser's declarations;
+it neither grants nor requires `discover`, selects a new transport account, resolves
+a credential variable, reads a credential file or contacts vCenter. A read-only
+grant retaining the same mapping can still read its own prior collection.
+
+The whole-policy digest is provenance, not a blanket invalidation rule: unrelated
+policy edits do not change this source's account visibility. Removing all matching
+credential declarations while retaining an explicit read grant preserves the user's
+own history. This is an intentional distinction between retirement and a currently
+declared replacement. An offline reader cannot reconstruct an intervening mapping
+change followed by removal, or permanently revoke just one retired binding while
+keeping general source read access; that requires an explicit binding generation or
+history-revocation grant design. No such new permission is introduced here.
+Rotating a secret behind the same reference and remote vCenter role/VM visibility
+changes cannot be detected by this comparison. These are historical observations,
+not a current remote entitlement proof; revoke application read access when needed.
+
+The three source routes map storage, inventory and parser exceptions to fixed
+local errors. Permission failures return 403, unavailable/malformed history returns
+503 with `vsphere:history_unavailable`, and a missing run returns a fixed 404.
+The shared resource guard may refuse a deleted or inaccessible source with 403
+before route lookup. Raw exception text, document contents and filesystem paths are not returned.
+The generic global discovery error mapping and role grants are unchanged.
 
 Publication is checked before and after each state write and after audit, using
 the captured source guard. A detected stop clears this run's observations and
@@ -318,8 +369,9 @@ Run with the same shared interpreter and checkout `PYTHONPATH` as above:
 After integrating the shared session-evidence correction, the first command
 measured **85 passed, zero skipped** on Windows in **268.24 seconds**. This includes
 all **75 source-route cases** and **10 session-evidence cases**, with JSON and
-SQLite persistence exercised. The source implementation and all source-route
-tests are unchanged from `8a2867d`.
+SQLite persistence exercised. This was the baseline before the independent
+collector/account history review; at that milestone the source implementation
+and source-route tests were unchanged from `8a2867d`.
 
 The original six credential-echo cases had caught raw OIDC session identifiers
 in the shared audit principal evidence. The parent correction `3075f54`, applied
@@ -346,3 +398,25 @@ concurrent persistence, no-connect failures, partial pagination failure, real
 credential-echo rejection and fixed publication errors. Wire I/O uses only
 fixtures and sockets are blocked during application requests. No live vCenter,
 remote trust handshake or newly accepted target is part of this evidence.
+
+
+## Independent source-history review
+
+The collector and credential-declaration protections above were added after the
+baseline measurements. Regressions exercise different users on one vCenter,
+unequal remote visibility, issuer separation, misplaced/legacy records, renewed
+sessions, deletion/reuse, concurrent collectors and fixed history-storage errors.
+Mapping regressions cover account/reference/selector replacement, ambiguity,
+changes during reads, split read/discover declarations and read-only retirement
+without credential resolution. Both document backends are exercised offline.
+
+Run the bounded review and source/session regression modules with the checkout's
+`PYTHONPATH` and the configured test interpreter:
+
+```text
+python -m pytest -o addopts= -q tests/discovery/test_vsphere_runs_review.py tests/discovery/test_vsphere_runs.py tests/security/test_session_evidence.py --tb=short --show-capture=no
+```
+
+These checks do not establish current remote permissions, live vCenter/ESXi
+acceptance, or atomic policy/state revocation. Per-binding permanent history
+revocation remains the separate policy-design limitation described above.
