@@ -297,6 +297,9 @@ def expected_skips(platform: str) -> dict[str, str]:
     allowed.update(NODE_HARDENING_SKIPS[platform])
     allowed.update(CREDENTIAL_RESOLVER_SKIPS[platform])
     allowed.update(NATIVE_OPERATOR_SKIPS[platform])
+    if platform == "linux":
+        # The native Windows command boundary runs on the Windows matrix leg.
+        allowed["tests/ops/test_wsl_keepalive.py::test_keepalive_operator_and_task_boundaries"] = "native Windows PowerShell task-boundary fixture"
     return allowed
 
 

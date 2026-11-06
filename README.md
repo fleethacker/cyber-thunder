@@ -242,6 +242,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/CHANGE_HISTORY.md](docs/CHANGE_HISTORY.md) | persistent change history, finding status after rollback, restore guards and coverage limits |
 | [docs/KUBERNETES_FIX_SAFETY.md](docs/KUBERNETES_FIX_SAFETY.md) | investigation-first Kubernetes guidance, retired deletion actions and recovery limits |
 | [docs/HOST_SCOPE.md](docs/HOST_SCOPE.md) | container-host setup, explicit host access and reviewed IP/range scope |
+| [docs/WSL_KEEPALIVE.md](docs/WSL_KEEPALIVE.md) | optional per-user startup task for the Windows test environment, status and removal |
 | [docs/SCAN_CONTENT.md](docs/SCAN_CONTENT.md) | missing content, scanner configuration, applicability and incomplete scan coverage |
 | [docs/LINK.md](docs/LINK.md) | observed request conditions, offline control and explicit demonstration mode |
 | [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |

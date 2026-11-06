@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 111 and len(windows) == 84
+    assert len(linux) == 112 and len(windows) == 84
     native_acl = {node: reason for node, reason in linux.items()
                   if node.startswith("tests/security/test_windows_file_trust.py::")}
     assert len(native_acl) == 46
