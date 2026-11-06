@@ -132,6 +132,7 @@ def integrated(state_dir, tmp_path, certificates, signing_keys, profile_factory,
         ctx.settings.oidc_jwks_url, ctx.settings.oidc_authorized_party = state.url + "/jwks", "ct-human"
         ctx.settings.step_up_acr_values = ("urn:test:strong",)
         ctx.access = AccessPolicy(policy_path)
+        ctx.gate.separation_policy = ctx.access.approval_identity_source
         ctx.gate.authorizer = ctx.authorize
         ctx.killswitch.authorizer = ctx.authorize
         builder = Principal(state.issuer, "builder", "Builder", kind="human", roles=("analyst", "approver"),
