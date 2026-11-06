@@ -108,6 +108,12 @@ def main() -> int:
         return 0
     if not (ROOT / "cyberthunder/ui/dist/index.html").is_file():
         parser.error("build the UI before running this rehearsal")
+    def git(*arguments: str) -> str:
+        return subprocess.check_output(["git", *arguments], cwd=ROOT, text=True).strip()
+
+    tested_head = git("rev-parse", "HEAD")
+    if git("status", "--porcelain", "--untracked-files=no"):
+        parser.error("commit tracked source and UI changes before recording a rehearsal")
     output_root = ROOT / ".build" / "browser-rehearsals"
     output_root.mkdir(parents=True, exist_ok=True)
     run_root = Path(tempfile.mkdtemp(prefix=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-"), dir=output_root))
@@ -139,9 +145,11 @@ def main() -> int:
                         process.wait(timeout=5)
         if results and results[-1]["exit_code"]:
             break
-    record = {"head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+    end_head = git("rev-parse", "HEAD")
+    source_unchanged = end_head == tested_head and not git("status", "--porcelain", "--untracked-files=no")
+    record = {"head": tested_head, "end_head": end_head, "source_unchanged": source_unchanged,
               "finished_at": datetime.now(timezone.utc).isoformat(), "results": results,
-              "passed": len(results) == len(backends) * 2 and all(item["exit_code"] == 0 for item in results),
+              "passed": source_unchanged and len(results) == len(backends) * 2 and all(item["exit_code"] == 0 for item in results),
               "limits": "Simulated Linux transport, template explanations, unverified loopback development identity; not real-host or live-identity acceptance."}
     (run_root / "summary.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"passed": record["passed"], "summary": str(run_root / "summary.json")}))

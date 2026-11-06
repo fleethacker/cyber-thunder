@@ -46,7 +46,9 @@ The runner creates `.build/browser-rehearsals/<run>/summary.json`, individual
 `result.json` receipts, the temporary application state and server logs. Failed
 UI checks also save a viewport screenshot. The summary names the source commit;
 run from a clean checkout with its matching UI build when recording release
-evidence. All fixture processes started by the runner are stopped on completion
+evidence. The runner refuses uncommitted tracked changes and fails the receipt
+if the commit or tracked tree changes during the run. Local untracked notes do
+not prevent the rehearsal. All fixture processes started by the runner are stopped on completion
 or failure. It leaves the evidence files available for inspection.
 
 This is loopback development identity and template explanation output. It is
