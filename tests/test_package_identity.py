@@ -1,4 +1,5 @@
 """Packaged startup must use the same verified-identity boundary as the native CLI."""
+import base64
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,8 @@ import shlex
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import jwt
 import pytest
@@ -18,11 +21,13 @@ from cyberthunder.cli import main
 from cyberthunder.api.app import create_app
 from cyberthunder.config import Settings
 from cyberthunder.context import AppContext
+from cyberthunder.control.principal import Principal, operation_scope, principal_scope
 from cyberthunder.inventory.targets import Target
 from cyberthunder.security._oidc_cache import write_cache
 from cyberthunder.security.oidc import OIDCValidator
 from cyberthunder.security.oidc import AuthenticationError
 from tests.security.test_sessions import crypto
+from tests.security.test_kube_credentials import cert_material
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -137,6 +142,14 @@ def documents(filename):
     return list(yaml.safe_load_all(source))
 
 
+def zarf_documents():
+    """Resolve the files actually installed, not the unused alternate app manifest."""
+    config = documents("packages/cyberthunder/zarf.yaml")[0]
+    return [document for component in config["components"]
+            for manifest in component.get("manifests", []) for path in manifest["files"]
+            for document in documents(Path("packages/cyberthunder") / path)]
+
+
 def pod(filename):
     deployment = next(d for d in documents(filename) if d["kind"] == "Deployment")
     assert deployment["spec"]["replicas"] == 1 and deployment["spec"]["strategy"]["type"] == "Recreate"
@@ -204,13 +217,67 @@ def test_uds_native_oidc_registration_matches_application_profile():
     assert all((ROOT / "packages/cyberthunder" / path).is_file() for path in files)
 
 
-def test_uds_network_selectors_match_the_actual_application_pod():
+@pytest.mark.parametrize("profile", ["zarf", "alternate"])
+def test_uds_network_selectors_match_the_actual_application_pod(profile):
     package = next(d for d in documents("packages/cyberthunder/uds.yaml") if d.get("kind") == "Package")
-    deployment = next(d for d in documents("packages/cyberthunder/app.yaml") if d.get("kind") == "Deployment")
+    installed = zarf_documents() if profile == "zarf" else documents("packages/cyberthunder/app.yaml")
+    deployment, = [d for d in installed if d.get("kind") == "Deployment"]
     labels = deployment["spec"]["template"]["metadata"]["labels"]
     network = package["spec"]["network"]
     for rule in network["allow"] + network["expose"]:
         assert rule["selector"] and all(labels.get(key) == value for key, value in rule["selector"].items())
+    for route in network["expose"]:
+        service, = [d for d in installed if d.get("kind") == "Service" and d["metadata"]["name"] == route["service"]]
+        assert all(labels.get(key) == value for key, value in service["spec"]["selector"].items())
+        port, = [p for p in service["spec"]["ports"] if p["port"] == route["port"]]
+        container_ports = deployment["spec"]["template"]["spec"]["containers"][0]["ports"]
+        backend, = [p for p in container_ports if p["name"] == port["targetPort"]]
+        assert backend["containerPort"] == route["targetPort"]
+
+
+@pytest.mark.parametrize("filename", MANIFESTS)
+def test_cluster_token_is_explicit_and_unavailable_to_preflight(filename):
+    installed = documents(filename)
+    account, = [d for d in installed if d["kind"] == "ServiceAccount"]
+    spec = pod(filename)
+    assert account.get("automountServiceAccountToken") is False
+    assert spec.get("automountServiceAccountToken") is False
+    volumes = {v["name"]: v for v in spec["volumes"]}
+    tokens = {name for name, v in volumes.items()
+              if any("serviceAccountToken" in s for s in v.get("projected", {}).get("sources", []))}
+    assert tokens == {"cluster-credentials"}
+    sources = volumes["cluster-credentials"]["projected"]["sources"]
+    token, = [s["serviceAccountToken"] for s in sources if "serviceAccountToken" in s]
+    assert token["expirationSeconds"] == 3600 and token["path"] == "token"
+    app = spec["containers"][0]
+    mount, = [m for m in app["volumeMounts"] if m["name"] in tokens]
+    assert mount["readOnly"] and mount["mountPath"] == "/var/run/secrets/kubernetes.io/serviceaccount"
+    for init in spec["initContainers"]:
+        assert tokens.isdisjoint(m["name"] for m in init["volumeMounts"])
+        assert not any("secretRef" in env for env in init.get("envFrom", []))
+        assert not any("secretKeyRef" in env.get("valueFrom", {}) for env in init.get("env", []))
+
+
+@pytest.mark.parametrize("filename", MANIFESTS)
+def test_packaged_bindings_grant_only_the_declared_survey_role(filename):
+    installed = documents(filename)
+    account, = [d for d in installed if d["kind"] == "ServiceAccount"]
+    role, = [d for d in installed if d["kind"] in {"Role", "ClusterRole"}]
+    binding, = [d for d in installed if d["kind"] in {"RoleBinding", "ClusterRoleBinding"}]
+    assert "aggregationRule" not in role
+    assert binding["roleRef"] == {"apiGroup": "rbac.authorization.k8s.io",
+                                  "kind": role["kind"], "name": role["metadata"]["name"]}
+    assert binding["subjects"] == [{"kind": "ServiceAccount", "name": account["metadata"]["name"],
+                                    "namespace": account["metadata"]["namespace"]}]
+    spec = pod(filename)
+    assert spec["serviceAccountName"] == account["metadata"]["name"]
+    assert not any(spec.get(name) for name in ("hostNetwork", "hostPID", "hostIPC"))
+    assert not any("hostPath" in volume for volume in spec["volumes"])
+    for container in spec["containers"] + spec["initContainers"]:
+        security = container["securityContext"]
+        assert not security.get("privileged") and security["allowPrivilegeEscalation"] is False
+        assert security["readOnlyRootFilesystem"] is True
+        assert security["capabilities"] == {"drop": ["ALL"]}
 
 
 @pytest.mark.parametrize("filename", ["packages/cyberthunder/identity.yaml", "deploy/kubernetes/identity-config.example.yaml"])
@@ -235,8 +302,9 @@ def manifest_env(state_dir, monkeypatch, crypto, request):
                       CT_OIDC_REDIRECT_URI="https://console.fixture.test/auth/callback",
                       CT_TLS_CERT=str(crypto[0]), CT_TLS_KEY=str(crypto[1]))
     manifest = MANIFESTS[1] if request.param == "native-alternate" else MANIFESTS[0]
-    env = {entry["name"]: entry["value"] for entry in pod(manifest)["containers"][0]["env"] if "value" in entry}
-    env.update(config)
+    # Kubernetes explicit env entries take precedence over envFrom configuration.
+    env = dict(config)
+    env.update({entry["name"]: entry["value"] for entry in pod(manifest)["containers"][0]["env"] if "value" in entry})
     env.update(CT_STATE_DIR=str(state_dir), CT_BOOTSTRAP_CLUSTER_TARGET="false", CT_EXPLAIN_PRECOMPUTE="false",
                CT_AUTO_PROPOSE="false", CT_LLM_BACKEND="template", CT_SCAN_INTERVAL_SECONDS="0",
                CT_CONTENT_CHECK_INTERVAL_SECONDS="0", CT_CRED_BROWSER_LOGIN="fixture-only-client-secret")
@@ -273,7 +341,8 @@ def test_preflight_rejects_projected_policy_symlink(manifest_env):
 
 
 @pytest.mark.parametrize("problem", ["missing_issuer", "missing_client", "missing_policy", "invalid_policy",
-                                     "wrong_issuer", "empty_accounts", "same_audience", "dev"])
+                                     "wrong_issuer", "empty_accounts", "same_audience", "dev",
+                                     "http_callback", "http_token", "wrong_party", "oidc_without_tls"])
 def test_preflight_refuses_incomplete_or_untrusted_identity(manifest_env, monkeypatch, problem):
     env, policy = manifest_env
     path = Path(env["CT_STATE_DIR"]) / "auth/access.json"
@@ -289,14 +358,82 @@ def test_preflight_refuses_incomplete_or_untrusted_identity(manifest_env, monkey
         monkeypatch.setenv("CT_OIDC_AUDIENCE", env["CT_OIDC_CLIENT_ID"])
     elif problem == "dev":
         monkeypatch.setenv("CT_AUTH_MODE", "dev")
+    elif problem == "http_callback":
+        monkeypatch.setenv("CT_OIDC_REDIRECT_URI", "http://console.fixture.test/auth/callback")
+    elif problem == "http_token":
+        monkeypatch.setenv("CT_OIDC_TOKEN_ENDPOINT", "http://identity.fixture.test/token")
+    elif problem == "wrong_party":
+        monkeypatch.setenv("CT_OIDC_AUTHORIZED_PARTY", "other-browser")
+    elif problem == "oidc_without_tls":
+        monkeypatch.setenv("CT_AUTH_MODE", "oidc")
+        monkeypatch.delenv("CT_TLS_CERT", raising=False)
+        monkeypatch.delenv("CT_TLS_KEY", raising=False)
     else:
         if problem == "wrong_issuer":
             policy["entries"][0]["issuer"] = "https://other.fixture.test"
         else:
             policy["entries"] = []
         path.write_text(json.dumps(policy), encoding="utf-8")
-    with pytest.raises(ValueError):
+    expected = AuthenticationError if problem in {"http_callback", "http_token"} else ValueError
+    with pytest.raises(expected):
         preflight()()
+
+
+@pytest.mark.parametrize("filename", MANIFESTS)
+def test_packaged_bootstrap_requires_provisioned_account_config(filename, state_dir, cert_material, monkeypatch):
+    installed = documents(filename)
+    config_map, = [d for d in installed if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "cyberthunder-kubeconfig"]
+    config = yaml.safe_load(config_map["data"]["kubeconfig"])
+    # Replace only CA material with a fixture; never read the real pod's projected paths.
+    config["clusters"][0]["cluster"] = {
+        "server": "https://127.0.0.1:6443",
+        "certificate-authority-data": base64.b64encode(cert_material["ca"]).decode(),
+    }
+    state_dir.chmod(0o700)
+    auth = state_dir / "auth"
+    auth.mkdir(mode=0o700)
+    kubeconfig = auth / "account.yaml"
+    kubeconfig.write_text(yaml.safe_dump(config), encoding="utf-8")
+    kubeconfig.chmod(0o600)
+    person = Principal("https://identity.fixture.test", "reader", "Reader", kind="human",
+                       roles=("analyst",), expires_at=time.time() + 300)
+    grant = {"target_ids": ["local-cluster"], "actions": ["scan"]}
+    policy = {"version": 1, "entries": [{"issuer": person.issuer, "subject": person.subject,
+                                        "node_actions": [], "grants": [grant]}]}
+    path = auth / "access.json"
+    path.write_text(json.dumps(policy), encoding="utf-8")
+    path.chmod(0o600)
+    ctx = AppContext(Settings(state_dir=state_dir, auth_mode="oidc", security_mode="fleet",
+                              llm_backend="template", auto_propose=False, explain_precompute=False))
+    target = Target("local-cluster", "Local cluster", "kubernetes", transport="kubeconfig", sudo=False,
+                    options={"kubeconfig": "/etc/cyberthunder/kubeconfig", "context": "in-cluster"})
+    ctx.inventory.add(target)
+    ctx.inventory.save()
+    calls = []
+
+    def process(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0, stdout='{"items":[]}', stderr="")
+
+    monkeypatch.setattr("subprocess.run", process)
+    monkeypatch.setenv("KUBECONFIG", "ambient-admin-must-not-be-used")
+    with principal_scope(person), operation_scope("scan"):
+        with pytest.raises(PermissionError):
+            ctx.transport_for(target)  # Bootstrap inventory is not an account credential grant.
+        grant["credential"] = {"username": None, "credential_ref": None, "sudo": False,
+                               "options": {"kubeconfig": str(kubeconfig), "context": "in-cluster"}}
+        path.write_text(json.dumps(policy), encoding="utf-8")
+        with pytest.raises(PermissionError):
+            ctx.transport_for(target)  # Even a regular copy cannot authorize tokenFile lookup.
+        assert calls == []
+        config["users"][0]["user"] = {"token": "package-fixture-only.token"}
+        kubeconfig.write_text(yaml.safe_dump(config), encoding="utf-8")
+        assert ctx.transport_for(target).run("kubectl get namespaces -o json").ok
+    argv, kwargs = calls[0]
+    assert len(calls) == 1 and argv[argv.index("--kubeconfig") + 1] == str(kubeconfig)
+    assert argv[argv.index("--context") + 1] == "in-cluster"
+    assert "KUBECONFIG" not in kwargs["env"]
+    assert "package-fixture-only.token" not in repr(calls)
 
 
 def test_rendered_profiles_validate_signed_identity_and_account_scope(manifest_env, crypto, monkeypatch):
@@ -328,6 +465,21 @@ def test_rendered_profiles_validate_signed_identity_and_account_scope(manifest_e
         assert status.status_code == 200 and status.json()["authenticated"] is False
         assert status.json()["login_available"] is True
         assert client.get("/api/v1/status").status_code == 401
+        spoofed = {"X-Forwarded-User": "admin", "X-Auth-Request-User": "admin",
+                   "X-Forwarded-Proto": "https", "X-Forwarded-Host": "attacker.fixture.test",
+                   "Forwarded": "host=attacker.fixture.test;proto=https"}
+        assert client.get("/api/v1/status", headers=spoofed).status_code == 401
+        login = client.get("/auth/login", headers=spoofed, follow_redirects=False)
+        assert login.status_code == 303
+        assert login.headers["location"].startswith(env["CT_OIDC_AUTHORIZATION_ENDPOINT"] + "?")
+        query = parse_qs(urlsplit(login.headers["location"]).query)
+        assert query["redirect_uri"] == [env["CT_OIDC_REDIRECT_URI"]]
+        assert query["code_challenge_method"] == ["S256"]
+        cookie = login.headers["set-cookie"]
+        assert cookie.startswith("__Host-ct_login=")
+        assert all(flag in cookie for flag in ("HttpOnly", "Secure", "SameSite=lax", "Path=/"))
+        assert "domain=" not in cookie.lower()
+        assert client.get("/api/v1/status").status_code == 401  # A login transaction is not a session.
         targets = client.get("/api/v1/targets", headers=bearer())
         assert targets.status_code == 200, targets.text
         assert [target["id"] for target in targets.json()["targets"]] == ["alpha"]

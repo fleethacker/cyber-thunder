@@ -107,12 +107,23 @@ and image baselines;
 it cannot apply Kubernetes remediation or read Secrets. Use a kubectl version
 compatible with the target cluster (`--build-arg KUBECTL_VERSION=vX.Y.Z`).
 
+Neither packaged role grants `nodes/proxy`; even `get` on that subresource can
+authorize kubelet command execution. Optional kubelet `configz` evidence remains
+unavailable through these roles. Review effective bindings on upgrade, including
+an old alternate `cyberthunder-readonly` role. The
+[package identity review](../../packages/cyberthunder/docs/IDENTITY_REVIEW.md)
+records the RBAC evidence, traffic corrections and live acceptance requirements.
+
 With an image rebuilt from this source, **Local Kubernetes cluster**
 (`local-cluster`) appears automatically in **Assets**, with the mounted
 in-cluster kubeconfig and **out of scope**. Sign in with a named account whose
 roles and server policy permit the inventory/scope operation before using
 **Discover**. A typed operator name cannot authorize verified operations;
 discovery also requires the account's delegated target credential binding.
+The projected bootstrap kubeconfig uses `tokenFile`, which the account validator
+does not accept. Provision an owned protected regular kubeconfig with supported
+explicit credentials and bind its path/context in that account's policy; neither
+the pod token nor a copied `tokenFile` configuration is an account credential.
 Existing names, options and scope
 choices survive restarts. The deployment sets
 `CT_BOOTSTRAP_CLUSTER_TARGET=true`; set it to `false` to disable registration.

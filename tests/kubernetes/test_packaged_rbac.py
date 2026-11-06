@@ -20,9 +20,9 @@ RESOURCE_GROUPS = {
 }
 
 
-@pytest.fixture
-def role():
-    documents = yaml.safe_load_all((ROOT / "deploy/kubernetes/cyberthunder.yaml").read_text(encoding="utf-8"))
+@pytest.fixture(params=["deploy/kubernetes/cyberthunder.yaml", "packages/cyberthunder/app.yaml"])
+def role(request):
+    documents = yaml.safe_load_all((ROOT / request.param).read_text(encoding="utf-8"))
     return next(document for document in documents if document["kind"] == "ClusterRole")
 
 
@@ -57,9 +57,14 @@ def test_packaged_role_collects_all_configuration_scan_artifacts(role, tmp_path)
     target = Target(id="local-cluster", name="Local Kubernetes cluster", asset_type="kubernetes",
                     transport="kubeconfig", options={"kubeconfig": "/etc/cyberthunder/kubeconfig"})
     transport = PackagedRoleTransport(role)
+    denied = transport.run("kubectl get --raw /api/v1/nodes/fixture-node/proxy/configz")
+    assert not denied.ok and "Forbidden by packaged role" in denied.stderr
+    transport.calls.clear()
     collected = adapter.collect(target, transport, tmp_path)
     assert not collected.errors, collected.errors
     assert set(checks.ARTIFACTS) <= set(collected.artifacts)
+    assert any("/proxy/configz" in command for command in transport.calls)
+    assert not any(name.startswith("configz_") for name in collected.artifacts)
     findings = adapter.run_detection(target, collected)
     assert any(finding.rule_version == "k8s:hunt:admin-to-default" for finding in findings)
     assert any(finding.rule_version == "k8s:cis:5.1.5" for finding in findings)

@@ -3,6 +3,7 @@ kind: ServiceAccount
 metadata:
   name: cyberthunder
   namespace: cyberthunder
+automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -10,10 +11,10 @@ metadata:
   name: cyberthunder-readonly
 rules:
   - apiGroups: [""]
-    resources: ["namespaces", "nodes", "nodes/proxy", "pods", "serviceaccounts", "services"]
+    resources: ["namespaces", "nodes", "pods", "serviceaccounts", "services"]
     verbs: ["get", "list"]
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
     verbs: ["get", "list"]
   - apiGroups: ["batch"]
     resources: ["cronjobs", "jobs"]
@@ -95,6 +96,7 @@ spec:
         app.kubernetes.io/name: cyberthunder
     spec:
       serviceAccountName: cyberthunder
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -184,6 +186,9 @@ spec:
             - name: kubeconfig
               mountPath: /etc/cyberthunder
               readOnly: true
+            - name: cluster-credentials
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
             - name: tmp
               mountPath: /tmp
           resources:
@@ -242,6 +247,17 @@ spec:
                 path: kubeconfig
         - name: tmp
           emptyDir: {}
+        - name: cluster-credentials
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
 ---
 apiVersion: v1
 kind: Service
@@ -253,5 +269,5 @@ spec:
     app.kubernetes.io/name: cyberthunder
   ports:
     - name: http
-      port: 8000
+      port: 80
       targetPort: http

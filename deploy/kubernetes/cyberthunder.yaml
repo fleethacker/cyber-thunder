@@ -98,6 +98,7 @@ spec:
     metadata:
       labels:
         app: cyberthunder
+        app.kubernetes.io/name: cyberthunder
     spec:
       serviceAccountName: cyberthunder
       automountServiceAccountToken: false

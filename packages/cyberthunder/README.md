@@ -16,6 +16,10 @@ digest-pinned Trivy 0.71.1.
 
 ## Rebuilt-source identity configuration
 
+See the [package identity review](docs/IDENTITY_REVIEW.md) for corrected traffic
+selectors, the alternate Service port change, removal of `nodes/proxy`, and
+the required per-account kubeconfig provisioning and live acceptance boundary.
+
 `zarf.yaml` includes `identity.yaml`, the read-only identity preflight, and the
 canonical UID/GID 10001 deployment. `DOMAIN` supplies the explicit UDS issuer,
 JWKS/auth/token endpoints and `/auth/callback` origin. `uds.yaml` registers the
@@ -44,7 +48,8 @@ for an ordinary plaintext deployment.
 
 The alternate `app.yaml` remains a UID 1000/5 GiB deployment for the teammate's
 Containerfile workflow and now consumes the same identity/preflight inputs.
-It is not selected by `zarf.yaml`; apply the shared preflight ConfigMap separately
+Its Service now uses port 80, matching the shared UDS route; the container still
+listens on port 8000. It is not selected by `zarf.yaml`; apply the shared preflight ConfigMap separately
 when using it. Its image source/context and delegated cluster/transport setup
 still require validation. Do not treat the old image tag as an identity update.
 
@@ -124,6 +129,12 @@ to disable startup registration; `CT_BOOTSTRAP_CLUSTER_TARGET_ID` and
 `CT_BOOTSTRAP_CLUSTER_NAME` control the local asset's ID and display name.
 Automatic registration is enabled by this Kubernetes deployment; ordinary CLI
 and standalone server runs retain their existing explicit inventory setup.
+
+For verified account operations, the projected bootstrap kubeconfig and its
+`tokenFile` are not a supported credential binding. Provision a protected regular
+per-account kubeconfig and explicit policy binding before scanning; see the
+[credential provisioning seam](docs/IDENTITY_REVIEW.md#account-kubernetes-credentials-required-provisioning-seam).
+The pod's survey role and inventory registration do not grant account rights.
 
 ### Cluster baseline API
 
