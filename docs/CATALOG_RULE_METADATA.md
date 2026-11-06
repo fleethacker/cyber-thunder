@@ -199,6 +199,20 @@ fix payload through apply/verify/rollback despite changed catalog requirements
 and an additional unimplemented catalog rule. Exact runs, hashes, counts and
 remaining limits are recorded in `docs/CATALOG_RULE_METADATA_REVIEW.md`.
 
+A separate structural inspection on 2026-11-06 UTC parsed the repository's
+`STIG/U_RHEL_9_STIG_V2R10_Manual-xccdf.xml` (1,400,286 bytes, SHA-256
+`3fcb716d5ca2bf539460b7baca42c1a6a65e1faff619737b1e88ffb25db87541`).
+It read all 445 unique rule IDs with no ambiguous or withdrawn rows, and found
+reference matches for all 29 bundled Linux IDs. The reader used an in-memory
+synthetic publication envelope only; it activated no content, created no
+attestation, verified no publisher identity and evaluated no targets. This
+confirms structural compatibility with those exact local bytes, not current
+release freshness, publication acceptance or native-check compatibility.
+
+The [finding detail panel](CATALOG_REFERENCE_UI.md) displays reference metadata
+separately from the recorded native release, with an explicit `Not assessed`
+label. It does not add coverage or change confidence and approval decisions.
+
 Before full VAL-03 closure, a separately reviewed design must establish when a
 new release's changed requirement is still implemented by an existing check,
 represent newly withdrawn/missing controls as assessment outcomes without losing
