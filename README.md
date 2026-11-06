@@ -21,9 +21,13 @@ break, and how to undo it. The kill switch and the audit-chain badge are on ever
 ![Decision queue](docs/images/decisions.jpg)
 
 Discovery proposes what it found on the enclave; a named person accepts a device into scope, with a reason, or ignores it.
-Verified modes use signed identity, application roles and a protected access policy for each target and
-operation, with explicit target account selection. Local development mode records a typed, unverified name.
-UDS gateway SSO still requires explicit application identity configuration; see [authorization](docs/AUTHORIZATION.md).
+Verified modes intersect signed identity and role permissions with exact account/group, target,
+environment and action grants. Each connection selects its permitted target account; inventory credentials
+are not a fallback. Node administration is separate from target administration, and `admin` does not inherit
+scan or approval rights. [Account examples](docs/ACCOUNT_ACCESS.md#practical-policy-example) show one user
+scanning A, another approving/applying B, and an administrator with no target grant.
+Local development uses typed, unverified names. UDS gateway SSO still requires explicit application
+identity configuration; see [authorization](docs/AUTHORIZATION.md).
 
 ![Assets and discovery](docs/images/assets-discovery.jpg)
 
@@ -32,6 +36,9 @@ Every action, including refusals and blocks, lands in the hash-chained audit tra
 ![Audit trail](docs/images/audit.jpg)
 
 Reports keep searchable history of commander one-pagers, POA&Ms, checklists and target reports, alongside the detection score against the range answer keys.
+Saved evidence and exports retain their original target/environment/generation ownership. Current
+inventory visibility does not grant access to another owner's historical report, and unknown legacy
+ownership is unavailable in verified mode. See [saved provenance](docs/IDENTITY_PROVENANCE.md).
 
 ![Reports](docs/images/reports.jpg)
 
@@ -50,8 +57,12 @@ These are recorded real-target results, not full benchmark coverage. Windows/Win
 <!-- validation-status:end -->
 
 Signed-token and HTTPS test-provider checks cover browser/API approval, logout and idle expiry, with
-separate access-policy and credential-boundary tests. Live Keycloak, Windows DACL and AD/CAC/PKI
-deployment acceptance remains open; see [identity configuration and limits](docs/AUTHORIZATION.md).
+separate access-policy and credential-boundary tests. These are fixture results, not live UDS realm,
+organizational Keycloak, AD/CAC/PKI or deployment acceptance. Native Windows owner/DACL checks now guard
+policy, selected Kubernetes credentials and the OIDC cache; service-account, domain, SMB and ReFS
+deployment acceptance remains open. See [Windows file trust](docs/WINDOWS_FILE_TRUST.md),
+[identity limits](docs/AUTHORIZATION.md) and
+[package preflight and acceptance](docs/PACKAGE_IDENTITY.md).
 
 | Module | Path | Status |
 |---|---|---|
@@ -97,7 +108,8 @@ python -m pytest -q
 ```
 
 The following native rehearsal uses `CT_AUTH_MODE=dev` on loopback with an explicitly unverified typed
-identity. Use a scratch state directory so it never touches real state:
+identity. Development mode bypasses verified role/account isolation; forwarding its port does not add
+authentication. Use a scratch state directory so it never touches real state:
 
 ```bash
 export CT_STATE_DIR="$(mktemp -d)"
@@ -162,9 +174,11 @@ python -m cyberthunder serve
 In this development UI, set your unverified test name in Settings, open **Decisions**, press **Approve** to review the assessment or record an explicit bypass reason, then confirm the decision and choose **Apply**. The card
 shows the step timeline: scope check, before-state captured, applied, verified.
 
-For verified use, configure [identity and access](docs/AUTHORIZATION.md) and choose **Sign in** on the
-HTTPS UI. Browser sessions are held in one server process; restart requires login. Verified CLI use is
-currently limited to `serve` and emergency `kill engage` until CLI login is implemented.
+For verified use, configure [identity/browser access](docs/AUTHORIZATION.md), the protected
+[account policy](docs/ACCOUNT_ACCESS.md), and [fresh authentication](docs/STEP_UP.md), then choose
+**Sign in** on the HTTPS UI. Signing in alone does not permit a target operation. Browser sessions use
+one worker/process; restart requires login. Verified CLI use is limited to `serve` and emergency
+`kill engage`; use authenticated UI/API operations for other work.
 
 Open **STIG Library** for Downloaded, Maintained, Updates, Browse all and Import/transfer views, with versions and separate live-check/download/import times.
 Subscriptions default to inventory matches; choose manual product/type checkboxes and **Save selections**
@@ -210,6 +224,12 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | pipeline, contracts, guardrails, how to add an adapter |
 | [docs/VALIDATION.md](docs/VALIDATION.md) | real-platform evidence, untested versions and missing run metadata |
 | [docs/AUTHORIZATION.md](docs/AUTHORIZATION.md) | authentication modes, browser login, roles, target policy and explicit credentials |
+| [docs/ACCOUNT_ACCESS.md](docs/ACCOUNT_ACCESS.md) | exact policy schema, per-account examples, target credentials and original artifact ownership |
+| [docs/WINDOWS_FILE_TRUST.md](docs/WINDOWS_FILE_TRUST.md) | native owner/DACL checks, protected-path provisioning and deployment limits |
+| [docs/STEP_UP.md](docs/STEP_UP.md) | fresh authentication requirements for privileged actions |
+| [docs/SEPARATION_OF_DUTIES.md](docs/SEPARATION_OF_DUTIES.md) | independent human approvals and CAT I quorum |
+| [docs/IDENTITY_PROVENANCE.md](docs/IDENTITY_PROVENANCE.md) | verified/legacy review attribution and saved report access |
+| [docs/PACKAGE_IDENTITY.md](docs/PACKAGE_IDENTITY.md) | native/container identity inputs, package preflight, one-worker sessions and acceptance limits |
 | [docs/COVERAGE.md](docs/COVERAGE.md) | implemented checks, benchmark denominators, executable fixes and runbooks |
 | [docs/CONFIDENCE.md](docs/CONFIDENCE.md) | evidence-strength grades, provenance, freshness and limits |
 | [docs/FINDING_REVIEW.md](docs/FINDING_REVIEW.md) | reasoned reviews, false positives, expiry, history and remediation guards |
@@ -245,19 +265,30 @@ Automated regression configuration and its explicit platform limitations are des
 | What may it do | Scan, read configs and logs, propose fixes, apply approved fixes from the vetted library, pull public STIG content from two allow-listed DoD hosts when the link is up | `RemediationEngine.execute` runs `FixEntry` payloads only |
 | What may it never do | Run shell text from a model, change anything unapproved, touch hosts outside scope, delete logs or audit | `explain/` returns validated JSON text; `Inventory.assert_in_scope()`; audit is append-only |
 | Who may approve and execute fixes | Verified human identity, permitted role and matching target/action grant; development names remain unverified | `ApprovalGate`, principal checks and access policy; approval and execution are separate |
+| Does admin grant target access | No; node administration, target administration and scan/approval roles/grants are separate | `AppContext.authorize`, role mapping and protected `access.json` |
+| Who may read/export saved evidence | Current grants for each original contributor and matching saved ownership; reports also require node export | resource scope checks, filtered services/history and outbox guards |
 | How is it logged | Every scan, finding, proposal, approval, denial, apply, verify, rollback, kill, scope and policy change | hash-chained audit log; head hash shown in the UI and on every report |
 | How is it stopped | Kill switch (file, `CT_KILL`, or `KILL` sentinel) blocks every apply, rollback and content pull | `KillSwitch.guard()` |
 | Can it be undone | Library fixes declare rollback capabilities; before-state is captured first and failed verify attempts recovery. History restores check later changes and supported Linux file drift; recovery still depends on the adapter and access | [Change history and rollback](docs/CHANGE_HISTORY.md) |
 
 ## Cluster deployment
 
-Cyber Thunder can run natively with the Python CLI/web server above, or as the same
-application in a container. Both deployment paths retain approval, audit and rollback. Native development
-binds only to loopback; network containers require verified identity configuration with TLS or a configured
-mesh boundary. UDS gateway login does not automatically wire application JWT validation or browser sessions.
-Live identity/PKI and deployment acceptance remain open; follow [authorization](docs/AUTHORIZATION.md).
-See the [application container guide](deploy/kubernetes/README.md) and
-[Zarf package](packages/cyberthunder/README.md) for container and UDS configuration.
+Run the native Python server with `python -m cyberthunder serve`, or build the application container
+using the supported [container guide](deploy/kubernetes/README.md). Both use the guarded serve entrypoint
+and the same account, approval, audit and rollback controls. Do not replace it with a direct Uvicorn
+command or increase workers for browser sessions.
+
+Source Kubernetes/UDS manifests require explicit verified identity configuration, protected access
+policy and an identity/policy preflight; they retain one worker/process and one replica. Native OIDC
+uses application TLS, while the mesh profile relies on operator-enforced authenticated ingress and
+browser HTTPS in addition to application token validation. Missing configuration fails closed.
+An explicit loopback-only development container is not a shared service; publishing its port does not
+add identity or make that listener bind the container interface.
+
+Use [PACKAGE_IDENTITY.md](docs/PACKAGE_IDENTITY.md), the [container guide](deploy/kubernetes/README.md)
+and [Zarf package guide](packages/cyberthunder/README.md) for exact inputs, mounts and build limitations.
+UDS login, a Ready pod, checked-in image archives and prior cluster scans do not establish live realm
+or release acceptance. Rebuild reviewed source and complete the separate deployment checks.
 
 SQLite stores scan/findings/discovery documents and library preferences/sync metadata. Persist and back up
 the **entire state directory**, including raw scanner files, inventory, audit, rollback snapshots and content;
