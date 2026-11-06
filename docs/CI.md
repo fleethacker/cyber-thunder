@@ -88,7 +88,7 @@ fake command shims. This is a coverage limitation, not evidence of a successful
 deployment or a fully exercised UDS integration. Installing a reviewed UDS CLI
 for these tests is a future improvement; simply widening the allowance is not.
 
-Credential-resolver tests add 44 exact POSIX cases skipped on Windows and four
+Credential-resolver tests add 44 exact POSIX cases skipped on Windows and six
 native Windows cases skipped on Linux. Their node IDs, reasons and receipt
 hashes are recorded in [platform-skips.json](credential-resolver-review/platform-skips.json)
 and mirrored in `CREDENTIAL_RESOLVER_SKIPS`. Every case ran successfully on its

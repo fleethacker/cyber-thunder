@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 108 and len(windows) == 79
+    assert len(linux) == 110 and len(windows) == 79
     native_acl = {node: reason for node, reason in linux.items()
                   if node.startswith("tests/security/test_windows_file_trust.py::")}
     assert len(native_acl) == 46
@@ -313,7 +313,7 @@ def test_node_assessment_allowances_match_native_review_and_refuse_other_cases(p
             assert bool(policy.errors) is not accepted
 
 
-@pytest.mark.parametrize("platform,count", [("linux", 4), ("win32", 44)])
+@pytest.mark.parametrize("platform,count", [("linux", 6), ("win32", 44)])
 def test_credential_skip_allowances_match_native_receipts_and_fail_closed(platform, count):
     receipt = json.loads((ROOT / "docs/credential-resolver-review/platform-skips.json").read_text())
     expected = receipt["platforms"][platform]["skips"]

@@ -3,16 +3,22 @@
   "platforms": {
     "linux": {
       "primary_report_sha256": "d0c6f22e7de09dffad32449f33a729c6573ca5d0360955f634e3a67790c55dcb",
+      "review_report_sha256": "9be357e1cb1e2f21a5055b216529ddda2a4439d1fb2b932b3f0d033e1c550928",
+      "review_tests": 443,
       "skips": {
         "tests/security/test_secret_resolver.py::test_windows_world_readable_secret_fails_closed[json]": "native Windows private-file DACL enforcement",
         "tests/security/test_secret_resolver.py::test_windows_world_readable_secret_fails_closed[sqlite]": "native Windows private-file DACL enforcement",
         "tests/security/test_wincred_resolver.py::test_native_windows_abi_and_current_logon_with_mocked_credread[json]": "native Windows token and CredReadW ABI with mocked credential data",
-        "tests/security/test_wincred_resolver.py::test_native_windows_abi_and_current_logon_with_mocked_credread[sqlite]": "native Windows token and CredReadW ABI with mocked credential data"
+        "tests/security/test_wincred_resolver.py::test_native_windows_abi_and_current_logon_with_mocked_credread[sqlite]": "native Windows token and CredReadW ABI with mocked credential data",
+        "tests/security/test_wincred_resolver.py::test_native_windows_rejects_thread_impersonation_before_credread[json]": "native Windows thread impersonation with mocked credential data",
+        "tests/security/test_wincred_resolver.py::test_native_windows_rejects_thread_impersonation_before_credread[sqlite]": "native Windows thread impersonation with mocked credential data"
       },
       "tests": 423
     },
     "win32": {
       "primary_report_sha256": "1a309e52ed8bd8d926d2121ff6f4a22c3ff12c6b740041cf15a32280828e441a",
+      "review_report_sha256": "e93b847fd7a30722757f790a63157c3b813b8689e2d59bc32bdaa7ec31939316",
+      "review_tests": 443,
       "skips": {
         "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[json-replace_file]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
         "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[json-replace_parent]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
@@ -62,5 +68,6 @@
       "tests": 423
     }
   },
-  "purpose": "Exact platform skip classification; full release validation is separate."
+  "purpose": "Exact platform skip classification; full release validation is separate.",
+  "review_commit": "8367ed586c973c76c74fe153f03993b6bf788d22"
 }

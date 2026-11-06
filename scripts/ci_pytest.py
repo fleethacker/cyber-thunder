@@ -197,7 +197,9 @@ CREDENTIAL_RESOLVER_SKIPS = {
         "tests/security/test_secret_resolver.py::test_windows_world_readable_secret_fails_closed[json]": "native Windows private-file DACL enforcement",
         "tests/security/test_secret_resolver.py::test_windows_world_readable_secret_fails_closed[sqlite]": "native Windows private-file DACL enforcement",
         "tests/security/test_wincred_resolver.py::test_native_windows_abi_and_current_logon_with_mocked_credread[json]": "native Windows token and CredReadW ABI with mocked credential data",
-        "tests/security/test_wincred_resolver.py::test_native_windows_abi_and_current_logon_with_mocked_credread[sqlite]": "native Windows token and CredReadW ABI with mocked credential data"
+        "tests/security/test_wincred_resolver.py::test_native_windows_abi_and_current_logon_with_mocked_credread[sqlite]": "native Windows token and CredReadW ABI with mocked credential data",
+        "tests/security/test_wincred_resolver.py::test_native_windows_rejects_thread_impersonation_before_credread[json]": "native Windows thread impersonation with mocked credential data",
+        "tests/security/test_wincred_resolver.py::test_native_windows_rejects_thread_impersonation_before_credread[sqlite]": "native Windows thread impersonation with mocked credential data"
     }
 }
 

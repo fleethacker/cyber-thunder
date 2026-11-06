@@ -118,8 +118,11 @@ group `approvers-B`. Charlie has the signed `admin` role.
 
 The group grant supplies no OS credential. Other group members do not inherit
 Bob's connection account. Approval itself does not require a remote login; apply,
-plan probes and verification do. On the server, `ALICE_A_SCAN` selects
-`CT_CRED_ALICE_A_SCAN`, and `BOB_B_CHANGE` selects `CT_CRED_BOB_B_CHANGE`.
+plan probes and verification do. On the server, `ALICE_A_SCAN` and `BOB_B_CHANGE`
+select only the exact aliases provisioned in the protected credential-source
+registry. Legacy range installations without that registry use
+`CT_CRED_ALICE_A_SCAN` and `CT_CRED_BOB_B_CHANGE`; fleet SSH/WinRM password
+references require a resolver. See [credential sources](CREDENTIAL_RESOLVERS.md).
 Provision the actual accounts and secrets separately, with the remote privileges
 needed for their intended operations. `sudo: true` permits requested elevation;
 it neither grants remote sudo rights nor bypasses command/approval controls.
@@ -192,15 +195,19 @@ transport options, inline passwords, tokens and key bytes are rejected.
 | Transport | Verified-mode binding | Independent requirements |
 | --- | --- | --- |
 | SSH | Username and one `credential_ref` or absolute `options.key_file`; key-file form uses null `credential_ref` | SSH host trust; remote account privileges. Agent/default-key/interactive fallback is disabled. |
-| WinRM | Username, environment-reference suffix, false sudo, empty options or `{"transport":"ntlm"}` | Validated HTTPS and configured CA in fleet. No ambient Kerberos, Basic or CredSSP substitution. |
+| WinRM | Username, opaque password alias, false sudo, empty options or `{"transport":"ntlm"}` | Validated HTTPS and configured CA in fleet. No ambient Kerberos, Basic or CredSSP substitution. |
 | Kubeconfig | Null username/ref, false sudo, absolute `options.kubeconfig`, explicit `options.context` | Guarded kubeconfig and TLS material; cluster-side account/RBAC provisioning. |
 | vSphere | Username, environment-reference suffix, false sudo, `{"transport":"vsphere"}` | Discover-only binding on a `vsphere` target; see [vSphere account access](VSPHERE_ACCOUNT_ACCESS.md). |
 | Simulated | No credential object, or null username/ref, false sudo and empty options | Only actual `transport="simulated"` avoids OS authentication. |
 | Local, fixture, file | Refused for delegated verified execution | Available for development/replay; metadata access does not create a connection. |
 
-References use a suffix such as `ALICE_A_SCAN` resolved only as `CT_CRED_<ref>`, or
-an absolute key path where SSH permits it. File paths must be absolute on the
-executing host. A matching local filename cannot change the meaning of a suffix.
+SSH/WinRM password references use an opaque alias such as `ALICE_A_SCAN`, resolved
+through the exact configured mounted-file or Windows Credential Manager source.
+Unconfigured range compatibility uses only `CT_CRED_<ref>`; a configured missing
+or invalid source cannot fall back to it. vSphere retains its separately documented
+environment-reference contract. SSH key paths remain explicit absolute paths.
+File paths must be absolute on the executing host. A matching local filename
+cannot change the meaning of an alias.
 Examples of separate credential objects (not a whole access policy):
 
 ```json
