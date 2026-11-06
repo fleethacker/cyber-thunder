@@ -193,7 +193,11 @@ itself would deadlock. The existing lock context now yields its acquired file
 handle for protection checks; existing callers ignore that value. This avoids
 opening a conflicting Windows read handle while another writer holds the lock.
 Large full-chain reads hold the writer lock and can delay appends; schedule them
-accordingly. No automatic append/configuration seam is required in this phase.
+accordingly. Lock acquisition times out after 15 seconds on Windows and POSIX;
+it never enters the critical section on timeout, and only a successfully acquired
+lock is released. A busy-lock refusal does not publish an artifact or reset state.
+Retry explicitly after resolving contention. No automatic append/configuration
+seam is required in this phase.
 Any future automatic signing needs a deliberate failure/commit policy because an
 event append and detached artifact publication are separate filesystem writes.
 

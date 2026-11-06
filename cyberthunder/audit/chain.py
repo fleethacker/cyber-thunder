@@ -8,6 +8,7 @@ apply, verify, rollback and kill-switch event (docs/CONTEXT.md section 5 guardra
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -28,10 +29,11 @@ GENESIS = "0" * 64
 @contextmanager
 def _file_lock(path: Path, timeout: float = 15.0):
     """Exclusive lock shared by every process that appends to the same log (the API server and a CLI
-    command, for example). Lock file sits next to the log; msvcrt on Windows, flock elsewhere."""
+    command, for example). Lock file sits next to the log; acquisition is bounded on both platforms."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fh = open(path, "a+b")
     deadline = time.monotonic() + timeout
+    acquired = False
     try:
         if os.name == "nt":
             import msvcrt
@@ -40,23 +42,35 @@ def _file_lock(path: Path, timeout: float = 15.0):
                 try:
                     msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
                     break
-                except OSError:
+                except OSError as exc:
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                        raise
                     if time.monotonic() > deadline:
                         raise TimeoutError(f"audit log lock busy: {path}")
                     time.sleep(0.02)
         else:
             import fcntl
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            while True:
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                        raise
+                    if time.monotonic() > deadline:
+                        raise TimeoutError(f"audit log lock busy: {path}")
+                    time.sleep(0.02)
+        acquired = True
         # Optional descriptor access lets protected callers validate the acquired
         # file without opening a competing Windows handle. Other callers ignore it.
         yield fh
     finally:
         try:
-            if os.name == "nt":
+            if acquired and os.name == "nt":
                 import msvcrt
                 fh.seek(0)
                 msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
+            elif acquired:
                 import fcntl
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
         finally:
