@@ -116,6 +116,8 @@ class MemorySSH:
     def __init__(self, harness):
         self.harness = harness
         self.policy = None
+        self.transport = SimpleNamespace(auth_handler=SimpleNamespace(password=None))
+        harness.clients.append(self)
 
     def set_missing_host_key_policy(self, policy):
         self.policy = policy
@@ -126,12 +128,17 @@ class MemorySSH:
             raise AssertionError("credential binding did not reach the authentication sink")
         assert kwargs["username"] == "fixture-account"
         assert kwargs["allow_agent"] is False and kwargs["look_for_keys"] is False
+        self.transport.auth_handler.password = kwargs["password"]
         self.harness.authentications += 1
         if self.harness.reject_auth:
             # A real library can include a rejected password in its exception.
             raise RuntimeError("fixture authentication rejection: " + CANARY)
 
+    def get_transport(self):
+        return self.transport
+
     def exec_command(self, command, **_):
+        assert self.transport.auth_handler.password is None
         self.harness.probe.add("remote command", command)
         parts = shlex.split(command)
         if parts[:4] == ["sudo", "-n", "sh", "-c"]:
@@ -194,12 +201,26 @@ def lifecycle(state_dir, monkeypatch, caplog):
     } for account in (principal, proposer)]}), encoding="utf-8")
     path.chmod(0o600)
 
+    # Fleet authentication uses the protected mounted provider. Keep its input
+    # outside application output so the probe can inspect every state artifact.
+    # The environment canary above still checks child-process sanitization.
+    secret_root = state_dir.parent / "credential-inputs"
+    secret_root.mkdir(mode=0o700)
+    secret_path = secret_root / "password"
+    secret_path.write_text(CANARY, encoding="utf-8")
+    secret_path.chmod(0o600)
+    registry_path = path.parent / "credential-sources.json"
+    registry_path.write_text(json.dumps({"version": 1, "sources": {REFERENCE: {
+        "provider": "mounted", "root": str(secret_root), "key": secret_path.name,
+    }}}), encoding="utf-8")
+    registry_path.chmod(0o600)
+
     load_all()
     monkeypatch.setattr(registry, "_adapters", dict(registry._adapters))
     adapter = LifecycleAdapter()
     registry.register(adapter)
     harness = SimpleNamespace(state=seed_state(), probe=CanaryProbe(CANARY), authentications=0,
-                              reject_auth=False, children=[], principal=principal, proposer=proposer)
+                              reject_auth=False, children=[], clients=[], principal=principal, proposer=proposer)
     monkeypatch.setattr("paramiko.SSHClient", lambda: MemorySSH(harness))
 
     def no_network(*_, **__):
@@ -248,6 +269,7 @@ def lifecycle(state_dir, monkeypatch, caplog):
 
     monkeypatch.setattr(context_module, "make_transport", transport_factory)
     ctx = AppContext(Settings(state_dir=state_dir, auth_mode="oidc", security_mode="fleet",
+                              credential_sources=str(registry_path),
                               step_up_acr_values=("urn:ct:test:strong",),
                               llm_backend="template", auto_propose=False, explain_precompute=False))
     ctx.library = FixLibrary.from_adapters(registry)
@@ -324,6 +346,7 @@ def test_lifecycle_keeps_credentials_out_of_outputs(lifecycle, caplog):
         probe.add("public transport exception", str(caught.value))
     h.reject_auth = False
     assert h.authentications >= 5
+    assert all(client.transport.auth_handler.password is None for client in h.clients)
 
     for path in ("/whoami", "/targets", "/findings", "/proposals", f"/proposals/{proposal.id}/diff",
                  "/audit", "/audit/verify", "/status", f"/reports/commander?format=md&scan_id={scan.id}",
