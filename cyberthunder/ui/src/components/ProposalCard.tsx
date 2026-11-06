@@ -12,6 +12,7 @@ import { CitationChips } from './CitationChips';
 import { DiffButton } from './ProposalDiff';
 import { PreviewButton } from './ProposalPlan';
 import { PermissionButton, usePermissions } from './PermissionGate';
+import { RecordedIdentity } from './IdentityProvenance';
 import { RiskTagsForFix } from './FixPanel';
 import { AssetIcon, CodeBlock, Collapsible, Mono, SeverityBadge, SimulatedBadge, StateBadge } from './common';
 
@@ -157,9 +158,10 @@ export function ProposalCard({
           </Group>
         )}
         {p.decided_by && (
-          <Text size="xs" c="dimmed">
-            Decision recorded by {p.decided_by} {fmtAgo(p.decided_at)}{p.decision_note ? `: "${p.decision_note}"` : ''}
-          </Text>
+          <Stack gap={4}>
+            <RecordedIdentity label="Decision recorded by" actor={p.decided_by} evidence={p.decided_principal} />
+            <Text size="xs" c="dimmed">{fmtAgo(p.decided_at)}{p.decision_note ? `: "${p.decision_note}"` : ''}</Text>
+          </Stack>
         )}
 
         <ApplyTimeline proposal={p} />

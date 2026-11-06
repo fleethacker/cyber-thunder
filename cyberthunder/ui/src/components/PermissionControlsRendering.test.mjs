@@ -12,6 +12,7 @@ const dialog = ({ opened, title, children }) => opened ? h('section', { role: 'd
 const core = { ...Mantine, Modal: dialog, Drawer: dialog };
 const confirm = evaluate(new URL('./ConfirmReasonModal.tsx', import.meta.url), { '@mantine/core': core });
 const gate = evaluate(new URL('./PermissionGate.tsx', import.meta.url), { '@mantine/core': core, './ConfirmReasonModal': confirm });
+const provenance = evaluate(new URL('./IdentityProvenance.tsx', import.meta.url), { '@mantine/core': core });
 const { PermissionProvider, PermissionButton, PermissionGate, PermissionConfirm, rolePermits } = gate;
 const empty = () => null;
 const common = {
@@ -31,6 +32,7 @@ const source = (name, imports = {}) => evaluate(new URL(name, import.meta.url), 
   '@mantine/core': core, '@mantine/notifications': notice,
   '../api/client': { api: {}, errorText: (e) => e.message }, '../lib/format': format,
   '../state/AppState': appState, './PermissionGate': gate, '../components/PermissionGate': gate,
+  './IdentityProvenance': provenance,
   './common': common, '../components/common': common, ...imports,
 });
 const asyncState = (data) => ({ data, loading: false, error: null, setData() {}, reload: async () => {} });

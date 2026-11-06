@@ -22,6 +22,16 @@ export interface FindingConfidence {
   evidence: Record<string, unknown>;
 }
 export type ReviewDisposition = 'unreviewed' | 'confirmed' | 'false_positive' | 'not_applicable' | 'needs_investigation';
+// Public attribution fields only. Never render a full principal or session object.
+export interface RecordedPrincipalEvidence {
+  iss: string;
+  sub: string;
+  name: string;
+  roles: string[];
+  kind: 'human' | 'workload' | 'dev';
+  via: 'oidc' | 'mesh' | 'dev';
+  verified: boolean;
+}
 export interface FindingReviewEvent {
   id: string;
   disposition: ReviewDisposition;
@@ -30,7 +40,8 @@ export interface FindingReviewEvent {
   expires_at: string | null;
   reviewed_at: string;
   reviewed_by: string;
-  identity_verified: false;
+  identity_verified: boolean;
+  reviewed_principal?: RecordedPrincipalEvidence | null;
   scope: Record<string, unknown>;
   evidence_fingerprint: string;
 }
@@ -43,7 +54,7 @@ export interface FindingReview {
   current: FindingReviewEvent | null;
   history_count: number;
   reopened_reason: string | null;
-  identity_verified: false;
+  identity_verified: boolean;
 }
 export interface FindingReviewHistory extends FindingReview { history: FindingReviewEvent[] }
 export interface FindingReviewInput {
@@ -214,7 +225,7 @@ export interface Proposal {
   state: ProposalState;
   created_at: string;
   decided_by: string | null;
-  decided_principal?: { iss: string; sub: string; name: string; verified: boolean; roles: string[] } | null;
+  decided_principal?: RecordedPrincipalEvidence | null;
   decided_at: string | null;
   decision_note: string | null;
   before_state_ref: string | null;
