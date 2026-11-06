@@ -1,6 +1,7 @@
 """Namespace coverage stays explicit through serial and bounded collection."""
 import json
 from dataclasses import replace
+import subprocess
 
 import pytest
 
@@ -49,5 +50,41 @@ def test_namespace_coverage_survives_collection_scheduler(scoped_account, worker
             assert run.scheduling["unavailable_targets"] == []
             assert run.scheduling["omitted_observations"] == "retain_without_revalidation"
             assert target.last_scan is None
+    finally:
+        assert ctx.close()
+
+
+@pytest.mark.parametrize("stop", ["cancel", "kill"])
+def test_stopping_namespace_worker_discards_returned_evidence(scoped_account, monkeypatch, stop):
+    ctx, target, person, _, _, calls = scoped_account
+    ctx.settings.scan_max_workers = 3
+    ctx.settings.scan_host_budget_s = 0
+    original = subprocess.run
+
+    def stop_after_response(argv, **kwargs):
+        response = original(argv, **kwargs)
+        if stop == "cancel":
+            active = list(ctx.scanner._cancellations)
+            assert len(active) == 1
+            assert ctx.scanner.cancel(active[0], requested_by=person.actor)
+        else:
+            monkeypatch.setenv("CT_KILL", "1")
+        return response
+
+    monkeypatch.setattr(subprocess, "run", stop_after_response)
+    try:
+        with principal_scope(person):
+            run = ctx.scanner.start([target.id], modules=["check"],
+                                    requested_by=person.actor, background=False)
+            assert run.status == ("cancelled" if stop == "cancel" else "stopped")
+            assert ctx.store.load_findings(run.id) == []
+            assert ctx.store.read_json(ctx.store.scan_dir(run.id) / "raw" / target.id / "collected.json") is None
+        assert len(calls) == 1
+        assert run.results[target.id].facts is None
+        assert run.coverage_incomplete is True
+        assert run.scheduling["unavailable_targets"] == [target.id]
+        assert target.last_scan is None
+        assert ctx.scanner.threads == []
+        assert ctx.audit.verify().ok
     finally:
         assert ctx.close()
