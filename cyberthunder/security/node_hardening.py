@@ -103,6 +103,8 @@ def _windows_directory_acl(snapshot, trusted):
     for kind, flags, mask, trustee in entries:
         if kind != 0 or trustee in trusted | {ft._OWNER_RIGHTS}:
             continue
+        if flags & 3 and mask & ~0x1F01FF:
+            raise _Problem("unknown", "unrecognized_inherited_rights")
         if not flags & 8 and mask & (0x1 | 0x4):  # list directory / add subdirectory
             raise _Problem("unsafe", "foreign_directory_access")
         if flags & 3 and mask & (ft._FILE_WRITE | ft._DIRECTORY_WRITE | 0x25):
@@ -203,7 +205,11 @@ def assess(state_root: str | Path, *, limits: Limits | None = None) -> dict:
                                 failure(bad, _Problem("unsafe", "redirected_path"))
                             else:
                                 visit(child, (*relative, entry.name), directory=stat.S_ISDIR(entry_info.st_mode), parent_fd=fd)
-                row.update(status="protected", code="observed_permissions_protected")
+            # Native calls cannot be interrupted. Once final handle validation
+            # returns, an elapsed budget must still make the observation incomplete.
+            if time.monotonic() - started >= limits.seconds:
+                raise _Problem("unknown", "time_limit")
+            row.update(status="protected", code="observed_permissions_protected")
         except (_Problem, OSError, ValueError, TypeError, AttributeError) as error:
             failure(row, error)
 

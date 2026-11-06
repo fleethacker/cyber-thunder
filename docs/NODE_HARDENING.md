@@ -15,7 +15,7 @@ application authorization, [STATE.md](STATE.md) for storage layout and
 
 ## Read-only assessment
 
-Use an absolute state path. These examples assess an already-provisioned directory;
+Prefer an explicit absolute state path. These examples assess an already-provisioned directory;
 they do not create it or provide a sample credential:
 
 ```powershell
@@ -25,6 +25,15 @@ python -m cyberthunder --state-dir C:\CyberThunderState node-hardening --json
 ```bash
 python -m cyberthunder --state-dir /var/lib/cyberthunder node-hardening --json
 ```
+
+The CLI also accepts an ordinary relative path, including its default `state`
+and `CT_STATE_DIR`. It prefixes the current working directory with
+[`Path.absolute()`](https://docs.python.org/3/library/pathlib.html#pathlib.Path.absolute),
+without resolving links or collapsing `..`. Empty paths, parent components,
+Windows drive-relative/root-relative paths and redirected ancestors remain
+unproved. A missing directory is not created. The Python `assess()` API continues
+to require an absolute path. Use an absolute CLI path when a service or scheduler
+may supply a different working directory.
 
 Omit `--json` for a short text report. The command is available in development,
 OIDC, mesh and fleet configurations, including when identity configuration is
@@ -74,10 +83,13 @@ verify the audit chain, inspect SQLite rows, or certify that required files exis
 An empty protected directory proves only its current directory permissions.
 
 The default bounds are 2,048 entries including the root, 24 descendant levels and
-10 seconds checked between metadata operations. The Python API permits bounded
+10 seconds checked at entry traversal boundaries and after final handle validation.
+The Python API permits bounded
 limits up to 8,192 entries, 48 levels and 30 seconds; the CLI has no bypass. A bound
-produces incomplete/unknown output. Blocking kernel calls cannot be interrupted
-by the between-entry timer. Larger trees need an operator assessment outside this
+produces incomplete/unknown output, including when the final native check returns
+after the time budget. This is a cooperative budget, not a hard wall-clock timeout:
+a blocked kernel call cannot be interrupted, and handle cleanup may take additional
+time. Larger trees need an operator assessment outside this
 bounded tool; successful checks of separate subtrees are not an atomic whole-node
 attestation.
 
@@ -98,6 +110,10 @@ for DACLs. Regular state files use the private-file check, including protection
 from other accounts reading file data. Directory checks additionally reject
 foreign listing/child-creation rights and dangerous inheritable allow entries,
 including inherit-only entries that could expose newly created children.
+An inherit-only foreign allow with unrecognized rights remains unknown. These
+rights are checked against the native
+[file access masks](https://learn.microsoft.com/en-us/windows/win32/fileio/file-access-rights-constants);
+unknown bits are not evidence of protection.
 
 Use a dedicated service identity and a protected local state directory. Provision
 all ancestors and inherited child ACLs during deployment using the procedure in
@@ -195,3 +211,8 @@ walks, unsafe permissions and the existing verified-CLI refusal for other comman
   accounts, ownership or host policy were changed.
 
 These are isolated fixture results. They do not fill any acceptance field above.
+
+The subsequent [independent review](NODE_HARDENING_REVIEW.md) records the final
+deadline, inherited-rights and relative-CLI-path fixes, source-hashed native runs,
+and exact collected platform skip IDs for integration. Its receipts supersede
+the initial focused-run counts above for the reviewed follow-up.
