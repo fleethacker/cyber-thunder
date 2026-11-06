@@ -1,7 +1,7 @@
 """Survey the Kubernetes cluster this service runs in and build namespace risk profiles.
 
 The scan path is deliberately read-only. Kubernetes data comes from `kubectl get ... -o json`; image
-vulnerabilities come from `trivy image --format json`. OpenAI text generation is optional decoration: the
+vulnerabilities come from `trivy image --format json`. Model text generation is optional decoration: the
 deterministic profile is always returned and stored even when the API key, network or model is unavailable.
 """
 from __future__ import annotations
@@ -27,6 +27,7 @@ from cyberthunder.control.principal import authorize, current_operation, operati
 from cyberthunder.cluster.findings import (
     database_provenance, is_stale, mark_missing_sections, normalize_findings, parse_report,
 )
+from cyberthunder.cluster.scope import WORKLOAD_KINDS, decode_list, guard_read
 from cyberthunder.findings.schema import Finding, summarize, utcnow
 from cyberthunder.inventory.targets import Inventory, ScopeViolation, Target
 from cyberthunder.scan import ScanRun, TargetScanResult
@@ -36,14 +37,6 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = logging.getLogger(__name__)
 
-WORKLOAD_KINDS = (
-    ("apps", "Deployment", "deployments"),
-    ("apps", "StatefulSet", "statefulsets"),
-    ("apps", "DaemonSet", "daemonsets"),
-    ("batch", "CronJob", "cronjobs"),
-    ("batch", "Job", "jobs"),
-    ("core", "Pod", "pods"),
-)
 SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 SEVERITY_WEIGHT = {"CRITICAL": 40.0, "HIGH": 15.0, "MEDIUM": 4.0, "LOW": 1.0, "UNKNOWN": 0.25}
 
@@ -139,6 +132,7 @@ class _ClusterBinding:
     kubectl: str
     account: dict | None = None
     credential: dict | None = None
+    namespaces: tuple[str, ...] | None = None
 
     def argv(self) -> list[str]:
         args = [self.kubectl, "--kubeconfig", self.kubeconfig, "--context", self.context]
@@ -147,7 +141,10 @@ class _ClusterBinding:
         return args
 
     def to_dict(self) -> dict:
-        return {k: v for k, v in asdict(self).items() if v is not None}
+        result = {k: v for k, v in asdict(self).items() if v is not None}
+        if self.namespaces is not None:
+            result['namespaces'] = list(self.namespaces)
+        return result
 
 
 class ClusterBaselineService:
@@ -171,7 +168,7 @@ class ClusterBaselineService:
             checked = validate_kubeconfig(binding)
             base = self._target_binding(selected)
             return _ClusterBinding(base.target_id, base.kubeconfig, base.context, "kubectl",
-                                   binding.evidence(), checked.evidence())
+                                   binding.evidence(), checked.evidence(), base.namespaces)
         inventory_path = self.ctx.inventory.path
         if inventory_path is None:
             raise ClusterGuardError("cluster access requires a persisted inventory authorization source")
@@ -199,7 +196,10 @@ class ClusterBaselineService:
         if any(not isinstance(v, str) or not v.strip() for v in values):
             raise ScopeViolation(f"target {target_id!r} requires explicit kubeconfig, context and kubectl values")
         kubeconfig, context, kubectl = (v.strip() for v in values)
-        return _ClusterBinding(target_id, str(Path(kubeconfig).expanduser().resolve()), context, kubectl)
+        from cyberthunder.adapters.kubernetes.scope import namespace_scope
+        namespaces = namespace_scope(options)
+        return _ClusterBinding(target_id, str(Path(kubeconfig).expanduser().resolve()), context, kubectl,
+                               namespaces=namespaces)
 
     def _authorize(self, target_id: str, actor: str, action: str) -> _ClusterBinding:
         try:
@@ -249,18 +249,27 @@ class ClusterBaselineService:
 
     def _kubectl_json(self, binding: _ClusterBinding, actor: str, *args: str, timeout: int = 120) -> dict:
         self._guard(binding, actor)
+        if binding.namespaces is not None:
+            guard_read(args, binding.namespaces)
         options = {}
         if binding.account is not None:
             from cyberthunder.security.kube_credentials import kube_subprocess_env, validate_kubectl_args
             validate_kubectl_args([*args, "-o", "json"])
             options["env"] = kube_subprocess_env()
         try:
-            p = subprocess.run([*binding.argv(), *args, "-o", "json"], capture_output=True, text=True,
-                               timeout=timeout, encoding="utf-8", errors="replace", **options)
+            try:
+                p = subprocess.run([*binding.argv(), *args, "-o", "json"], capture_output=True, text=True,
+                                   timeout=timeout, encoding="utf-8", errors="replace", **options)
+            except PermissionError:
+                # OS refusal to execute the tool is unavailable collection. Current
+                # account denial from the surrounding guards must still propagate.
+                raise RuntimeError('kubectl could not execute (PermissionError)') from None
         finally:
             self._guard(binding, actor)
         if p.returncode != 0:
             raise RuntimeError((p.stderr or p.stdout or "kubectl failed").strip()[:500])
+        if binding.namespaces is not None:
+            return decode_list(p.stdout, args[1], args[3])
         doc = json.loads(p.stdout or "{}")
         if not isinstance(doc, dict) or not isinstance(doc.get("items"), list):
             raise RuntimeError("kubectl supplied no valid resource list")
@@ -275,26 +284,36 @@ class ClusterBaselineService:
                     "id": details["run_id"]}
 
     def _survey(self, binding: _ClusterBinding, actor: str) -> dict:
-        ns_doc = self._kubectl_json(binding, actor, "get", "namespaces")
         namespaces = []
-        for item in ns_doc.get("items") or []:
-            md = item.get("metadata") or {}
-            namespaces.append({
-                "name": md.get("name"),
-                "labels": md.get("labels") or {},
-                "phase": (item.get("status") or {}).get("phase"),
-            })
+        if binding.namespaces is None:
+            ns_doc = self._kubectl_json(binding, actor, "get", "namespaces")
+            for item in ns_doc.get("items") or []:
+                md = item.get("metadata") or {}
+                namespaces.append({
+                    "name": md.get("name"),
+                    "labels": md.get("labels") or {},
+                    "phase": (item.get("status") or {}).get("phase"),
+                })
+        else:
+            # These names come from reviewed inventory, not a namespace metadata read.
+            namespaces = [{'name': name, 'labels': None, 'phase': None,
+                           'metadata_collected': False} for name in binding.namespaces]
         workloads: list[WorkloadRef] = []
         errors: list[str] = []
         for _api, kind, resource in WORKLOAD_KINDS:
-            try:
-                doc = self._kubectl_json(binding, actor, "get", resource, "-A")
-            except (ScopeViolation, KillSwitchEngaged):
-                raise
-            except Exception as e:  # noqa: BLE001
-                errors.append(f"{resource}: {e}")
-                continue
-            for item in doc.get("items") or []:
+            items = []
+            for namespace in binding.namespaces or (None,):
+                flags = ('-A',) if namespace is None else ('-n', namespace)
+                try:
+                    doc = self._kubectl_json(binding, actor, "get", resource, *flags)
+                except (PermissionError, ScopeViolation, KillSwitchEngaged):
+                    raise
+                except Exception as e:  # noqa: BLE001
+                    label = resource if namespace is None else f'{resource}/{namespace}'
+                    errors.append(f"{label}: {e}")
+                    continue
+                items.extend(doc.get('items') or [])
+            for item in items:
                 if (not isinstance(item, dict) or not isinstance(item.get("metadata"), dict)
                         or not all(isinstance(item["metadata"].get(key), str) and item["metadata"][key]
                                    for key in ("namespace", "name"))):
@@ -319,15 +338,19 @@ class ClusterBaselineService:
         namespaces.sort(key=lambda n: n["name"] or "")
         workloads.sort(key=lambda w: (w.namespace, w.kind, w.name))
         self._guard(binding, actor)
-        return {"surveyed_at": utcnow(), "namespaces": namespaces, "workloads": [w.to_dict() for w in workloads],
-                "errors": errors}
+        result = {"surveyed_at": utcnow(), "namespaces": namespaces, "workloads": [w.to_dict() for w in workloads],
+                  "errors": errors}
+        if binding.namespaces is not None:
+            result['collection_scope'] = {'mode': 'namespace', 'namespaces': list(binding.namespaces),
+                                          'cluster_complete': False, 'namespace_lists_complete': not errors}
+        return result
 
     @operation("scan")
     def scan(self, *, actor: str, target_id: str | None = None, use_openai: bool = False) -> dict:
         with self._operation("cluster.baseline", actor, target_id) as (binding, details):
             try:
                 return self._baseline(binding, details, describe=use_openai)
-            except (ScopeViolation, KillSwitchEngaged):
+            except (PermissionError, ScopeViolation, KillSwitchEngaged):
                 raise
             except Exception as exc:
                 # Keep the previous baseline API behavior for fatal collection failures, while
@@ -354,7 +377,7 @@ class ClusterBaselineService:
                 if (not isinstance(snapshot, dict) or not snapshot.get("cache_dir")
                         or not snapshot.get("generation") or snapshot.get("state") not in {"ready", "stale"}):
                     raise ValueError("invalid managed vulnerability snapshot")
-            except (ScopeViolation, KillSwitchEngaged):
+            except (PermissionError, ScopeViolation, KillSwitchEngaged):
                 raise
             except Exception as exc:  # noqa: BLE001 - missing/invalid managed data is never a clean scan
                 snapshot = None
@@ -473,9 +496,11 @@ class ClusterBaselineService:
             try:
                 p = subprocess.run(args, capture_output=True, text=True, timeout=self.ctx.settings.trivy_timeout_s,
                                    encoding="utf-8", errors="replace", env=env)
+            except PermissionError:
+                return None, 'Trivy could not execute (PermissionError)'
             finally:
                 self._guard(binding, actor)
-        except (ScopeViolation, KillSwitchEngaged):
+        except (PermissionError, ScopeViolation, KillSwitchEngaged):
             raise
         except FileNotFoundError:
             return None, f"{self.ctx.settings.trivy_binary} not found"

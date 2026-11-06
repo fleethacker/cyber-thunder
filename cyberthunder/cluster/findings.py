@@ -237,4 +237,7 @@ def normalize_findings(target_id: str, survey: dict, reports: dict, snapshot: di
         findings[finding.id] = finding
     else:
         assessed.add(database_scope)
+    if survey.get('collection_scope') is not None:
+        for finding in findings.values():
+            finding.collection_provenance['kubernetes_scope'] = deepcopy(survey['collection_scope'])
     return list(findings.values()), sorted(assessed)

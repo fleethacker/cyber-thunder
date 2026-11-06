@@ -385,7 +385,9 @@ def test_ordinary_tool_errors_still_produce_audited_partial_baseline(ctx, target
     external_calls[0].side_effect = run
     result = ctx.cluster.scan(actor=ACTOR)
     assert len(result["errors"]) == 2
-    assert "fixture RBAC denial" in result["errors"][0]
+    expected = ('kubectl could not execute (PermissionError)' if collection_error is PermissionError
+                else 'fixture RBAC denial')
+    assert expected in result["errors"][0]
     assert "not found" in result["errors"][1]
     assert list(ctx.audit.records())[-1]["outcome"] == "partial"
     assert ctx.cluster.latest() == result
