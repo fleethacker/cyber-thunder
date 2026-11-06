@@ -30,7 +30,7 @@ Completed documentation/reporting work: COV-01 now ships as `report coverage`, t
 | Transport trust | Fleet SSH requires trusted host identity; fleet WinRM requires HTTPS and CA validation; acknowledged range exceptions are recorded | [TRANSPORT_SECURITY](TRANSPORT_SECURITY.md) |
 | Remaining trust boundaries | Protected files enforce native Windows SID/DACL or POSIX ownership/mode checks. Whole-state provisioning, realm claim mappings, target-side privileges and actual enclave connectivity still need deployment validation | ZT-01/12/13/14/19/31 |
 
-The implementation tests use isolated identity and transport fixtures. They do not establish CAC acceptance, AD delegation, a production broker, or zero-trust compliance. The remaining acceptance criteria below are retained deliberately.
+Implementation tests use isolated identity and transport fixtures. Actual local Keycloak browser acceptance also covers four roles with JSON and SQLite ([OIDC_REVIEW](OIDC_REVIEW.md)). These checks do not establish CAC acceptance, AD delegation, an enclave deployment, a production broker, or zero-trust compliance. The remaining acceptance criteria below are retained deliberately.
 
 ### 1.1 People into the app
 
@@ -45,12 +45,12 @@ The implementation tests use isolated identity and transport fixtures. They do n
 - Done when: in oidc mode `X-Actor: alice` alone gets 401; a valid token records alice's issuer and subject; dev mode refuses a non-loopback bind; a test walks `app.routes` and fails if any non-GET route other than `POST /kill/engage` and the read-only `POST /policy/evaluate` and `POST /discovery/scopes/preview` lacks `require_principal`; forged-header, wrong-CA and expired cases are tested and each writes an audit record.
 
 **ZT-03 OIDC token validation with an offline-cached JWKS.** Pillars: User, Application. Step: 30 days code, 60 days on the range. Effort: 3-4 days. Depends: ZT-02.
-- Today: Implemented: bounded RS256/ES256 validation, issuer/audience/party/expiry checks and protected offline JWKS caching. Signed test-provider, cache replacement/expiry, clock and TLS failure cases are covered. Real enclave Keycloak outage/recovery acceptance remains open.
+- Today: Implemented: bounded RS256/ES256 validation, issuer/audience/party/expiry checks and protected offline JWKS caching. Mixed signing/encryption key handling and explicit scope configuration passed actual local Keycloak 26.7.4 browser acceptance. Signed test-provider, cache replacement/expiry, clock and TLS failure cases are covered. Real enclave Keycloak outage/recovery acceptance remains open.
 - Target: `api/auth.py` validates RS256/ES256 signature, iss, aud, exp/nbf (60 s skew), azp, roles. JWKS cached in the state directory with fetch time, used while Keycloak is unreachable up to `CT_OIDC_JWKS_MAX_AGE`; unknown kid refreshes once, then fails closed. The SSE audit stream takes the same dependency.
 - Done when: expired, wrong audience, wrong issuer, `alg=none` and HS256-with-public-key tokens all get 401; a valid token works with Keycloak stopped inside max age and fails after it; the token never appears in logs.
 
 **ZT-04 Browser sessions, idle timeout and sign-out.** Pillars: User, Application. Step: 60 days. Effort: 3-5 days. Depends: ZT-01, ZT-03.
-- Today: Implemented: PKCE browser login, server-memory tokens, opaque Secure/HttpOnly/SameSite=Lax cookies, Origin/CSRF checks, idle/absolute limits and logout that revokes copied background contexts. Passive status polling does not renew idle time. Sessions are single-process and do not survive restart; IdP-wide logout and live realm acceptance remain open.
+- Today: Implemented: PKCE browser login, server-memory tokens, opaque Secure/HttpOnly/SameSite=Lax cookies, Origin/CSRF checks, idle/absolute limits and logout that revokes copied background contexts. Passive status polling does not renew idle time. Actual local Keycloak acceptance passed 54 JSON and 70 SQLite browser checks across four roles. Sessions are single-process and do not survive restart; IdP-wide logout and live enclave acceptance remain open.
 - Target: authservice owns the cookie in mesh mode; standalone oidc uses code flow with PKCE, tokens in memory only. Idle and absolute lifetime from the realm (default 15 minutes idle, 8 hours maximum), remaining time shown, sign-out calls end-session, `GET /api/v1/whoami` replaces the name box with a read-only identity and role. Cookies Secure, HttpOnly, SameSite=Lax for the authorization-code callback; cookie-authenticated writes need a custom header.
 - Done when: an approve after the idle period gets 401 and redirects; a cross-site form POST to approve is rejected; `localStorage` holds no token or name; sign-out in one tab ends access in another.
 

@@ -1,12 +1,21 @@
 # Browser identity sessions
 
-## Parent integration contract
+## Operator configuration
 
-The parent supplies `ctx.session_config` as a `SessionConfig`, or `None` to keep
-sessions disabled. Register routes before the UI catch-all using
-`install_sessions(app, ctx, access_validator)` from `api.session_routes`; retain
-the returned `SessionService` (or `None`). This change does not modify settings,
-authentication middleware, principal mapping, routes registration or the UI.
+Use the settings in [AUTHORIZATION](AUTHORIZATION.md) to register the exact HTTPS
+issuer, browser client, API audience and `/auth/callback` URI. Configure
+`CT_OIDC_SCOPE` to match the intended client scope profile. The local Keycloak
+acceptance used `openid profile email`; a provider response that adds unrequested
+scopes is rejected. Configure the realm and application consistently instead of
+loosening response validation. [OIDC_REVIEW](OIDC_REVIEW.md) records the actual
+provider version, four-role checks and remaining enclave acceptance work.
+
+## Application integration
+
+`api.auth.make_session_config` supplies `ctx.session_config` as a `SessionConfig`,
+or `None` to keep browser sessions disabled. `install_auth` registers session
+routes before the UI catch-all through `api.session_routes.install_sessions`
+and retains the returned `SessionService` on the application.
 
 ```python
 SessionConfig(
