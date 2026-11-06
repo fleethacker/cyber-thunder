@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import ts from 'typescript';
+import { evaluate } from './moduleTestSupport.mjs';
+export { evaluate } from './moduleTestSupport.mjs';
 
-const require = createRequire(import.meta.url);
 const widgets = new Map();
 export const ui = new Proxy({}, { get: (_, name) => {
   if (name === 'Table') {
@@ -12,14 +10,6 @@ export const ui = new Proxy({}, { get: (_, name) => {
   }
   return name;
 } });
-export function evaluate(url, imports = {}) {
-  const { outputText } = ts.transpileModule(readFileSync(url, 'utf8'), {
-    fileName: url.pathname, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
-  });
-  const exports = {};
-  new Function('require', 'exports', outputText)((name) => imports[name] ?? require(name), exports);
-  return exports;
-}
 export const helpers = evaluate(new URL('./proposalHistory.ts', import.meta.url));
 export const { ApiError, errorText } = evaluate(new URL('../api/client.ts', import.meta.url));
 const same = (a, b) => !!a && !!b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));

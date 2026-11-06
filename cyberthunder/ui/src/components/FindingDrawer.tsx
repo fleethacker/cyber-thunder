@@ -1,9 +1,10 @@
 // Finding detail drawer: description, check text, evidence, fix text, citations (plain links), explanation
 // (with Regenerate), the library fix entry, "Propose fix", and this finding's proposal history.
-import { Badge, Button, Drawer, Group, Paper, Stack, Table, Text, Title } from '@mantine/core';
+import { Badge, Drawer, Group, Paper, Stack, Table, Text, Title } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconRefresh, IconSend } from '@tabler/icons-react';
 import { useState, type ReactNode } from 'react';
+import { PermissionButton, usePermissions } from './PermissionGate';
 import { api, errorText } from '../api/client';
 import type { FindingPlus, ProposalPlus } from '../api/types';
 import { fmtAgo, fmtTime } from '../lib/format';
@@ -15,7 +16,7 @@ import { CodeBlock, Collapsible, ErrorBox, Loading, Mono, SeverityBadge, StateBa
 import { RiskTagsForFix } from './FixPanel';
 import { DiffButton } from './ProposalDiff';
 import { ConfidenceBadge } from './FindingAssurance';
-import { FindingReviewPanel } from './FindingReviewPanel';
+import { FindingReviewAccess } from './FindingActions';
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -45,6 +46,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
   id: string; onProposed?: (p: ProposalPlus) => void; onReviewed?: () => void; initialReviewOpen: boolean;
 }) {
   const st = useAsync(() => api.finding(id), [id]);
+  const permission = usePermissions();
   const f = st.data;
   const history = useAsync(
     async () => (f ? (await api.proposals({ host: f.host })).proposals.filter((p) => p.finding_id === f.id) : []),
@@ -57,6 +59,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
   if (!f) return st.error ? <ErrorBox error={st.error} onRetry={() => void st.reload()} /> : <Loading what="Loading finding" />;
 
   const regenerate = async () => {
+    if (!permission.can('explain') || busy) return;
     setBusy('explain');
     setActionError(null);
     try {
@@ -70,7 +73,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
     }
   };
   const propose = async () => {
-    if (isSuppressed(f.review)) return;
+    if (!permission.can('propose') || busy || isSuppressed(f.review)) return;
     setBusy('propose');
     setActionError(null);
     try {
@@ -124,7 +127,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
         <Text size="sm">{f.confidence?.reason || 'This server has not reported evidence confidence.'}</Text>
       </Section>
 
-      <FindingReviewPanel finding={f} opened={reviewOpen} onToggle={() => setReviewOpen((o) => !o)} onFinding={st.setData} onReviewed={onReviewed} />
+      <FindingReviewAccess finding={f} opened={reviewOpen} onToggle={() => setReviewOpen((o) => !o)} onFinding={st.setData} onReviewed={onReviewed} />
 
       <Section title="Citations">
         <CitationChips ids={citationsOf(f)} links />
@@ -134,9 +137,9 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
         <Stack gap="xs">
           <Group justify="space-between">
             <Text fw={700}>Explanation</Text>
-            <Button size="xs" variant="light" leftSection={<IconRefresh size={14} />} loading={busy === 'explain'} onClick={() => void regenerate()}>
+            <PermissionButton action="explain" size="xs" variant="light" leftSection={<IconRefresh size={14} />} loading={busy === 'explain'} onClick={() => void regenerate()}>
               {ex ? 'Regenerate' : 'Generate'}
-            </Button>
+            </PermissionButton>
           </Group>
           {ex ? (
             <>
@@ -164,7 +167,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
         <Stack gap="xs">
           <Group justify="space-between">
             <Text fw={700}>Library fix</Text>
-            <Button
+            <PermissionButton action="propose"
               size="sm"
               leftSection={<IconSend size={16} />}
               disabled={!f.fix || !!live || f.status !== 'open' || suppressed}
@@ -172,7 +175,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
               onClick={() => void propose()}
             >
               Propose fix
-            </Button>
+            </PermissionButton>
           </Group>
           {f.fix ? (
             <>

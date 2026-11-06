@@ -1,16 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import ts from 'typescript';
+import { createModuleLoader } from './moduleTestSupport.mjs';
 
-// Transpile in memory: tests use existing development tools and never write production state.
-async function sourceModule(path) {
-  const source = await readFile(new URL(path, import.meta.url), 'utf8');
-  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 } });
-  return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
-}
-const { isSuppressed, reviewDisposition, reviewDraft, reviewInput } = await sourceModule('./findingAssurance.ts');
-const { api, ApiError } = await sourceModule('../api/client.ts');
+const load = createModuleLoader();
+const { isSuppressed, reviewDisposition, reviewDraft, reviewInput } = load(new URL('./findingAssurance.ts', import.meta.url));
+const { api, ApiError } = load(new URL('../api/client.ts', import.meta.url));
+const { setSessionIdentity } = load(new URL('../api/identity.ts', import.meta.url));
+setSessionIdentity({ mode: 'dev', authenticated: false, login_available: false, permissions: [] });
 const summary = Object.freeze({ disposition: 'unreviewed', active: false, suppressed: false, revision: 3,
   evidence_fingerprint: 'a'.repeat(64), current: null, history_count: 3, reopened_reason: null, identity_verified: false });
 const now = Date.parse('2026-11-05T12:00:00Z');

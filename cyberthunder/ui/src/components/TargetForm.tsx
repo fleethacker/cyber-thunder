@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, errorText } from '../api/client';
 import { ASSET_TYPES, TRANSPORTS, type Target } from '../api/types';
 import { useSetupAccess } from './setupAccess';
+import { PermissionButton, usePermissions } from './PermissionGate';
 
 type Draft = Partial<Target> & { options: Record<string, unknown> };
 
@@ -28,23 +29,29 @@ export function TargetForm({ opened, initial, defaults, onClose, onSaved }: { op
   const [reason, setReason] = useState('');
   const [reviewing, setReviewing] = useState(false);
   const inFlight = useRef(false);
-  const blocked = useSetupAccess();
+  const setupBlock = useSetupAccess();
+  const permission = usePermissions();
+  const blocked = permission.reason('admin') || setupBlock;
   const editing = !!initial;
 
   useEffect(() => {
     if (!opened) return;
     setError(null);
     setScope(''); setReason(''); setReviewing(false);
-    setD(initial ? { ...initial, options: { ...initial.options } } : { asset_type: 'linux', transport: 'ssh', sudo: true, tags: [], ...defaults, options: { ...defaults?.options } });
+    setD(initial ? { ...initial, environment: initial.environment ?? 'default', options: { ...initial.options } }
+      : { asset_type: 'linux', transport: 'ssh', sudo: true, tags: [], ...defaults, environment: defaults?.environment ?? 'default', options: { ...defaults?.options } });
   }, [opened, initial, defaults]);
 
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((x) => ({ ...x, [k]: v }));
   const setOpt = (k: string, v: string) => setD((x) => ({ ...x, options: { ...x.options, [k]: v || undefined } }));
   const type = d.asset_type ?? 'linux';
-  const ready = !!d.id?.trim() && (editing || (!!scope && !!reason.trim()));
+  const environment = d.environment ?? 'default';
+  const environmentProblem = !environment || [...environment].length > 128 || /[\s\u0000-\u001f\u007f\uD800-\uDFFF*?\[\]]/u.test(environment)
+    ? 'Use an explicit environment identifier of 1–128 characters, without whitespace, control characters or wildcards.' : null;
+  const ready = !!d.id?.trim() && !environmentProblem && (editing || (!!scope && !!reason.trim()));
 
   const save = async () => {
-    if (!opened || inFlight.current || blocked || !ready || (!editing && !reviewing)) return;
+    if (!permission.can('admin') || !opened || inFlight.current || blocked || !ready || (!editing && !reviewing)) return;
     inFlight.current = true;
     setBusy(true);
     setError(null);
@@ -52,7 +59,7 @@ export function TargetForm({ opened, initial, defaults, onClose, onSaved }: { op
       const body: Partial<Target> = {
         id: d.id?.trim(), name: d.name?.trim() || d.id?.trim(), asset_type: d.asset_type, transport: d.transport,
         address: d.address || null, port: d.port ?? null, username: d.username || null, credential_ref: d.credential_ref || null,
-        sudo: !!d.sudo, tags: d.tags ?? [], notes: d.notes ?? '',
+        sudo: !!d.sudo, tags: d.tags ?? [], notes: d.notes ?? '', environment,
         options: Object.fromEntries(Object.entries(d.options).filter(([, v]) => v !== undefined && v !== '')),
       };
       if (!editing) {
@@ -73,13 +80,16 @@ export function TargetForm({ opened, initial, defaults, onClose, onSaved }: { op
   return (
     <Modal opened={opened} onClose={() => { if (!inFlight.current) onClose(); }} closeOnClickOutside={!busy} closeOnEscape={!busy} withCloseButton={!busy}
       title={<Text fw={700}>{editing ? `Edit ${initial?.name}` : reviewing ? 'Review asset registration' : 'Add asset'}</Text>} size="lg" centered>
-      <form onSubmit={(e) => { e.preventDefault(); if (blocked || !ready || inFlight.current) return; if (!editing && !reviewing) setReviewing(true); else void save(); }}>
+      <form onSubmit={(e) => { e.preventDefault(); if (!permission.can('admin') || blocked || !ready || inFlight.current) return; if (!editing && !reviewing) setReviewing(true); else void save(); }}>
         <Stack gap="sm">
           {!reviewing && <>
           <Group grow>
             <TextInput label="ID" required disabled={editing || busy} value={d.id ?? ''} onChange={(e) => set('id', e.currentTarget.value)} placeholder="rhel9-web01" />
             <TextInput label="Name" value={d.name ?? ''} onChange={(e) => set('name', e.currentTarget.value)} />
           </Group>
+          <TextInput label="Environment" required disabled={busy} value={environment} error={environmentProblem}
+            onChange={(e) => set('environment', e.currentTarget.value)}
+            description="The server checks access to this environment. Moving an asset requires access to both its current and new environment; node administration alone does not grant that access." />
           <Group grow>
             <Select label="Asset type" data={ASSET_TYPES} value={type} allowDeselect={false}
               onChange={(v) => setD((x) => ({ ...x, asset_type: (v ?? 'linux') as Target['asset_type'], transport: editing ? x.transport : DEFAULT_TRANSPORT[v ?? 'linux'] }))} />
@@ -114,6 +124,7 @@ export function TargetForm({ opened, initial, defaults, onClose, onSaved }: { op
           </>}
           {reviewing && <>
             <Text fw={600}>{d.name?.trim() || d.id} ({d.id})</Text>
+            <Text size="sm">Environment: {environment}</Text>
             <Text size="sm">{d.asset_type} via {d.transport} · {d.transport === 'local' ? 'service execution environment' : d.address || 'address not declared'}{d.port ? `:${d.port}` : ''}</Text>
             {d.transport === 'local' && <Text size="sm">Local access stays inside the service environment. A container-local target is not its physical deployment host.</Text>}
             <Text size="sm">Inventory authorization: {scope === 'in' ? 'scans and approved changes' : 'record only, out of scope'}.</Text>
@@ -125,7 +136,7 @@ export function TargetForm({ opened, initial, defaults, onClose, onSaved }: { op
           <Group justify="flex-end">
             {reviewing && <Button variant="default" disabled={busy} onClick={() => { if (!inFlight.current) setReviewing(false); }}>Back to declarations</Button>}
             <Button variant="default" disabled={busy} onClick={() => { if (!inFlight.current) onClose(); }}>Cancel</Button>
-            <Button type="submit" loading={busy} disabled={busy || !!blocked || !ready}>{editing ? 'Save' : reviewing ? 'Confirm registration' : 'Review registration'}</Button>
+            <PermissionButton action="admin" type="submit" loading={busy} disabled={busy || !!blocked || !ready}>{editing ? 'Save' : reviewing ? 'Confirm registration' : 'Review registration'}</PermissionButton>
           </Group>
         </Stack>
       </form>

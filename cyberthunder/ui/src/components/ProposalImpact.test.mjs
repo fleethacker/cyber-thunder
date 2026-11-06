@@ -1,15 +1,17 @@
+import { permissionFixture } from './permissionTestSupport.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { evaluate, helpers, mount, proposal, ui } from '../lib/rollbackTestSupport.mjs';
 
 async function setup(t, state, flags = {}) {
   const calls = [];
+  const permissions = permissionFixture();
   const actions = { approve: (p) => calls.push(['approve', p.id]), deny() {}, apply: (p) => calls.push(['apply', p.id]), rollback() {}, openFinding() {},
     impact: (p, inspectOnly) => calls.push(['impact', p.id, inspectOnly]) };
   const panel = mount(() => evaluate(new URL('./ProposalCard.tsx', import.meta.url), {
     '@mantine/core': ui, '../lib/format': { fmtAgo: () => 'earlier', fmtZonedTime: (value) => value, label: (value) => value },
     '../lib/proposalHistory': helpers, '../lib/findingAssurance': { isSuppressed: () => false },
-    './ApplyTimeline': ui, './CitationChips': ui, './ProposalDiff': ui, './ProposalPlan': ui, './FixPanel': ui, './common': ui,
+    './PermissionGate': permissions.imports, './ApplyTimeline': ui, './CitationChips': ui, './ProposalDiff': ui, './ProposalPlan': ui, './FixPanel': ui, './common': ui,
   }).ProposalCard, { p: proposal(state, 'change'), actions, ...flags });
   t.after(() => panel.unmount());
   await panel.settle();

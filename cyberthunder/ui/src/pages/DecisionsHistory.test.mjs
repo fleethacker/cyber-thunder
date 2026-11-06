@@ -1,3 +1,4 @@
+import { permissionFixture } from '../components/permissionTestSupport.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ApiError, browser, errorText, evaluate, helpers, mount, proposal, ui } from '../lib/rollbackTestSupport.mjs';
@@ -8,10 +9,11 @@ async function setup(t, options = {}) {
   let query = new URLSearchParams(options.query ?? '');
   let listener, keys, rejectRollback = false, readError = false, rollbackEvent = null;
   const calls = [], notices = [];
+  const permissions = permissionFixture();
   const context = { actor: 'IT1 Operator', status: { kill: { engaged: false } }, statusError: null, ...options.context };
   const api = {
     async proposals() { calls.push(['list']); return { proposals: structuredClone(rows) }; },
-    async proposal(id) { calls.push(['get', id]); if (readError) throw new Error('Proposal refresh failed'); return structuredClone(rows.find((p) => p.id === id)); },
+    async proposal(id) { calls.push(['get', id]); if (readError) throw new Error('Proposal refresh failed'); await options.onRead?.(); return structuredClone(rows.find((p) => p.id === id)); },
     async rollback(id) { calls.push(['rollback', id]); if (rejectRollback) throw new ApiError(423, 'Kill switch engaged at the server'); if (rollbackEvent) listener(rollbackEvent); return { proposal_id: id, state: 'rolling_back' }; },
     async approve(id) { calls.push(['approve', id]); return structuredClone(rows.find((p) => p.id === id)); },
     async apply(id) { calls.push(['apply', id]); return options.apply ? options.apply(id) : proposal('applying', id); },
@@ -30,6 +32,7 @@ async function setup(t, options = {}) {
       '../components/ConfirmReasonModal': ui, '../components/common': ui, '../components/FindingDrawer': ui, '../components/ProposalCard': ui,
       '../components/RollbackConfirmation': ui, '../components/ActorChip': { actorProblem },
       '../components/ImpactReview': ui,
+      '../components/PermissionGate': permissions.imports,
       '../lib/format': { ageSeconds: (at) => -Date.parse(at), severityRank: () => 1 }, '../lib/findingAssurance': assurance,
       '../lib/hooks': libHooks, '../lib/proposalHistory': helpers,
       '../state/AppState': { useAppState: () => context, useAuditListener: (fn) => { listener = fn; } },
@@ -38,7 +41,7 @@ async function setup(t, options = {}) {
   env.cleanup(() => panel.unmount());
   await panel.settle();
   const cards = () => panel.nodes().filter((node) => node.type === 'ProposalCard');
-  return { ...panel, env, calls, notices, context, cards,
+  return { ...panel, env, calls, notices, context, cards, permissions: permissions.state,
     card: (id) => cards().find((node) => node.props.p.id === id),
     modal: () => panel.find((node) => node.type === 'RollbackConfirmation').props,
     impact: () => panel.nodes().find((node) => node.type === 'ImpactReview')?.props,
@@ -296,4 +299,67 @@ test('an in-flight apply blocks opening review for that proposal', async (t) => 
   assert.equal(panel.impact(), undefined);
   assert.equal(panel.card('one').props.busy, true);
   finish(proposal('applied', 'one')); await panel.settle();
+});
+
+
+test('denied queue actions and keyboard shortcuts cannot write, while selection and filters still work', async (t) => {
+  const panel = await setup(t, { rows: [proposal('proposed', 'pending'), proposal('approved', 'approved')] });
+  panel.permissions.actions = ['read']; await panel.rerender();
+  await panel.key('a'); await panel.key('d'); await panel.key('x');
+  assert.equal(panel.impact(), undefined);
+  assert.equal(panel.card('pending').props.selected, true);
+  await panel.action('pending', 'approve'); await panel.action('pending', 'deny');
+  await panel.action('approved', 'apply'); await panel.action('approved', 'verify');
+  panel.button('Deny selected').props.onClick(); await panel.settle();
+  assert.ok(panel.calls.every(([kind]) => kind === 'list'));
+  await panel.change('Search proposals', 'pending');
+  assert.equal(panel.cards().length, 1);
+  await panel.click('Clear filters'); assert.equal(panel.cards().length, 2);
+});
+
+test('an open rollback and retained confirmation handler cannot write after permission loss', async (t) => {
+  const panel = await setup(t, { query: 'proposal=verified' });
+  await panel.rollback('verified');
+  const confirm = panel.modal().onConfirm;
+  panel.permissions.actions = ['read']; await panel.rerender();
+  confirm(); await panel.settle();
+  assert.equal(panel.find((node) => node.type === 'ConfirmReasonModal' && node.props.title === 'Rollback unavailable').props.action, 'rollback');
+  assert.ok(panel.calls.every(([kind]) => kind === 'list'));
+});
+
+test('rollback rechecks permission after the current proposal read and before the mutation', async (t) => {
+  let resolveRead;
+  const panel = await setup(t, { query: 'proposal=verified', onRead: () => new Promise((resolve) => { resolveRead = resolve; }) });
+  await panel.rollback('verified'); panel.modal().onConfirm(); await panel.settle();
+  assert.equal(typeof resolveRead, 'function');
+  panel.permissions.actions = ['read']; await panel.rerender();
+  resolveRead(); await panel.settle();
+  assert.equal(panel.calls.filter(([kind]) => kind === 'rollback').length, 0);
+  assert.match(panel.find((node) => node.type === 'ConfirmReasonModal' && node.props.title === 'Rollback unavailable').props.error, /rollback/);
+});
+
+test('permission loss unmounts active impact approval without discarding readable history', async (t) => {
+  const panel = await setup(t, { rows: [proposal('proposed', 'pending')] });
+  await panel.action('pending', 'approve'); assert.ok(panel.impact());
+  panel.permissions.actions = ['read']; await panel.rerender();
+  assert.equal(panel.impact(), undefined);
+  const denied = panel.nodes().find((node) => node.type === 'ConfirmReasonModal' && node.props.title === 'Change review unavailable');
+  assert.ok(denied); denied.props.onClose(); await panel.settle();
+  await panel.change('Decision view', 'history'); assert.equal(panel.cards().length, 1);
+  assert.ok(panel.calls.every(([kind]) => kind === 'list'));
+});
+
+
+test('denying a single selection needs deny; the bulk route additionally needs approve', async (t) => {
+  const panel = await setup(t, { rows: [proposal('proposed', 'one'), proposal('proposed', 'two')] });
+  panel.permissions.actions = ['deny']; await panel.rerender();
+  await panel.change('Select proposed (2)', true);
+  panel.button('Deny selected').props.onClick(); await panel.settle();
+  const denial = () => panel.nodes().find((node) => node.type === 'ConfirmReasonModal' && node.props.confirmLabel === 'Deny');
+  assert.equal(denial().props.opened, false);
+  panel.card('two').props.onSelect(false); await panel.settle();
+  panel.button('Deny selected').props.onClick(); await panel.settle();
+  assert.equal(denial().props.opened, true);
+  assert.equal(denial().props.action, 'deny');
+  assert.ok(panel.calls.every(([kind]) => kind === 'list'));
 });

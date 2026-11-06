@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import ts from 'typescript';
+import { evaluate } from './moduleTestSupport.mjs';
+export { evaluate } from './moduleTestSupport.mjs';
 
-const require = createRequire(import.meta.url);
 const widgets = new Map();
 export const ui = new Proxy({}, { get: (_, name) => {
   const parts = { Radio: ['Group'], Table: ['Thead', 'Tr', 'Th', 'Tbody', 'Td'], Tabs: ['List', 'Tab', 'Panel'], Menu: ['Target', 'Dropdown', 'Item'] }[name];
@@ -12,14 +10,6 @@ export const ui = new Proxy({}, { get: (_, name) => {
   return widgets.get(name);
 } });
 
-export function evaluate(url, imports = {}) {
-  const { outputText } = ts.transpileModule(readFileSync(url, 'utf8'), {
-    fileName: url.pathname, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
-  });
-  const exports = {};
-  new Function('require', 'exports', outputText)((name) => imports[name] ?? require(name), exports);
-  return exports;
-}
 export const types = evaluate(new URL('../api/types.ts', import.meta.url));
 export const { errorText, ApiError } = evaluate(new URL('../api/client.ts', import.meta.url));
 export const { actorProblem } = evaluate(new URL('../components/ActorChip.tsx', import.meta.url), { '@mantine/core': ui, '../state/AppState': {} });
