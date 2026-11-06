@@ -46,11 +46,11 @@ The existing server-managed `auth/access.json` selects the account. For example:
   "entries": [{
     "issuer": "https://identity.example.test",
     "subject": "operator-a",
-    "node_actions": ["discover"],
+    "node_actions": [],
     "grants": [{
       "target_ids": ["vc-a"],
       "environments": ["lab-a"],
-      "actions": ["discover"],
+      "actions": ["discover", "read"],
       "credential": {
         "username": "operator-a-inventory@lab",
         "credential_ref": "OPERATOR_A_VC",
@@ -78,20 +78,131 @@ bindings fail as ambiguous, with no subject-over-group precedence. The immutable
 binding records issuer, subject, operation, selectors, policy digest, endpoint
 declaration digest and target authorization generation.
 
-Roles are an additional check. An analyst with the explicit node/resource grants
+Roles are an additional check. An analyst with the explicit resource grants
 can discover; an admin or approver role alone cannot. An analyst workload can
 perform this read-only collection with its own matching account grant. No human
 approval, apply or rollback permission is added. A vSphere binding is valid only
 for `discover`; it cannot be repurposed for SSH, WinRM, Kubernetes, scan or apply.
-Discovery read APIs retain their existing global-read authorization requirements;
-this change does not grant API visibility through a credential binding. The
-parent-owned `api/access.py:authorize_request` additionally requires read access
-to every current inventory target for `POST /discovery/sweep`, even when only
-one vSphere source is accessible to that account. This is an explicit remaining
-HTTP integration constraint for limited users. A source-only scoped API entry
-point or a reviewed global-preflight change belongs to the parent; this patch
-does not bypass that policy. API tests assert the existing 403, then explicitly
-grant the fixture global/resource read rights to test serialized responses.
+The source-specific HTTP routes below require target grants without a node grant.
+The global discovery views retain their global-read requirements, and
+`POST /discovery/sweep` still requires the node discover grant and read access to
+every current inventory target. Its `require_all` check is unchanged. A credential
+binding does not itself grant either source-history or global API visibility.
+
+## Limited-account HTTP collection
+
+All paths are under `/api/v1`. The application derives the verified actor from
+authentication; development requests use the existing `X-Actor` header.
+
+| Method and path | Permission and response |
+| --- | --- |
+| `POST /discovery/vsphere/{target_id}/collect` | Target `discover` plus an explicit discover credential binding; no body; synchronous run result |
+| `GET /discovery/vsphere/{target_id}/runs?limit=20` | Target `read`; newest-first summary array; limit 1–100 |
+| `GET /discovery/vsphere/{target_id}/runs/{run_id}` | Target `read`; one run with observations |
+
+The POST invokes only the explicitly selected source through the existing
+guarded account/client. It never invokes global sweep, passive collection, CIDR
+probes, inventory-wide reconciliation or acceptance. It does not match guest IPs
+against other inventory targets or infer missing assets. Existing global assets,
+global run history and inventory declarations remain unchanged.
+
+POST and single-run responses use this shape (the observations are the existing
+`DiscoveredAsset` dictionaries):
+
+```json
+{
+  "version": 1,
+  "id": "vsphere-0123456789abcdef0123456789abcdef",
+  "source": "vsphere",
+  "target_id": "vc-a",
+  "authorization_scope": {
+    "version": 1,
+    "target_id": "vc-a",
+    "environment": "lab-a",
+    "authorization_id": "original-target-generation"
+  },
+  "requested_by": "human:requester-digest",
+  "requested_principal": {
+    "kind": "human",
+    "iss": "https://identity.example.test",
+    "sub": "operator-a",
+    "name": "Operator A",
+    "roles": ["analyst"],
+    "via": "oidc",
+    "verified": true
+  },
+  "started_at": "2026-11-05T12:00:00+00:00",
+  "finished_at": "2026-11-05T12:00:01+00:00",
+  "status": "finished",
+  "collection_started": true,
+  "complete": true,
+  "observation_count": 0,
+  "error": null,
+  "observations": []
+}
+```
+
+History summaries omit `observations`; other public fields are identical.
+`requested_principal` can be null in development and contains no application
+session identifier or token. An observation's `inventory_target_id` remains
+null: reported objects are source claims for explicit inventory review, not
+authorized new targets. Powered-off and addressless VMs remain metadata-only
+observations, with no claim of guest reachability.
+
+HTTP 200 means the attempt produced a run record. Clients must inspect `status`
+and `complete`. A complete empty inventory is `finished`, `complete: true`,
+`observation_count: 0`. A transport, parser, limit or later-page error is `failed`,
+`complete: false`, with a fixed `vsphere:*` error code and no observations. The
+client requires a complete bounded snapshot: partial pages are discarded, never
+reported as complete or as an empty success. `collection_started: false` means
+the collector was not invoked (for example a missing local credential).
+`collection_started: true` does not prove that a connection succeeded; no
+connectivity inference is made on failed attempts.
+
+Missing account bindings deny with 403 before client creation. Mid-operation
+authorization revocation returns 403, kill returns 423, and publication failure
+returns a fixed 503. Previously started runs are closed as `stopped`, incomplete
+and without observations. History may show `running` during collection or after
+an abrupt process exit; it must not be treated as completed evidence. There is
+no detached source worker or automatic retry, and no process-restart recovery
+claim. Calls retain the source's 60-second collection deadline and other wire
+limits; local authorization, storage and audit overhead is additional.
+
+Each UUID run lives under
+`discovery/vsphere/<original-ownership-digest>/<run-id>.json`, through StateStore
+on both JSON and SQLite. Concurrent requests write distinct documents; no
+shared latest-result document can overwrite another run. The original owner is
+the target ID, environment and authorization generation captured at start. The
+record also retains private digests of the source configuration and exact saved
+range grants. These digests and global range declarations are not returned by
+the API. Address filtering uses the saved ranges, but no scanner is invoked.
+Replacing a captured range, even with a broader range or identical CIDR under a
+new grant, invalidates the old run for these source-history routes. Adding an
+unrelated range does not extend an in-flight collection's captured grants.
+
+History reads require a fresh valid identity/session and current target read
+grant. They also check the original generation, unchanged source configuration,
+in-scope target and retained range grants. Inaccessible/obsolete runs are filtered
+before limiting; a direct obsolete run request is denied or not found. Reusing a
+target ID cannot reassign its old runs. Removing discover credentials while
+retaining read rights permits reading historical evidence; it cannot authorize
+a new collection. Original ownership is never inferred from today's inventory.
+
+Publication is checked before and after each state write and after audit, using
+the captured source guard. A detected stop clears this run's observations and
+retains only fixed stop metadata under its original owner. State, access policy,
+inventory and identity-provider state are not one distributed transaction. A
+crash or storage failure during revocation cleanup can retain an earlier write;
+history still performs its own current ownership/read/scope checks.
+
+The authenticated HTTP fixture exercises actual middleware, target authorization,
+account selection, source/client parsing and StateStore. It deliberately gives
+the alpha account no node permissions and no rights over beta inventory. The
+new routes work for alpha while beta and the global sweep/views remain denied.
+Remote vSphere inventory visibility is still determined by the provisioned
+remote account. The application does not grant access to newly reported guests.
+UI selection/review/registration wiring remains an integration seam; there is no
+new automatic acceptance endpoint.
 
 ## Request, TLS and publication checks
 
@@ -182,8 +293,9 @@ Exact follow-up commands, with the same `PYTHONPATH`:
 & 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts= -q tests/security/test_kube_credentials.py --tb=short --show-capture=no
 ```
 
-No production dependency, configuration, context, UI or role-map change is
-needed. The narrow inventory transport allowlist addition is included. This
+No new runtime dependency, configuration, context or UI change is needed. The
+source-specific HTTP routes add only exact collect/read entries to the existing
+role map. The narrow inventory transport allowlist addition is included. This
 transport is source-only; it does not implement an OS scanner transport.
 The parent may link this document and update historical backlog/umbrella claims.
 
@@ -193,3 +305,47 @@ certificate-chain/name failures, large-inventory timing/pagination, and native
 and container deployment with provisioned per-account credentials. Application
 session cryptographic validation remains covered by its owning subsystem,
 not by these controlled-claims fixtures.
+
+## Source-route validation and shared evidence seam
+
+Run with the same shared interpreter and checkout `PYTHONPATH` as above:
+
+```powershell
+& 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts= -q tests/discovery/test_vsphere_runs.py --tb=short --show-capture=no
+& 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts= -q tests/discovery/test_api_cli.py tests/discovery/test_vsphere_source.py tests/discovery/test_scope_principal_context.py tests/security/test_identity_boundary.py --tb=short --show-capture=no
+```
+
+The initial source-route run measured **67 passed, 6 failed** on Windows in
+185.28 seconds; the repeat after stop-audit and bounded-summary changes measured
+the same **67 passed, 6 failed** in 222.06 seconds. The six failures all detect the same existing shared-evidence
+issue: `Principal.evidence()` includes raw OIDC `session_id`, and
+`AuditLog.append()` attaches that evidence to `audit.jsonl`. Password and vSphere
+cookie probes pass before the independent application-session probe fails.
+The new source-run API/persistence fields omit session IDs; the shared audit
+copy does not. An OIDC session identifier is metadata, not necessarily a bearer
+credential, but exporting it does not satisfy a no-session-identifier boundary.
+No output or state-file exclusion hides this result. The owning files are
+`cyberthunder/control/principal.py` and `cyberthunder/audit/chain.py`; a shared
+fix should omit or fingerprint the raw session ID in exported principal evidence.
+Those files are outside this patch's ownership. These tests intentionally remain
+strict and must be rerun with the parent fix before claiming a clean integration.
+
+The last change makes malformed saved-range errors fixed rather than echoing
+global configuration. Its focused validation measured **12 passed, 63 deselected**
+in 53.52 seconds, including two new malformed-range cases and ten collection/read
+regressions. The final file has 75 cases; no clean complete 75-case run is claimed.
+
+```powershell
+& 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts= -q tests/discovery/test_vsphere_runs.py -k 'invalid_saved_scope or history_rechecks_current or limited_http_collect' --tb=short --show-capture=no
+```
+
+Existing API/CLI, source, copied-worker and identity regressions measured
+**86 passed** in 54.80 seconds. No tests were skipped; existing FastAPI/Starlette
+deprecation warnings remain. The source-route cases exercise JSON and SQLite,
+limited alpha versus beta accounts, unchanged global restrictions, absence of a
+discover binding before client construction, role/workload constraints,
+original-owner history after ID reuse, revocation during calls/publication/read,
+concurrent persistence, no-connect failures, partial pagination failure, real
+credential-echo rejection and fixed publication errors. Wire I/O uses only
+fixtures and sockets are blocked during application requests. No live vCenter,
+remote trust handshake or newly accepted target is part of this evidence.
