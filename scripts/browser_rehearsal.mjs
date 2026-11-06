@@ -141,7 +141,8 @@ try {
   const expiryLocal = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
   await drawer.getByRole('textbox', { name: 'Reason', exact: true }).fill(acceptReason);
   await drawer.getByRole('textbox', { name: 'Supporting evidence', exact: true }).fill(acceptEvidence);
-  await drawer.getByLabel('Expiry (required)', { exact: true }).fill(expiryLocal);
+  // The native date input's label includes the form library's required marker.
+  await drawer.getByLabel(/^Expiry \(required\)/).fill(expiryLocal);
   const acceptance = await uiRiskSubmission(drawer.getByRole('button', { name: 'Accept risk', exact: true }),
     'PUT', `findings/${fixture.finding}/risk-acceptance`);
   assert.equal(acceptance.current.reason, acceptReason);
