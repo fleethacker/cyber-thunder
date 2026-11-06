@@ -12,7 +12,7 @@ from cyberthunder.control.principal import principal_scope
 from cyberthunder.report import approvals, checklist, history, onepager, poam
 from cyberthunder.report.service import ReportService
 from tests.report.conftest import SCAN
-from tests.security.test_separation_of_duties import (ISSUER, approve, edit_proposal, offline, person, propose, setup)
+from tests.security.test_separation_of_duties import (ISSUER, api, approve, edit_proposal, offline, person, propose, setup)
 
 
 @pytest.fixture
@@ -31,6 +31,42 @@ def complete(setup):
     p = propose(setup)
     approve(ctx, p.id, "bob", note="First independent review; retained evidence")
     return approve(ctx, p.id, "carol", note="Second independent review; same display name")
+
+
+def test_commander_api_json_preserves_receipts_and_exact_saved_document(account, setup, api):
+    ctx, _ = account
+    proposal = complete(setup)
+    client, headers = api
+    response = client.get("/api/v1/reports/commander?format=json&scan_id=sod-scan",
+                          headers=headers("alice", roles=("analyst", "auditor")))
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/json"
+    document = response.json()
+    assert isinstance(document, dict)
+    assert document["proposal_approvals"][0]["approvals"] == proposal.to_dict()["approvals"]
+    with principal_scope(account[1]):
+        saved = history.search(ctx)["reports"][0]
+        assert history.get(ctx, saved["id"])["content"] == response.text
+
+
+@pytest.mark.parametrize("denial", ["role", "target", "generation"])
+def test_commander_api_json_keeps_export_and_original_owner_boundary(account, setup, api, denial):
+    ctx, _ = account
+    proposal = complete(setup)
+    client, headers = api
+    roles = ("analyst",) if denial == "role" else ("analyst", "auditor")
+    if denial == "target":
+        path = setup[3]
+        policy = json.loads(path.read_text())
+        policy["entries"][0]["grants"][0]["actions"].remove("export")
+        path.write_text(json.dumps(policy))
+    elif denial == "generation":
+        ctx.inventory.get("alpha").authorization_id = "replacement-generation"
+        ctx.inventory.save()
+    response = client.get("/api/v1/reports/commander?format=json&scan_id=sod-scan",
+                          headers=headers("alice", roles=roles))
+    assert response.status_code == 403, response.text
+    assert proposal.approvals[0]["note"] not in response.text
 
 
 @pytest.mark.parametrize("fmt", ["json", "html", "md"])

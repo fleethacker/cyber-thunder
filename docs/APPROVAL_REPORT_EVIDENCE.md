@@ -17,8 +17,8 @@ Full recorded JSON accompanies the readable rows. HTML details are open by
 default, and long evidence wraps for printing. These reports may span multiple
 pages when complete approval evidence requires it.
 
-Commander JSON is available through `ReportService.commander(scan_id, "json")`
-and the report CLI:
+Commander JSON is available through `ReportService.commander(scan_id, "json")`,
+`GET /api/v1/reports/commander?format=json`, and the report CLI:
 
 ```text
 python -m cyberthunder --state-dir <state> report commander --format json --out commander.json
@@ -30,11 +30,10 @@ every included proposal; `verified` and `reverted` entries also carry
 `approval_evidence`. Saved JSON reports use the existing history ownership checks.
 Previously saved snapshots remain unchanged; generate a new report to include
 the additional evidence rather than rewriting historical exports.
-The API route's format type remains owned by the parent integration and currently
-accepts HTML/Markdown. Exposing `format=json` through that route requires adding
-JSON to its commander-specific format annotation and returning the service's JSON
-text with `application/json` rather than passing it through the HTML response
-helper. Other page formats and queued-report defaults are unchanged.
+The API returns the service's exact JSON text with `application/json`, preserving
+the saved report bytes. It enforces the same export permission and original
+target ownership as other report formats. Other page formats and queued-report
+defaults are unchanged.
 
 POA&M keeps every existing column in its existing order and appends:
 
@@ -118,4 +117,4 @@ Local JUnit receipts are `.build/approval-report-tests.xml` and
 
 The new regressions use isolated state and deny target/network access. No external
 dependency was added. Parent integration owns the complete cross-platform gate
-and optional API format wiring; Linux was not rerun for this scoped patch.
+and API integration; Linux was not rerun for this scoped patch.

@@ -2,7 +2,7 @@
 and queueing a report for the outbox. Rendering is done by ctx.reports.
 
 Service methods used (first name found wins; arguments are positional):
-  commander(scan_id, fmt)        -> str (html | md)
+  commander(scan_id, fmt)        -> str (html | md | json)
   poam_csv(scan_id)              -> str (CSV text)
   checklist(scan_id, host)       -> dict (CKLB JSON)
   fleet(fmt) / friction(fmt)     -> str
@@ -69,12 +69,15 @@ def _doc(text, fmt: str, filename: str) -> Response:
 
 
 @router.get("/reports/commander")
-def commander(ctx=CtxDep, scan_id: str | None = None, format: Fmt = Query("html")) -> Response:
+def commander(ctx=CtxDep, scan_id: str | None = None,
+              format: Literal["html", "md", "json"] = Query("html")) -> Response:
     svc = _svc(ctx)
     _check_scan(ctx, scan_id)
     with feature("commander report"):
-        return _doc(call_first(svc, ("commander", "commander_report", "render_commander"), scan_id, format),
-                    format, "commander")
+        text = call_first(svc, ("commander", "commander_report", "render_commander"), scan_id, format)
+        if format == "json":
+            return Response(text, media_type="application/json")
+        return _doc(text, format, "commander")
 
 
 @router.get("/reports/poam.csv")
