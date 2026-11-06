@@ -65,21 +65,29 @@ class ContentStore:
 
     # -- held files -------------------------------------------------------------------------------
     def records(self) -> list[dict]:
-        doc = self.state.read_json(self.index_path, {}) or {}
-        recs = doc.get("files", {}) if isinstance(doc, dict) else {}
-        records = [dict(r, authenticity=r.get("authenticity") or {
-            "status": "legacy_unverified", "operator_attested": False, "disa_signature": False}) for r in recs.values()]
+        from .publication import records as held_records
+        records = held_records(self.state)
         return sorted(records, key=lambda r: (r.get("product_key") or "", r.get("kind") or "",
                                                     r.get("filename") or ""))
 
     def get(self, filename: str) -> dict | None:
-        doc = self.state.read_json(self.index_path, {}) or {}
-        return (doc.get("files") or {}).get(filename)
+        rows = [row for row in self.records() if row["filename"] == filename]
+        return next((row for row in rows if row.get("active")), rows[-1] if rows else None)
+
+    def generation(self):
+        from .publication import generation
+        return generation(self.state)
 
     def put(self, record: dict) -> dict:
+        from .publication import index, PublicationError
+        if index(self.state).get("publication_format"):
+            raise PublicationError("Managed content requires a publication transaction")
         rec = {k: record.get(k) for k in RECORD_KEYS}
         rec["ingest"] = dict(record.get("ingest") or {})
-        with self.state.files.lock("content-index"), self._lock:
+        from cyberthunder.audit.chain import file_lock
+        with file_lock(self.root / "content-publish.lock"), self.state.files.lock("content-index"), self._lock:
+            if index(self.state).get("publication_format"):
+                raise PublicationError("Managed content requires a publication transaction")
             doc = self.state.read_json(self.index_path, {}) or {}
             files = doc.setdefault("files", {})
             files[rec["filename"]] = rec
@@ -118,15 +126,46 @@ class ContentStore:
         # replace fails for a moment, so retry briefly instead of answering 500 to a polling client.
         for attempt in range(20):
             try:
-                return self.state.read_json(self.job_path(job_id))
+                job = self.state.read_json(self.job_path(job_id))
+                if job:
+                    job = self.reconcile_job(job)
+                return job
             except (PermissionError, ValueError):
                 if attempt == 19:
                     raise
                 time.sleep(0.05)
         return None
 
+    def reconcile_job(self, job):
+        """Overlay durable receipts; a stale progress file cannot negate a commit."""
+        import copy
+        from .publication import index
+        job = copy.deepcopy(job)
+        doc = index(self.state)
+        recovered = False
+        for publication in doc.get("publications", {}).values():
+            rec = publication["record"]
+            if rec.get("job_id") != job["id"]:
+                continue
+            for item in job.get("files", []):
+                if item["filename"] == rec["filename"]:
+                    recovered = recovered or item["state"] != "done"
+                    item.update(state="done", error=None, generation=rec["generation"],
+                                commit_status=publication["commit_status"], sha256=rec["sha256"],
+                                bytes=rec["bytes"], total=rec["bytes"], authenticity=rec["authenticity"],
+                                delta=rec["ingest"].get("delta"), datastream_path=rec["ingest"].get("datastream_path"))
+        if recovered:
+            job["commit_status"] = "committed_with_bookkeeping_pending"
+        if job.get("files") and all(item["state"] == "done" for item in job["files"]):
+            job["state"] = "done"
+            job.pop("error", None)
+        elif any(item["state"] == "done" for item in job.get("files", [])) and job.get("state") == "failed":
+            job["state"] = "partial"
+        job["deltas"] = [item["delta"] for item in job.get("files", []) if item.get("delta")]
+        return job
+
     def jobs(self) -> list[dict]:
-        out = [self.state.read_json(p) for p in self.state.list_json(self.jobs_dir)]
+        out = [self.load_job(p.stem) for p in self.state.list_json(self.jobs_dir)]
         return sorted((j for j in out if j), key=lambda j: j.get("created_at", ""), reverse=True)
 
     def source(self) -> dict:

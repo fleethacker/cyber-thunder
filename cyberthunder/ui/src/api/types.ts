@@ -762,7 +762,21 @@ export interface ContentAuthenticity {
   override_reason?: string;
 }
 
+export interface PublicationIntent {
+  mode: 'legacy_baseline' | 'downgrade'; expected_generation: string; review_sha256: string;
+  candidate_sha256: string; request_id: string; reason: string;
+}
+export interface PublicationReview {
+  code: 'content_publication_review'; mode: PublicationIntent['mode']; expected_generation: string;
+  review_sha256: string; candidate_sha256: string; candidate_bytes: number;
+  candidate: { id: string; kind: string; scheme: string; release: number[] | null }[];
+  current: { id: string; release: number[] | null; sha256: string | null; floor: number[] | null }[];
+}
+
 export interface HeldFile {
+  generation?: string;
+  active?: boolean;
+  commit_status?: string;
   filename: string;
   product_key: string | null;
   kind: ContentKind;
@@ -786,6 +800,7 @@ export interface HeldFile {
 }
 
 export interface HeldContent {
+  generation?: string;
   files: HeldFile[];
   products: { product_key: string; files: HeldFile[] }[];
   scap: { product_key: string | null; filename: string; datastream_path: string }[];
@@ -806,6 +821,8 @@ export interface ContentManifest {
 }
 
 export interface ImportDirResult {
+  commit_status?: 'committed' | 'committed_with_bookkeeping_pending';
+  status?: 'partial';
   authenticity?: ContentAuthenticity;
   imported: HeldFile[];
   refused: { filename: string; reason: string }[];

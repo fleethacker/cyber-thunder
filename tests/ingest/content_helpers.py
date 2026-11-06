@@ -16,7 +16,11 @@ W11_XCCDF = FIXTURES / "windows" / "w11_subset-xccdf.xml"
 DATASTREAM = b"""<?xml version="1.0" encoding="UTF-8"?>
 <ds:data-stream-collection xmlns:ds="http://scap.nist.gov/schema/scap/source/1.2" id="scap_mil.disa.stig_collection_test">
   <ds:component id="scap_mil.disa.stig_comp_test">
-    <Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2" id="xccdf_mil.disa.stig_benchmark_Test"/>
+    <Benchmark xmlns="http://checklists.nist.gov/xccdf/1.2" id="xccdf_mil.disa.stig_benchmark_Test">
+      <version>2</version><plain-text id="release-info">Release: 11</plain-text>
+      <Rule id="fixture-rule" severity="medium"><title>Fixture rule</title>
+      <check system="http://oval.mitre.org/XMLSchema/oval-definitions-5"><check-content-ref href="fixture.xml"/></check></Rule>
+    </Benchmark>
   </ds:component>
 </ds:data-stream-collection>
 """

@@ -255,7 +255,7 @@ def _entry(svc: ContentService, name: str, digest: str, description: dict) -> ix
                     version_label=f"V{version[0]}R{version[1]}" if version else None)
 
 
-def import_content(svc: ContentService, data: bytes, filename: str, actor: str) -> dict:
+def import_content(svc: ContentService, data: bytes, filename: str, actor: str, *, publication_intent=None) -> dict:
     """Return {record: HeldRecord, delta: PullDelta | None}; never scan or run uploaded content.
 
     Duplicate held bytes return the existing record and delta=None without changing provenance.
@@ -273,6 +273,7 @@ def import_content(svc: ContentService, data: bytes, filename: str, actor: str) 
     svc.ctx.killswitch.guard("content.import", actor)
     started = time.monotonic()
     details = {"source": "uploaded", "bytes": len(data) if isinstance(data, bytes) else 0}
+    record = None
     try:
         name = _name(filename)
         if not isinstance(data, bytes) or not data:
@@ -299,28 +300,19 @@ def import_content(svc: ContentService, data: bytes, filename: str, actor: str) 
                 svc.ctx.killswitch.guard("content.import", actor)
                 if svc._running:
                     raise ContentUploadError("a content pull is running; retry the upload after it finishes")
-                for held in svc.store.records():
-                    if held.get("sha256") == digest:
-                        dest = svc.store.files_dir / fx.disk_name(held.get("disk_name") or held["filename"])
-                        if dest.is_file() and dest.stat().st_size == len(data) and fx.sha256_file(dest) == digest:
-                            svc.audit.append("content.import", actor, dict(details, identical=True), subject=name)
-                            return {"record": held, "delta": None}
                 entry = _entry(svc, name, digest, description)
                 svc.ctx.killswitch.guard("content.import", actor)
                 record = svc._accept(work, entry, source="uploaded", actor=actor,
-                                     sha256=digest, etag=None, size=len(data))
-                # _accept timestamps its fetch. Local receipt is separate from publisher release or live sync.
-                benchmark = description["benchmarks"][0] if len(description["benchmarks"]) == 1 else {}
-                release = benchmark.get("release_info") or benchmark.get("version")
-                record.update(fetched_at=None, fetched_by=None, benchmark_id=benchmark.get("benchmark_id"),
-                              benchmark_release=release)
-                record["ingest"]["upload"] = dict(description, filename=name, imported_at=utcnow(),
-                                                  imported_by=actor, authenticity_verified=False)
-                record = svc.store.put(record)
-                details["seconds"] = round(time.monotonic() - started, 3)
-                svc.audit.append("content.import", actor, details, subject=entry.filename)
-                return {"record": record, "delta": record["ingest"].get("delta")}
+                                     sha256=digest, etag=None, size=len(data),
+                                     publication_intent=publication_intent, upload=name)
+                identical = record.pop("already_held", False)
+                return {"record": record, "delta": None if identical else record["ingest"].get("delta"),
+                        "commit_status": record["commit_status"], "active": record["active"]}
     except (ContentUploadError, OSError, ValueError, RuntimeError) as exc:
+        if record is not None and record.get("generation"):
+            record["commit_status"] = "committed_with_bookkeeping_pending"
+            return {"record": record, "delta": record["ingest"].get("delta"),
+                    "commit_status": record["commit_status"], "active": record["active"]}
         details.update(seconds=round(time.monotonic() - started, 3), error=type(exc).__name__)
         svc.audit.append("content.import_failed", actor, details, outcome="failed")
         raise

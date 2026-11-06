@@ -129,8 +129,15 @@ def test_job_persistence_failure_closes_admission_and_cleans_worker_state(verifi
             raise OSError("fixture persistence unavailable")
         return original_save(job)
     monkeypatch.setattr(service.store, "save_job", save)
-    with principal_scope(human), pytest.raises(OSError, match="fixture persistence unavailable"):
-        service.pull(human.actor, all_matching=True, background=False)
+    with principal_scope(human):
+        if phase == "initial":
+            with pytest.raises(OSError, match="fixture persistence unavailable"):
+                service.pull(human.actor, all_matching=True, background=False)
+        else:
+            result = service.pull(human.actor, all_matching=True, background=False)
+            assert result["state"] == "done"
+            assert result["commit_status"] == "committed_with_bookkeeping_pending"
+            assert result["files"][0]["generation"]
     assert len(admitted) == 1 and admitted[0].closed.is_set()
     assert service._running is None and not list((service.store.root / "incoming").glob("live-*"))
     if phase == "initial":

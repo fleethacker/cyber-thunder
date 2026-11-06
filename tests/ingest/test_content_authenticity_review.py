@@ -229,7 +229,16 @@ def test_competing_publishers_keep_file_record_and_datastream_consistent(verifie
         return record["sha256"], xml
     with ThreadPoolExecutor(max_workers=2) as workers:
         futures = [workers.submit(publish, n, owner) for n, owner in enumerate((ctx, second))]
-        expected = dict(f.result(timeout=30) for f in futures)
+        from cyberthunder.ingest.content.publication import PublicationError
+        expected, refused = {}, 0
+        for future in futures:
+            try:
+                sha, xml = future.result(timeout=30)
+                expected[sha] = xml
+            except PublicationError as exc:
+                assert "previously accepted release" in str(exc)
+                refused += 1
+        assert len(expected) == refused == 1
     records = ctx.ingest.content.store.records()
     assert len(records) == 1
     record = records[0]

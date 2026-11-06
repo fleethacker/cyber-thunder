@@ -257,9 +257,25 @@ class PullBody(BaseModel):
     pace: bool = False
 
 
+class PublicationIntentBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["legacy_baseline", "downgrade"]
+    expected_generation: str = Field(pattern=r"^[a-f0-9]{64}$", strict=True)
+    review_sha256: str = Field(pattern=r"^[a-f0-9]{64}$", strict=True)
+    candidate_sha256: str = Field(pattern=r"^[a-f0-9]{64}$", strict=True)
+    request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{16,80}$", strict=True)
+    reason: str = Field(min_length=1, max_length=512, strict=True)
+
+
+def _publication_conflict(exc):
+    # Review data is bounded by the service: <=16 validated benchmark identities.
+    raise HTTPException(409, exc.review, headers={"Cache-Control": "no-store"}) from None
+
+
 class ImportDirBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str
+    publication_intent: PublicationIntentBody | None = None
     override_reason: str | None = Field(default=None, min_length=1, max_length=512, strict=True)
 
 
@@ -323,14 +339,22 @@ async def upload_content(request: Request, ctx=CtxDep, actor: str = ActorDep) ->
             raise HTTPException(413, "content upload exceeds 32 MiB")
     message = BytesParser(policy=policy.default).parsebytes(prefix + body)
     parts = list(message.iter_parts())
-    if message.defects or not 1 <= len(parts) <= 2 or any(p.is_multipart() or p.defects for p in parts):
-        raise ValueError("upload one file and an optional override_reason")
+    if message.defects or not 1 <= len(parts) <= 3 or any(p.is_multipart() or p.defects for p in parts):
+        raise ValueError("upload one file and optional override_reason/publication_intent")
     fields = {}
     for part in parts:
         name = part.get_param("name", header="content-disposition")
-        if name not in {"file", "override_reason"} or name in fields:
+        if name not in {"file", "override_reason", "publication_intent"} or name in fields:
             raise ValueError("duplicate or unsupported content upload field")
         fields[name] = part
+    publication_intent = None
+    if "publication_intent" in fields:
+        part = fields["publication_intent"]
+        raw = part.get_payload(decode=True)
+        if part.get_filename() or not raw or len(raw) > 4096:
+            raise ValueError("Invalid publication intent")
+        from cyberthunder.ingest.content.signatures import parse
+        publication_intent = PublicationIntentBody.model_validate(parse(raw, 4096)).model_dump()
     reason = None
     if "override_reason" in fields:
         raw_reason = fields["override_reason"].get_payload(decode=True)
@@ -353,7 +377,14 @@ async def upload_content(request: Request, ctx=CtxDep, actor: str = ActorDep) ->
         raise ValueError("the uploaded file is empty")
     if len(payload) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "content upload exceeds 32 MiB")
-    return to_plain(await run_in_threadpool(svc.content.import_upload, payload, filename, actor, override_reason=reason))
+    from cyberthunder.ingest.content.publication import PublicationReviewRequired
+    try:
+        options = {"override_reason": reason}
+        if publication_intent is not None:
+            options["publication_intent"] = publication_intent
+        return to_plain(await run_in_threadpool(svc.content.import_upload, payload, filename, actor, **options))
+    except PublicationReviewRequired as exc:
+        _publication_conflict(exc)
 
 
 @router.get("/ingest/updates")
@@ -409,4 +440,11 @@ def import_dir(body: ImportDirBody | None = None, ctx=CtxDep, actor: str = Actor
     p = Path(body.path.strip()).expanduser()
     if not p.is_dir():
         raise ValueError(f"no such folder on this node: {p}")
-    return to_plain(svc.content.import_dir(p, actor, override_reason=body.override_reason))
+    from cyberthunder.ingest.content.publication import PublicationReviewRequired
+    try:
+        options = {"override_reason": body.override_reason}
+        if body.publication_intent is not None:
+            options["publication_intent"] = body.publication_intent.model_dump()
+        return to_plain(svc.content.import_dir(p, actor, **options))
+    except PublicationReviewRequired as exc:
+        _publication_conflict(exc)

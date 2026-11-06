@@ -143,7 +143,8 @@ def test_signed_input_names_cannot_collide_with_working_copies(verified, tmp_pat
     with principal_scope(human):
         result = ctx.ingest.content.import_dir(media, human.actor)
     assert len(result["imported"]) == 2 and not result["missing"] and not result["refused"]
-    assert {r["filename"] for r in ctx.ingest.content.store.records()} == {STIG, other.name}
+    assert len(ctx.ingest.content.store.records()) == 1
+    assert len({r["generation"] for r in result["imported"]}) == 1
 
 
 @pytest.mark.parametrize("fault", ["bytes", "size", "missing", "extra", "swapped"])
@@ -265,9 +266,9 @@ def test_override_rechecks_policy_and_session_before_publish(verified, tmp_path,
         if not live[0]:
             raise PermissionError("session ended")
     original = ctx.ingest.content._import_directory_contents
-    def expire(*args):
+    def expire(*args, **kwargs):
         live[0] = False
-        return original(*args)
+        return original(*args, **kwargs)
     monkeypatch.setattr(ctx.ingest.content, "_import_directory_contents", expire)
     with principal_scope(human, validity=guard), pytest.raises(sig.AuthenticityError):
         ctx.ingest.content.import_dir(media, human.actor, override_reason="reviewed media")
@@ -365,9 +366,9 @@ def test_trust_removal_before_publication_is_rechecked(verified, tmp_path, monke
     ctx, human = verified
     media, _ = bundle(tmp_path, ctx.content_signature_config)
     original = ctx.ingest.content._import_directory_contents
-    def revoke(*args):
+    def revoke(*args, **kwargs):
         ctx.content_signature_config = replace(ctx.content_signature_config, trusted_keys={})
-        return original(*args)
+        return original(*args, **kwargs)
     monkeypatch.setattr(ctx.ingest.content, "_import_directory_contents", revoke)
     monkeypatch.setattr("cyberthunder.ingest.content.fetch.check_file",
                         lambda *a, **kw: pytest.fail("revocation must be checked before the archive parser"))

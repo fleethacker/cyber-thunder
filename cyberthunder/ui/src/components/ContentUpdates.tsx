@@ -5,7 +5,8 @@ import { linkLabel } from '../lib/linkPresentation';
 import { canOverrideContent, contentAccount, contentProvenance, manifestText, plainUploadNeedsException } from '../lib/contentAuthenticity';
 import { usePermissions } from './PermissionGate';
 import { api, errorText } from '../api/client';
-import type { ContentUploadResult, ImportDirResult, PullDelta, PullJob, StigLibrary } from '../api/types';
+import { authorityRevision } from '../api/identity';
+import type { PublicationIntent, PublicationReview, ContentUploadResult, ImportDirResult, PullDelta, PullJob, StigLibrary } from '../api/types';
 import { fmtBytes, fmtSeconds, fmtZonedTime } from '../lib/format';
 import { useAppState } from '../state/AppState';
 import { actorProblem } from './ActorChip';
@@ -75,6 +76,31 @@ function downloadJson(name: string, contents: string) {
   window.setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+/** A refusal is review data, never authority to activate content. */
+export function publicationReview(error: unknown): PublicationReview | null {
+  if (!error || typeof error !== 'object' || !('status' in error) || error.status !== 409 || !('detail' in error)
+      || typeof error.detail !== 'string' || error.detail.length > 16384) return null;
+  try {
+    const value = JSON.parse(error.detail);
+    const hash = (v: unknown) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
+    const release = (v: unknown) => v === null || Array.isArray(v) && v.length >= 2 && v.length <= 3
+      && v.every(n => Number.isInteger(n) && n >= 0 && n <= 999999);
+    const id = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length <= 180;
+    if (value.code !== 'content_publication_review' || !['legacy_baseline', 'downgrade'].includes(value.mode)
+        || !['expected_generation', 'review_sha256', 'candidate_sha256'].every(key => hash(value[key]))
+        || !Number.isSafeInteger(value.candidate_bytes) || value.candidate_bytes < 1
+        || !Array.isArray(value.candidate) || !value.candidate.length || value.candidate.length > 16
+        || !Array.isArray(value.current) || value.current.length !== value.candidate.length
+        || value.candidate.some((r: {id: unknown; release: unknown}) => !id(r.id) || !release(r.release))
+        || value.current.some((r: {id: unknown; release: unknown; floor: unknown; sha256: unknown}) =>
+          !id(r.id) || !release(r.release) || !release(r.floor) || !(r.sha256 === null || hash(r.sha256)))) return null;
+    return value;
+  } catch { return null; }
+}
+
+type PendingPublication = { review: PublicationReview; file?: File; folder?: string; authority: number;
+  account: string; libraryGeneration?: string };
+
 interface UploadItem { file: File; state: 'queued' | 'uploading' | 'done' | 'failed'; result?: ContentUploadResult; error?: string }
 
 export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'all', onProductSelect, onMaintained, onTransfers }: {
@@ -103,6 +129,35 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [newJob, setNewJob] = useState<PullJob | null>(null);
   const [openJobs, setOpenJobs] = useState<string[]>([]);
+  const [publication, setPublication] = useState<PendingPublication | null>(null);
+  const [publicationReason, setPublicationReason] = useState('');
+  const [publicationConfirmed, setPublicationConfirmed] = useState(false);
+  const currentPublication = useRef(publication);
+  const publicationInputs = useRef({ files, folder, reason: publicationReason, confirmed: publicationConfirmed });
+  publicationInputs.current = { files, folder, reason: publicationReason, confirmed: publicationConfirmed };
+  const publicationEpoch = useRef({ account, authority: authorityRevision(), generation: library.held.generation });
+  if (publicationEpoch.current.account !== account || publicationEpoch.current.authority !== authorityRevision()
+      || publicationEpoch.current.generation !== library.held.generation) {
+    publicationEpoch.current = { account, authority: authorityRevision(), generation: library.held.generation };
+  }
+  const epoch = publicationEpoch.current;
+  const samePublication = () => sameAccount() && publicationEpoch.current === epoch && epoch.authority === authorityRevision();
+  const changeSelection = () => { publicationEpoch.current = { ...publicationEpoch.current }; clearPublication(); };
+  const validPublication = publication && publication.account === account && publication.authority === authorityRevision()
+    && publication.libraryGeneration === library.held.generation ? publication : null;
+  currentPublication.current = validPublication;
+  const clearPublication = () => {
+    currentPublication.current = null; setPublication(null); setPublicationReason(''); setPublicationConfirmed(false);
+  };
+  useEffect(() => { clearPublication(); }, [account, authorityRevision(), library.held.generation]);
+  useEffect(() => () => { currentPublication.current = null; publicationEpoch.current = { ...publicationEpoch.current }; }, []);
+  const capturePublication = (error: unknown, target: { file?: File; folder?: string }) => {
+    const review = publicationReview(error);
+    if (!review || !samePublication()) return false;
+    setPublication({ review, ...target, authority: authorityRevision(), account, libraryGeneration: library.held.generation });
+    setPublicationReason(''); setPublicationConfirmed(false);
+    return true;
+  };
   const updates = library.selection.updates;
   const updateKey = JSON.stringify(updates.map((r) => r.filename).sort());
   const jobs = newJob && !library.jobs.some((j) => j.id === newJob.id) ? [newJob, ...library.jobs].slice(0, 20) : library.jobs;
@@ -173,7 +228,8 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
     // One explicit exception applies to this batch; recheck the account and roles for every file.
     const intent = { ...exception.current };
     importException(intent, true);
-    const batch: UploadItem[] = files.map((file) => ({ file, state: 'queued' }));
+    if (!samePublication()) return;
+    const batch: UploadItem[] = publicationInputs.current.files.map((file) => ({ file, state: 'queued' }));
     setUploads(batch);
     for (let i = 0; i < batch.length; i++) {
       const item = batch[i];
@@ -191,11 +247,43 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
         await onRefresh().catch((e) => { if (sameAccount()) setError(`File imported, but the library could not refresh: ${errorText(e)}`); });
       } catch (e) {
         if (!sameAccount()) return;
-        batch[i] = { ...item, state: 'failed', error: errorText(e) };
+        const needsReview = capturePublication(e, { file: item.file });
+        batch[i] = { ...item, state: 'failed', error: needsReview ? 'Review this release before activation.' : errorText(e) };
         setUploads([...batch]);
+        if (needsReview) break;
       }
     }
-    if (sameAccount()) setFiles(batch.filter((item) => item.state === 'failed').map((item) => item.file));
+    if (samePublication()) setFiles(batch.filter((item) => item.state !== 'done').map((item) => item.file));
+  };
+
+  const confirmPublication = async (pending: PendingPublication) => {
+    const inputs = publicationInputs.current;
+    if (currentPublication.current !== pending || pending.authority !== authorityRevision() || !sameAccount()
+        || !canOverrideContent() || !permission.can('import') || !permission.can('admin')
+        || !inputs.confirmed || !inputs.reason.trim() || inputs.reason.trim().length > 512
+        || (pending.file && !inputs.files.includes(pending.file))
+        || (pending.folder && inputs.folder.trim() !== pending.folder)) return;
+    const intent: PublicationIntent = { mode: pending.review.mode, expected_generation: pending.review.expected_generation,
+      candidate_sha256: pending.review.candidate_sha256, review_sha256: pending.review.review_sha256,
+      request_id: crypto.randomUUID(), reason: inputs.reason.trim() };
+    const authenticityReason = importException(exception.current, !!pending.file);
+    // Consume local confirmation before I/O. Every refusal or reauthentication needs another explicit review.
+    clearPublication();
+    try {
+      if (pending.file) {
+        const result = await api.uploadContent(pending.file, authenticityReason, intent);
+        requireAction('import'); setUploads([{ file: pending.file, state: 'done', result }]); if (samePublication()) setFiles([]);
+      } else if (pending.folder) {
+        const result = await api.importDir(pending.folder, authenticityReason, intent);
+        requireAction('import'); setImported(result);
+      }
+      await onRefresh();
+    } catch (error) {
+      if (sameAccount()) {
+        const needsReview = capturePublication(error, { file: pending.file, folder: pending.folder });
+        setError(needsReview ? 'Publication state changed. Review the current release and confirm again.' : errorText(error));
+      }
+    }
   };
 
   return <Stack gap="lg">
@@ -259,17 +347,19 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
         {!permission.can('import') && <Text size="sm" c="dimmed">Your account does not have permission to import content.</Text>}
         <Text size="sm" c="dimmed">XML or ZIP, up to 32 MiB per file. Files are validated and indexed one at a time. Uploads work offline; publisher authenticity is not verified.</Text>
         {plainUploadNeedsException() && <Text size="sm">Plain uploads require the explicit human exception above. For an operator-attested bundle, use folder import.</Text>}
-        <FileInput label="Choose content files" placeholder="Select XML or ZIP files" multiple clearable accept=".xml,.zip" value={files} onChange={setFiles} disabled={blocked} />
+        <FileInput label="Choose content files" placeholder="Select XML or ZIP files" multiple clearable accept=".xml,.zip" value={files} onChange={next => { changeSelection(); setFiles(next); }} disabled={blocked} />
         <Button loading={busy === 'upload'} disabled={importBlocked || !files.length || (plainUploadNeedsException() && !override)} onClick={() => void act('upload', upload)} style={{ alignSelf: 'flex-start' }}>Upload {files.length || ''} file{files.length === 1 ? '' : 's'}</Button>
         {uploads.length > 0 && <LibraryTable rows={uploads} label="upload results" empty="No uploads." searchText={(u) => `${u.file.name} ${u.state}`}
           headings={<><Table.Th>File</Table.Th><Table.Th>Result</Table.Th></>}
           render={(u, i) => <Table.Tr key={i}><Table.Td><Text size="sm" style={{ overflowWrap: 'anywhere' }}>{u.file.name}</Text></Table.Td><Table.Td>
-            <Badge color={u.state === 'done' ? 'teal' : u.state === 'failed' ? 'red' : 'blue'} variant="light">{u.state === 'done' ? 'Accepted' : u.state}</Badge>
+            <Badge color={u.state === 'done' ? 'teal' : u.state === 'failed' ? 'red' : 'blue'} variant="light">{u.state === 'done' ? u.result?.record.active === false ? 'Reference only' : 'Accepted' : u.state}</Badge>
             {u.error && <Text size="xs" c="red">{u.error}</Text>}
             {u.result && <Stack gap={4} mt={4}>
               <Text size="xs" style={{ overflowWrap: 'anywhere' }}>{u.result.record.benchmark_id ?? u.result.record.product_key ?? 'Unmapped product'} · {u.result.record.version_label ?? u.result.record.benchmark_release ?? 'Version not provided'}</Text>
               {u.result.record.version_label && u.result.record.benchmark_release && <Text size="xs" c="dimmed">{u.result.record.benchmark_release}</Text>}
               <FileProvenance file={u.result.record} />
+              {u.result.record.commit_status === 'committed_with_bookkeeping_pending' && <Alert color="orange">
+                Content committed; audit outcome or transfer bookkeeping is pending. Do not repeat activation.</Alert>}
             </Stack>}
             {u.result?.delta && <DeltaRow d={u.result.delta} />}
           </Table.Td></Table.Tr>} />}
@@ -288,15 +378,22 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
             downloadJson('manifest.json', manifestText(manifest));
             notifications.show({ message: `Manifest exported: ${manifest.items.length} items` });
           })}>Download manifest</Button>
-          <TextInput label="Import folder on the server" placeholder="E:\stig-content" value={folder} disabled={blocked} style={{ flex: 1, minWidth: 220 }} onChange={(e) => setFolder(e.currentTarget.value)} />
+          <TextInput label="Import folder on the server" placeholder="E:\stig-content" value={folder} disabled={blocked} style={{ flex: 1, minWidth: 220 }} onChange={(e) => { changeSelection(); setFolder(e.currentTarget.value); }} />
           <Button variant="light" loading={busy === 'import'} disabled={importBlocked || !folder.trim()} onClick={() => void act('import', async () => {
-            const result = await api.importDir(folder.trim(), importException());
-            requireAction('import');
-            setImported(result); await onRefresh();
+            try {
+              if (!samePublication()) return;
+              const result = await api.importDir(publicationInputs.current.folder.trim(), importException());
+              requireAction('import');
+              setImported(result); await onRefresh();
+            } catch (error) {
+              if (!capturePublication(error, { folder: folder.trim() })) throw error;
+            }
           })}>Import folder</Button>
         </Group>
         {imported && <Stack gap="sm">
           <Text size="sm">Imported {imported.imported.length} file(s). Integrity checks: {imported.verified_by}.</Text>
+          {(imported.commit_status === 'committed_with_bookkeeping_pending' || imported.imported.some(row => row.commit_status === 'committed_with_bookkeeping_pending')) && <Alert color="orange">
+            Content committed; audit outcome or transfer bookkeeping is pending. Do not repeat activation.</Alert>}
           <Text size="xs" c={contentProvenance(imported.authenticity).color}>{contentProvenance(imported.authenticity).text}</Text>
           {importNotices.length > 0 && <LibraryTable rows={importNotices} label="import notices" searchText={(r) => `${r.filename} ${r.reason}`} empty="No notices."
             headings={<><Table.Th>File</Table.Th><Table.Th>State</Table.Th><Table.Th>Reason</Table.Th></>}
@@ -305,6 +402,35 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
         </Stack>}
       </Stack>
     </Paper>
+
+    {validPublication && <Paper withBorder p="md" radius="md">
+      <Stack gap="sm">
+        <Text fw={700}>Review exceptional content activation</Text>
+        <Alert color="orange" title={validPublication.review.mode === 'downgrade' ? 'Activate an older release' : 'Establish a legacy baseline'}>
+          {validPublication.review.mode === 'downgrade'
+            ? 'This candidate is older than an accepted release. Activation keeps the highest accepted release recorded and preserves historical content.'
+            : 'Existing content has no verified publication baseline. This decision establishes a baseline for the candidate; historical provenance remains unverified.'}
+          {' '}Nothing has been activated by this refusal. Reauthentication does not submit this decision.
+        </Alert>
+        <Text size="sm">Candidate SHA-256: {validPublication.review.candidate_sha256}</Text>
+        {validPublication.review.candidate.map((candidate, i) => <Stack key={candidate.id} gap={2}>
+          <Text size="sm">{candidate.id}: candidate {candidate.release?.join('.') ?? 'Unknown'}</Text>
+          <Text size="sm">Current release: {validPublication.review.current[i].release?.join('.') ?? 'Unverified / unknown'};
+            {' '}highest accepted: {validPublication.review.current[i].floor?.join('.') ?? 'Not established'}</Text>
+          <Text size="xs">Current SHA-256: {validPublication.review.current[i].sha256 ?? 'Not established'}</Text>
+        </Stack>)}
+        <TextInput label="Reason for exceptional activation" value={publicationReason} maxLength={512}
+          description="Separate from the authenticity exception. Do not include secrets." disabled={blocked}
+          onChange={event => setPublicationReason(event.currentTarget.value)} />
+        <Checkbox label="I reviewed the releases and digests and intend this activation" checked={publicationConfirmed}
+          disabled={blocked || !canOverrideContent()} onChange={event => setPublicationConfirmed(event.currentTarget.checked)} />
+        <Group>
+          <Button disabled={importBlocked || !canOverrideContent() || !publicationConfirmed || !publicationReason.trim()}
+            onClick={() => void act('publication', () => confirmPublication(validPublication))}>Confirm this activation</Button>
+          <Button variant="default" disabled={blocked} onClick={clearPublication}>Discard publication review</Button>
+        </Group>
+      </Stack>
+    </Paper>}
 
     <Stack gap="sm">
       <Group justify="space-between"><Text fw={700}>Transfer history</Text><Text size="xs" c="dimmed">Latest 20 jobs · active jobs refresh automatically</Text></Group>

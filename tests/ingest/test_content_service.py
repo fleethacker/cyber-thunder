@@ -51,7 +51,7 @@ def node(ctx, served):
 
 
 def _strip(records):
-    drop = {"fetched_at", "fetched_by", "source", "ingest", "url", "etag", "upload_date", "authenticity"}
+    drop = {"fetched_at", "fetched_by", "source", "ingest", "url", "etag", "upload_date", "authenticity", "generation", "job_id"}
     return sorted(({k: v for k, v in r.items() if k not in drop} for r in records), key=lambda r: r["filename"])
 
 
@@ -99,7 +99,7 @@ def test_pull_job_end_to_end_matches_a_hand_import(node, served, tmp_path):
     delta = files[STIG]["delta"]
     assert delta and job["deltas"] == [delta] and delta["full_import"]
     ds = Path(files[SCAP]["datastream_path"])
-    assert ds.is_file() and ds.parent.name == "MS_Windows_11" and ds.read_bytes().startswith(b"<?xml")
+    assert ds.is_file() and ds.parent.parent.name == "generations" and ds.read_bytes().startswith(b"<?xml")
 
     # the same file imported by hand on a fresh node produces the same delta
     other = make_ctx(tmp_path / "hand")

@@ -128,29 +128,39 @@ class ContentLibrary:
                 "last_successful_check_at": doc.get("last_successful_check_at") or live,
                 "last_download_at": max([doc.get("last_download_at") or ""] + [r.get("fetched_at") or "" for r in records
                                          if r.get("source") == "pulled"]) or None,
-                "last_import_at": max([doc.get("last_import_at") or ""] + [r.get("fetched_at") or "" for r in records
-                                       if r.get("source") in ("imported", "uploaded")]) or None}
+                "last_import_at": max([doc.get("last_import_at") or ""] + [r.get("fetched_at") or
+                    ((r.get("ingest") or {}).get("upload") or {}).get("imported_at") or "" for r in records
+                    if r.get("source") in ("imported", "uploaded", "local")]) or None}
 
     def catalogs(self) -> tuple[list[dict], list[dict]]:
-        latest = {}
-        for doc in delta.list_deltas(self.state):
-            latest.setdefault(doc.get("benchmark_id"), doc)
+        from .publication import index
+        doc = index(self.state)
         bundled = Path(__file__).resolve().parents[3] / "STIG"
+        paths = [(p, "imported_catalog", {}, False) for p in delta.catalog_dir(self.state).glob("*.xml")]
+        paths += [(p, "bundled_reference", {}, False) for p in bundled.glob("*.xml")]
+        for gid, publication in doc.get("publications", {}).items():
+            report = publication.get("delta")
+            if report:
+                record = publication["record"]
+                at = record.get("fetched_at") or (record.get("ingest", {}).get("upload") or {}).get("imported_at")
+                paths.append((Path(report["catalog_path"]), "imported_catalog", dict(report, created_at=at), gid in set(doc["active"].values())))
         rows, errors = [], []
-        for directory, origin in ((delta.catalog_dir(self.state), "imported_catalog"),
-                                  (bundled, "bundled_reference")):
-            for path in sorted(directory.glob("*.xml")):
-                try:
-                    stat = path.stat()
-                    meta = dict(_catalog_meta(str(path), stat.st_mtime_ns, stat.st_size))
-                    imp = latest.get(meta["benchmark_id"], {}) if origin == "imported_catalog" else {}
-                    rows.append({**meta, "origin": origin, "filename": imp.get("filename") or path.name,
-                                 "imported_at": imp.get("created_at"), "path": str(path)})
-                except (OSError, ValueError, ET.ParseError) as exc:
-                    errors.append({"filename": path.name, "reason": str(exc)[:200]})
+        for path, origin, imp, active in paths:
+            try:
+                stat = path.stat()
+                meta = dict(_catalog_meta(str(path), stat.st_mtime_ns, stat.st_size))
+                rows.append({**meta, "origin": origin, "filename": imp.get("filename") or path.name,
+                             "imported_at": imp.get("created_at"), "path": str(path), "active": active})
+            except (OSError, ValueError, ET.ParseError) as exc:
+                errors.append({"filename": path.name, "reason": str(exc)[:200]})
         return rows, errors
 
     def view(self) -> dict:
+        from .publication import read_scope
+        with read_scope(self.state):
+            return self._view()
+
+    def _view(self) -> dict:
         entries, source = self.service.catalog_entries()
         prefs = self.preferences()
         held = self.service.content()

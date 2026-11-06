@@ -168,20 +168,16 @@ def test_inline_automated_check_is_stored_without_execution(svc):
     assert Path(result["record"]["ingest"]["datastream_path"]).read_bytes() == xml
 
 
-def test_xml_version_wins_over_official_filename(svc):
-    result = upload(svc, archive(("guide-xccdf.xml", benchmark(version="1", release="3"))), OFFICIAL)
-    rec = result["record"]
-    assert rec["version"] == [1, 3]
-    assert rec["filename"] != OFFICIAL
-    selection = select(svc.catalog_entries()[0], [], {}, svc.store.records(), extra_products=["MS_Windows_11"])
-    assert [r["filename"] for r in selection.updates] == [OFFICIAL]
-    assert not selection.current
+def test_filename_version_must_match_validated_content(svc):
+    with pytest.raises(ValueError, match="Filename release"):
+        upload(svc, archive(("guide-xccdf.xml", benchmark(version="1", release="3"))), OFFICIAL)
+    assert not svc.store.records()
 
 
 @pytest.mark.parametrize("kwargs", [{"version": None, "release": None}, {"version": "0.1.76", "release": None},
                                    {"bid": "custom", "version": None, "release": None}])
 def test_unknown_metadata_does_not_satisfy_official_version(svc, kwargs):
-    rec = upload(svc, archive(("guide-xccdf.xml", benchmark(**kwargs))), OFFICIAL)["record"]
+    rec = upload(svc, archive(("guide-xccdf.xml", benchmark(**kwargs))), "unversioned.zip")["record"]
     assert rec["version"] is None and rec["version_label"] is None
     if kwargs.get("bid") == "custom":
         assert rec["product_key"] is None
@@ -190,7 +186,7 @@ def test_unknown_metadata_does_not_satisfy_official_version(svc, kwargs):
 
 
 def test_other_xml_identity_cannot_borrow_filename_product(svc):
-    rec = upload(svc, archive(("guide-xccdf.xml", benchmark(bid="Some_Other_STIG", version="999"))), OFFICIAL)["record"]
+    rec = upload(svc, archive(("guide-xccdf.xml", benchmark(bid="Some_Other_STIG", version="999"))), "other.xml.zip")["record"]
     assert rec["product_key"] is None
     assert not select(svc.catalog_entries()[0], [], {}, svc.store.records(), extra_products=["MS_Windows_11"]).current
 
@@ -216,9 +212,9 @@ def test_identical_bytes_reuse_record_even_when_renamed(svc, monkeypatch):
     sync_before = ContentLibrary(svc).sync_status(svc.store.records())
     def unexpected(*args, **kwargs):
         pytest.fail("duplicate upload must not ingest again")
-    monkeypatch.setattr(svc, "_accept", unexpected)
+    monkeypatch.setattr(svc.ingest, "_prepare_stig", unexpected)
     second = upload(svc, name="renamed.xml", actor="IT1 Jones")
-    assert second == {"record": first["record"], "delta": None}
+    assert second == {**first, "delta": None}
     assert len(svc.store.records()) == 1
     assert ContentLibrary(svc).sync_status(svc.store.records()) == sync_before
     assert list(svc.audit.records())[-1]["details"]["identical"]

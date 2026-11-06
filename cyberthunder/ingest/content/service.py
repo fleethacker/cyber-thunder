@@ -27,6 +27,7 @@ from cyberthunder.findings.schema import utcnow
 from cyberthunder.ingest.content import fetch as fx
 from cyberthunder.ingest.content import index as ix
 from cyberthunder.ingest.content import signatures as sig
+from cyberthunder.ingest.content.publication import PublicationReviewRequired
 from cyberthunder.ingest.content.http import ContentClient, ContentNetworkError
 from cyberthunder.ingest.content.select import select
 from cyberthunder.ingest.content.store import ContentStore
@@ -507,17 +508,20 @@ class ContentService:
                         with sig.receipt(self.ctx, actor, [(res.sha256, res.bytes)], evidence, recheck=source_check,
                                          step_up_continuation=continuation()):
                             rec = self._accept(Path(res.path), entry, source="pulled", actor=actor, sha256=res.sha256,
-                                               etag=res.etag, size=res.bytes)
+                                               etag=res.etag, size=res.bytes, job_id=job["id"])
                     else:
                         rec = self._accept(Path(res.path), entry, source="pulled", actor=actor, sha256=res.sha256,
-                                           etag=res.etag, size=res.bytes)
-                        Path(res.path).unlink(missing_ok=True)
+                                           etag=res.etag, size=res.bytes, job_id=job["id"])
+                        try:
+                            Path(res.path).unlink(missing_ok=True)
+                        except OSError:
+                            rec["commit_status"] = "committed_with_bookkeeping_pending"
                 except Exception as e:  # noqa: BLE001 - record and keep going with the next file
-                    f.update(state="failed", error=f"accepted but not ingested: {e}")
+                    f.update(state="failed", error=f"content publication returned no completion receipt: {e}")
                     continue
                 f.update(state="done", bytes=res.bytes, total=res.bytes, sha256=res.sha256,
                          delta=rec["ingest"].get("delta"), datastream_path=rec["ingest"].get("datastream_path"),
-                         authenticity=rec["authenticity"])
+                         authenticity=rec["authenticity"], commit_status=rec.get("commit_status"), generation=rec.get("generation"))
                 if rec["ingest"].get("delta"):
                     job["deltas"].append(rec["ingest"]["delta"])
                 save(True)
@@ -537,12 +541,17 @@ class ContentService:
             job["finished_at"] = utcnow()
             try:
                 save(True)
+            except Exception:
+                job = self.store.reconcile_job(job)
+                if not any(item.get("generation") for item in job.get("files", [])):
+                    raise
+                job["commit_status"] = "committed_with_bookkeeping_pending"
             finally:
                 with self._job_lock:
                     self._running = None
                 if live_directory is not None:
                     live_directory.cleanup()
-        return job
+        return self.store.reconcile_job(job)
 
     # -- accepting a verified file ----------------------------------------------------------------
     def _auth_event(self, actor, details, **kwargs):
@@ -559,57 +568,34 @@ class ContentService:
             raise
 
     def _accept(self, path: Path, entry: ix.Entry, *, source: str, actor: str, sha256: str, etag: str | None,
-                size: int) -> dict:
+                size: int, publication_intent=None, upload=None, old=None, method=None, job_id=None, catalog_import=False) -> dict:
         """Authorize before publication, parsing or extraction; never trust caller provenance."""
         from cyberthunder.audit.chain import file_lock
-        with self._publication_lock, file_lock(self.store.root / "content-publish.lock"):
-            authenticity = sig.acceptance(self.ctx, actor, sha256, size)
-            with tempfile.TemporaryDirectory(prefix=".publish-", dir=self.store.root) as temporary:
-                snapshot = Path(temporary) / fx.disk_name(entry.filename)
-                copied, length = sig.copy_checked(path, snapshot, maximum=min(self.max_bytes, sig.MAX_FILE_BYTES))
-                if (copied, length) != (sha256, size):
-                    raise sig.AuthenticityError("Content bytes changed before publication")
-                fx.check_file(snapshot, entry.kind, filename=entry.filename)
-                self._auth_event(actor, authenticity, subject=entry.filename)
+        committed = None
+        try:
+            with self._publication_lock, file_lock(self.store.root / "content-publish.lock"):
                 authenticity = sig.acceptance(self.ctx, actor, sha256, size)
-                self.ctx.killswitch.guard("content.import", actor)
-                return self._publish(snapshot, entry, source=source, actor=actor, sha256=sha256, etag=etag,
-                                     size=size, authenticity=authenticity)
+                with tempfile.TemporaryDirectory(prefix=".publish-", dir=self.store.root) as temporary:
+                    snapshot = Path(temporary) / fx.disk_name(entry.filename)
+                    copied, length = sig.copy_checked(path, snapshot, maximum=min(self.max_bytes, sig.MAX_FILE_BYTES))
+                    if (copied, length) != (sha256, size):
+                        raise sig.AuthenticityError("Content bytes changed before publication")
+                    fx.check_file(snapshot, entry.kind, filename=entry.filename)
+                    self._auth_event(actor, authenticity, subject=entry.filename)
+                    authenticity = sig.acceptance(self.ctx, actor, sha256, size)
+                    self.ctx.killswitch.guard("content.import", actor)
+                    committed = self._publish(snapshot, entry, source=source, actor=actor, sha256=sha256, etag=etag,
+                        size=size, authenticity=authenticity, intent=publication_intent, upload=upload,
+                        old=old, method=method, job_id=job_id, catalog_import=catalog_import)
+        except OSError:
+            if committed is None:
+                raise
+            committed["commit_status"] = "committed_with_bookkeeping_pending"
+        return committed
 
-    def _publish(self, path, entry, *, source, actor, sha256, etag, size, authenticity):
-        files = self.store.files_dir
-        files.mkdir(parents=True, exist_ok=True)
-        dest = files / fx.disk_name(entry.filename)
-        ingest: dict[str, Any] = {}
-        datastream = None
-        if entry.kind in ("manual_stig", "srg"):
-            rep = self.ingest.ingest_stig(path, actor=actor, receipt_source=source)
-            ingest.update(delta_id=rep["id"], catalog_path=rep.get("catalog_path"),
-                          delta={"id": rep["id"], "benchmark_id": rep.get("benchmark_id"),
-                                 "old_release": rep.get("old_release"), "new_release": rep.get("new_release"),
-                                 "counts": rep.get("counts"), "rescan_rules": len(rep.get("rescan_rule_ids") or []),
-                                 "full_import": rep.get("full_import"), "filename": entry.filename})
-        elif entry.kind == "scap_benchmark":
-            datastream = self._extract_datastream(path, entry)
-            product = fx.disk_name(entry.product_key or "unknown")
-            stream_dest = self.store.scap_dir / product / (fx.disk_name(Path(entry.filename).stem) + ".xml")
-            ingest["datastream_path"] = str(stream_dest)
-        authenticity = sig.acceptance(self.ctx, actor, sha256, size)
-        self.ctx.killswitch.guard("content.import", actor)
-        os.replace(path, dest)
-        if datastream is not None:
-            stream_dest.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(datastream, stream_dest)
-        rec = {"filename": entry.filename, "disk_name": dest.name, "product_key": entry.product_key, "kind": entry.kind,
-               "version": list(entry.version) if entry.version else None, "version_label": entry.version_label,
-               "upload_date": entry.upload_date, "sha256": sha256, "etag": etag, "bytes": size, "url": entry.url,
-               "fetched_at": utcnow(), "fetched_by": actor, "source": source, "ingest": ingest,
-               "authenticity": authenticity}
-        rec["title"] = entry.title
-        saved = self.store.put(rec)
-        from cyberthunder.ingest.content.library import ContentLibrary
-        ContentLibrary(self).record_transfer(source, saved["fetched_at"])
-        return saved
+    def _publish(self, path, entry, **kwargs):
+        from .publication import publish
+        return publish(self, path, entry, **kwargs)
 
     def _extract_datastream(self, zpath: Path, entry: ix.Entry) -> Path:
         # Stage beside the private source. Publication rechecks authority after extraction.
@@ -625,6 +611,11 @@ class ContentService:
 
     # -- held content -----------------------------------------------------------------------------
     def content(self) -> dict:
+        from .publication import read_scope
+        with read_scope(self.store.state):
+            return self._content()
+
+    def _content(self) -> dict:
         q = self.store.quarantine_dir
         quarantined = []
         if q.is_dir():
@@ -633,7 +624,7 @@ class ContentService:
                     quarantined.append(json.loads(p.read_text(encoding="utf-8")))
                 except (OSError, ValueError):
                     continue
-        return {"files": self.store.records(), "products": self.store.by_product(),
+        return {"generation": self.store.generation(), "files": self.store.records(), "products": self.store.by_product(),
                 "scap": [{"product_key": r.get("product_key"), "filename": r.get("filename"),
                           "datastream_path": r["ingest"].get("datastream_path")}
                          for r in self.store.records() if (r.get("ingest") or {}).get("datastream_path")],
@@ -675,13 +666,16 @@ class ContentService:
         return dict(doc, path=str(out), sha256=digest, authenticity=authenticity,
                     download_text=download_text)
 
-    def import_dir(self, path: str | Path, actor: str, *, override_reason: str | None = None) -> dict:
+    def import_dir(self, path: str | Path, actor: str, *, override_reason: str | None = None, publication_intent=None) -> dict:
         """Verify the complete bundle before parsing a single archive or publishing content."""
         from itertools import islice
+        from .publication import validate_intent
+        publication_intent = validate_intent(publication_intent)
         from cyberthunder.control.identity import require_human
         actor = require_human(actor)
         self.ctx.killswitch.guard("content.import", actor)
         src = Path(path).absolute()
+        progress = {"imported": [], "refused": [], "skipped": [], "missing": [], "deltas": [], "verified_by": None}
         staging = self.store.root / "incoming"
         staging.mkdir(parents=True, exist_ok=True)
         try:
@@ -705,6 +699,8 @@ class ContentService:
                 raise sig.AuthenticityError("Content bundle has missing or unlisted paths")
             if lock and any(name not in actual for name in expected):
                 raise sig.AuthenticityError("Content bundle has missing paths")
+            if publication_intent is not None and len(actual) != 1:
+                raise ValueError("Exceptional publication requires exactly one package")
             manifest = (lock or {}).get("manifest")
             request_raw = None
             if manifest is not None:
@@ -747,14 +743,23 @@ class ContentService:
                         sig.decide(self.ctx, sig.verify_document(request_raw, "request", current)[1], actor, override_reason)
                     return sig.verify_document(raw_lock, "lock", current)[1] if raw_lock else evidence
                 with sig.receipt(self.ctx, actor, digests, evidence, override_reason, recheck=recheck):
-                    result = self._import_directory_contents(work, actor)
+                    result = self._import_directory_contents(work, actor, publication_intent=publication_intent, progress=progress)
                 result["authenticity"] = decision
                 return result
-        except (sig.AuthenticityError, PermissionError, OSError):
+        except Exception as exc:
+            if progress["imported"]:
+                # A later package or temporary-directory cleanup cannot negate an earlier commit.
+                progress.update(status="partial", commit_status="committed_with_bookkeeping_pending", authenticity=decision)
+                progress["refused"].append({"filename": "remaining processing", "reason":
+                    "Processing stopped after committed content; reconcile the library before retrying (" + type(exc).__name__ + ")"})
+                progress["deltas"] = [r["ingest"]["delta"] for r in progress["imported"] if r["ingest"].get("delta")]
+                return progress
+            if not isinstance(exc, (sig.AuthenticityError, PermissionError, OSError)):
+                raise
             self._auth_event(actor, {"status": "refused"}, outcome="blocked")
             raise sig.AuthenticityError("Content bundle refused: check attestation, scope, paths and file hashes") from None
 
-    def import_upload(self, data: bytes, filename: str, actor: str, *, override_reason=None):
+    def import_upload(self, data: bytes, filename: str, actor: str, *, override_reason=None, publication_intent=None):
         """Gate raw uploads before the parser; signed packages use import_dir."""
         import hashlib
         from cyberthunder.ingest.content.uploads import import_content, MAX_UPLOAD_BYTES
@@ -765,7 +770,7 @@ class ContentService:
         digest = hashlib.sha256(data).hexdigest()
         self._auth_event(actor, dict(decision, sha256=digest))
         with sig.receipt(self.ctx, actor, [(digest, len(data))], evidence, override_reason):
-            result = import_content(self, data, filename, actor)
+            result = import_content(self, data, filename, actor, publication_intent=publication_intent)
         result["authenticity"] = decision
         return result
 
@@ -775,17 +780,23 @@ class ContentService:
         decision = self._decision(evidence, actor, override_reason)
         staging = self.store.root / "incoming"
         staging.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="stig-", dir=staging) as temporary:
-            copied = Path(temporary) / sig.filename(Path(path).name)
-            digest, size = sig.copy_checked(path, copied, maximum=min(self.max_bytes, sig.MAX_FILE_BYTES))
-            self.ctx.killswitch.guard("content.import", actor)
-            self._auth_event(actor, dict(decision, sha256=digest))
-            self._decision(evidence, actor, override_reason)
-            with sig.receipt(self.ctx, actor, [(digest, size)], evidence, override_reason):
-                result = self.ingest.ingest_stig(copied, actor=actor, **kwargs)
-        return dict(result, authenticity=decision)
+        result = None
+        try:
+            with tempfile.TemporaryDirectory(prefix="stig-", dir=staging) as temporary:
+                copied = Path(temporary) / sig.filename(Path(path).name)
+                digest, size = sig.copy_checked(path, copied, maximum=min(self.max_bytes, sig.MAX_FILE_BYTES))
+                self.ctx.killswitch.guard("content.import", actor)
+                self._auth_event(actor, dict(decision, sha256=digest))
+                self._decision(evidence, actor, override_reason)
+                with sig.receipt(self.ctx, actor, [(digest, size)], evidence, override_reason):
+                    result = self.ingest.ingest_stig(copied, actor=actor, **kwargs)
+            return dict(result, authenticity=decision)
+        except OSError:
+            if result is None:
+                raise
+            return dict(result, authenticity=decision, commit_status="committed_with_bookkeeping_pending")
 
-    def _import_directory_contents(self, path: str | Path, actor: str) -> dict:
+    def _import_directory_contents(self, path: str | Path, actor: str, *, publication_intent=None, progress=None) -> dict:
         from cyberthunder.control.identity import require_human
         actor = require_human(actor)
         self.ctx.killswitch.guard("content.import", actor)
@@ -804,7 +815,9 @@ class ContentService:
         by_disk = {fx.disk_name(e.filename): e for e in entries}
         staging = self.store.root / "incoming"
         staging.mkdir(parents=True, exist_ok=True)
-        imported, refused, skipped = [], [], []
+        progress = progress if progress is not None else {"imported": [], "refused": [], "skipped": []}
+        imported, refused, skipped = (progress[k] for k in ("imported", "refused", "skipped"))
+        progress["verified_by"] = LOCK_NAME if lock else "integrity checks"
         for p in sorted(src.iterdir()):
             self.ctx.killswitch.guard("content.import", actor)
             if not p.is_file() or p.name == LOCK_NAME or p.name.endswith((".part", ".part.json", ".why.json")) \
@@ -829,7 +842,9 @@ class ContentService:
                     with p.open("rb") as source:
                         data = source.read(MAX_UPLOAD_BYTES + 1)
                     sig.acceptance(self.ctx, actor, hashlib.sha256(data).hexdigest(), len(data))
-                    imported.append(import_content(self, data, p.name, actor)["record"])
+                    imported.append(import_content(self, data, p.name, actor, publication_intent=publication_intent)["record"])
+                except PublicationReviewRequired:
+                    raise
                 except ValueError as exc:
                     refused.append({"filename": p.name, "reason": str(exc)})
                 continue
@@ -856,9 +871,7 @@ class ContentService:
                 continue
             size = work.stat().st_size
             rec = self._accept(work, entry, source="imported", actor=actor, sha256=digest,
-                               etag=(info or {}).get("etag"), size=size)
-            self.audit.append("content.import", actor, {"url": str(p), "bytes": size, "sha256": digest},
-                              subject=entry.filename)
+                               etag=(info or {}).get("etag"), size=size, publication_intent=publication_intent)
             imported.append(rec)
         missing = [f["filename"] for f in (lock or {}).get("files", []) if f.get("disk_name")
                    and not (src / f["disk_name"]).is_file()]

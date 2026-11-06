@@ -1,7 +1,7 @@
 // Typed fetch wrapper for /api/v1. Verified sessions carry an opaque cookie and CSRF protection.
 // Errors come back as ApiError with the server's {detail} verbatim.
 import type {
-  AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, ContentManifest, DeltaReport,
+  PublicationIntent, AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, ContentManifest, DeltaReport,
   DemoStatus, DiscoveredAsset, DiscoveredTarget, DiscoveryAccept, Finding, DiscoveryMode, DiscoveryOverview, DiscoveryRun, DiscoveryScope,
   DiscoveryStatus, Explanation, FindingPlus, FindingsPage, FindingsQuery, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
   Outbox, PolicyDecision, ProposalDiff, ProposalPlan, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
@@ -262,14 +262,15 @@ export const api = {
   content: () => get<HeldContent>('/ingest/content'),
   stigLibrary: () => get<StigLibrary>('/ingest/library'),
   saveLibraryPreferences: (body: LibraryPreferencesInput) => put<LibraryPreferences>('/ingest/library/preferences', body),
-  uploadContent: (file: File, overrideReason?: string) => {
+  uploadContent: (file: File, overrideReason?: string, publicationIntent?: PublicationIntent) => {
     const form = new FormData();
     form.append('file', file);
     if (overrideReason !== undefined) form.append('override_reason', overrideReason);
+    if (publicationIntent !== undefined) form.append('publication_intent', JSON.stringify(publicationIntent));
     return request<ContentUploadResult>('POST', '/ingest/content/upload', { form });
   },
   writeManifest: () => post<ContentManifest>('/ingest/manifest'),
-  importDir: (path: string, overrideReason?: string) => post<ImportDirResult>('/ingest/import-dir', { path, override_reason: overrideReason }),
+  importDir: (path: string, overrideReason?: string, publicationIntent?: PublicationIntent) => post<ImportDirResult>('/ingest/import-dir', { path, override_reason: overrideReason, publication_intent: publicationIntent }),
   outbox: () => get<Outbox>('/outbox'),
   sync: () => post<SyncResult>('/outbox/sync'),
 
