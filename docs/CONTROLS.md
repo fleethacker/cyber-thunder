@@ -86,7 +86,9 @@ assessment objectives for the actual system boundary.
    distinct approvals, apply and verification outcomes, and any rollback result.
    Preserve uncertain/failed outcomes. [Report exports](../cyberthunder/report/service.py)
    and [their access checks](../cyberthunder/report/access.py) require the current
-   account's appropriate export grants.
+   account's node export permission and export grants for the included artifacts'
+   original ownership. Report generation also requires the separate node-wide
+   audit permission because reports consume audit evidence or its verified head.
 5. **Verify audit evidence under its own permission.** Audit access is a separate
    node-wide grant; permission to read one target is not permission to read the
    whole chain. An authorized operator can use the Audit view and
@@ -110,7 +112,7 @@ retention period.
 
 | Field | Current record |
 |---|---|
-| Source mapping reviewed | 2026-11-06 UTC; compare the delivered commit with its release receipt |
+| Implementation source reviewed | `a5d031acbb50f44ab3d5acf7723beacf2a4bccb6`; source review only, no deployed image assessed |
 | System boundary and baseline | Not assigned by this project document |
 | ISSO / control assessor | Not assigned; no external review has been recorded |
 | Authorizing official / sponsor | Not confirmed |
