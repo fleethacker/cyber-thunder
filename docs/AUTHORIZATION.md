@@ -38,7 +38,7 @@ discover an issuer from a request or token. Register one exact callback, with no
 | `CT_OIDC_TOKEN_ENDPOINT` | Provider token endpoint; exchanges are bounded and do not follow redirects. |
 | `CT_OIDC_REDIRECT_URI` | Fixed HTTPS callback ending exactly in `/auth/callback`, for example `https://thunder.example/auth/callback`. Request Host/Forwarded headers cannot choose it. |
 | `CT_OIDC_CLIENT_SECRET_REF` | Optional reference for a confidential client: `BROWSER_CLIENT` reads server environment variable `CT_CRED_BROWSER_CLIENT`. Omit for a public PKCE client. Never put the secret itself in this setting. |
-| `CT_OIDC_SCOPE` | Requested browser scope, default `openid`. |
+| `CT_OIDC_SCOPE` | Requested browser scopes, default `openid`. Match the configured realm/client scope profile; the local Keycloak acceptance used `openid profile email`. Unrequested granted scopes are rejected. |
 | `CT_SESSION_IDLE_SECONDS`, `CT_SESSION_ABSOLUTE_SECONDS` | Idle and absolute session limits, default `900` and `28800`. |
 
 All four browser settings (client ID, authorization endpoint, token endpoint, redirect URI) must be
