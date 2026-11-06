@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import base64
 import hashlib
 import math
 import re
+import secrets
 import time
 
 from .errors import ClientError, redact, text
@@ -33,9 +35,9 @@ class ClientAuth:
         self._raw_wall = wall
         return self._wall
 
-    def _identity(self, access, *, timeout=10):
+    def _identity(self, access, *, timeout=10, private=()):
         value = require_api(self.http.request("api", method="GET", route="/whoami", credential=access, timeout=timeout),
-                            credentials=(access,))
+                            credentials=(access, *private))
         p = value.get("principal")
         if (value.get("mode") not in {"oidc", "mesh"} or value.get("verified") is not True or not isinstance(p, dict)
                 or p.get("verified") is not True or p.get("kind") != "human" or p.get("via") not in {"oidc", "mesh"}
@@ -51,6 +53,8 @@ class ClientAuth:
                 or any(not text(x, 128) for x in p["amr"])):
             raise ClientError("identity_response_invalid", outcome=3)
         identity = {k: p.get(k) for k in ("iss", "sub", "name", "actor", "auth_time", "acr", "amr")}
+        if redact(identity, *private) != identity:
+            raise ClientError("identity_response_invalid", outcome=3)
         return identity, expiry
 
     @staticmethod
@@ -58,9 +62,10 @@ class ClientAuth:
         if any(before.get(k) != after.get(k) for k in ("iss", "sub", "actor", "auth_time", "acr", "amr")):
             raise ClientError("identity_or_assurance_changed_login_required", outcome=3)
 
-    def _tokens(self, response, previous=None, *, deadline=None):
+    def _tokens(self, response, previous=None, *, deadline=None, private=()):
         data = response.body
-        if (response.status != 200 or "error" in data or str(data.get("token_type", "")).lower() != "bearer"
+        if (response.status != 200 or "error" in data or redact(data, *private) != data
+                or str(data.get("token_type", "")).lower() != "bearer"
                 or not secret(data.get("access_token"), 16384) or type(data.get("expires_in")) is not int
                 or not 1 <= data["expires_in"] <= 3600):
             raise ClientError("token_response_invalid", outcome=3, source="idp", status=response.status)
@@ -77,7 +82,7 @@ class ClientAuth:
         remaining = 10 if deadline is None else deadline - time.monotonic()
         if remaining <= 0:
             raise ClientError("authorization_expired", outcome=4, source="idp")
-        identity, expiry = self._identity(data["access_token"], timeout=remaining)
+        identity, expiry = self._identity(data["access_token"], timeout=remaining, private=private)
         if previous is not None:
             self._same_identity(previous["identity"], identity)
         deadline = min(start + data["expires_in"], expiry, start + 3600)
@@ -114,11 +119,17 @@ class ClientAuth:
             record["observed_at"] = self.now(record)
             self.store.save(record)
             generation = record["generation"]
+            # One 256-bit verifier per attempt, retained only until login returns.
+            # Keycloak's device endpoint binds this S256 challenge to its code.
+            verifier = secrets.token_urlsafe(32)
+            challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
             begun = time.monotonic()
-            response = self.http.request("device_authorization_endpoint", payload={"client_id": self.profile["client_id"], "scope": self.profile["scope"]})
+            response = self.http.request("device_authorization_endpoint", payload={"client_id": self.profile["client_id"],
+                "scope": self.profile["scope"], "code_challenge": challenge, "code_challenge_method": "S256"})
         data = response.body
         interval, expires = data.get("interval", 5), data.get("expires_in")
-        if (response.status != 200 or "error" in data or not secret(data.get("device_code"), 8192)
+        if (response.status != 200 or "error" in data or redact(data, verifier) != data
+                or not secret(data.get("device_code"), 8192)
                 or not isinstance(data.get("user_code"), str) or not re.fullmatch(r"[A-Za-z0-9-]{4,32}", data["user_code"])
                 or data.get("verification_uri") != self.profile["verification_uri"]
                 or type(expires) is not int or not 1 <= expires <= 86400
@@ -145,7 +156,7 @@ class ClientAuth:
                     raise ClientError("authorization_expired", outcome=4, source="idp")
                 try:
                     response = self.http.request("token_endpoint", payload={"grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                        "device_code": data["device_code"], "client_id": self.profile["client_id"]}, timeout=remaining)
+                        "device_code": data["device_code"], "client_id": self.profile["client_id"], "code_verifier": verifier}, timeout=remaining)
                 except ClientError as error:
                     if error.code != "request_timeout":
                         raise
@@ -159,7 +170,7 @@ class ClientAuth:
                 if response.status != 200 or error is not None:
                     code = error if isinstance(error, str) and error in {"access_denied", "expired_token"} else "authorization_failed"
                     raise ClientError(code, outcome=3, source="idp", status=response.status)
-                session = self._tokens(response, deadline=deadline)
+                session = self._tokens(response, deadline=deadline, private=(verifier, data["device_code"]))
                 if time.monotonic() >= deadline:
                     raise ClientError("authorization_expired", outcome=4, source="idp")
                 current.update(phase="ready", session=session, observed_at=self.now(current))

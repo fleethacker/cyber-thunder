@@ -70,6 +70,16 @@ account; an ID token is never sent to it as an API credential.
 
 ## Login and protected storage
 
+The device flow always uses S256 PKCE. Configure the public client to require
+S256 and enable device authorization; the provider must support PKCE on its
+device endpoint. Each login generates a fresh 256-bit verifier, sends its SHA-256
+challenge and `code_challenge_method=S256` to that endpoint, and sends the verifier
+only during redemption. The verifier stays in memory and the HTTPS worker's
+private input pipe; it is not stored with tokens or exposed as an option. Polls
+reuse it only within that attempt. Rejection never retries without PKCE or with
+`plain`. Keycloak 26.7.4 implements this device extension; support is not implied
+by RFC 8628 alone. See [the contract and review boundaries](CLI_DEVICE_PKCE.md).
+
 These examples use a Linux path. On Windows use an absolute protected profile
 path, for example `C:/Users/operator/ClientProfiles/node.json`.
 

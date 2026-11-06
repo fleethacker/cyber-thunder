@@ -1,5 +1,7 @@
 """Signed device grants over loopback TLS against the actual verified API."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import base64
+import hashlib
 import json
 import ssl
 import threading
@@ -64,7 +66,10 @@ def integrated(state_dir, tmp_path, certificates, signing_keys, profile_factory,
             elif self.path == "/jwks":
                 self.respond(200, {"keys": [jwk(signing_keys["rsa"])]})
             elif self.path == "/device":
-                assert parse_qs(raw.decode())["client_id"] == ["ct-human"]
+                body = parse_qs(raw.decode())
+                assert body["client_id"] == ["ct-human"]
+                assert body["code_challenge_method"] == ["S256"] and "code_verifier" not in body
+                state.challenge = body["code_challenge"][0]
                 self.respond(200, {"device_code": state.code, "user_code": "FIXTURE-CODE", "expires_in": 60,
                                    "interval": 1, "verification_uri": state.url + "/verify"})
             elif self.path == "/token":
@@ -72,8 +77,12 @@ def integrated(state_dir, tmp_path, certificates, signing_keys, profile_factory,
                 assert body["client_id"] == ["ct-human"] and "client_secret" not in body
                 if body["grant_type"] == ["urn:ietf:params:oauth:grant-type:device_code"]:
                     assert body["device_code"] == [state.code]
+                    verifier = body["code_verifier"][0]
+                    assert len(verifier) == 43
+                    assert base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode() == state.challenge
                 else:
                     assert body["grant_type"] == ["refresh_token"]
+                    assert "code_verifier" not in body
                     state.subject = state.refresh.pop(body["refresh_token"][0])
                 self.respond(200, issue())
             elif self.path == "/revoke":
