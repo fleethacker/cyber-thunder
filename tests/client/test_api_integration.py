@@ -1,4 +1,5 @@
 """Signed device grants over loopback TLS against the actual verified API."""
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
@@ -28,8 +29,8 @@ from cyberthunder.remediation.library import FixEntry
 from tests.security.test_oidc import jwk
 
 
-@pytest.fixture
-def integrated(state_dir, tmp_path, certificates, signing_keys, profile_factory, monkeypatch):
+@contextmanager
+def integrated_environment(state_dir, tmp_path, certificates, signing_keys, profile_factory, monkeypatch):
     ca, certificate_files = certificates
     state = SimpleNamespace(subject="alice", changes={}, counter=0, refresh={}, api=None, requests=[], code="fixture-device")
     def issue():
@@ -95,7 +96,8 @@ def integrated(state_dir, tmp_path, certificates, signing_keys, profile_factory,
         do_POST = route
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.daemon_threads = True
+    # server_close must join owned handlers before their ASGI client disappears.
+    server.daemon_threads = False
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.load_cert_chain(*map(str, certificate_files["valid"]))
     server.socket = tls.wrap_socket(server.socket, server_side=True)
@@ -107,6 +109,11 @@ def integrated(state_dir, tmp_path, certificates, signing_keys, profile_factory,
     profile = profile_factory(state.url, ca_file=str(ca))
     ctx = AppContext(Settings(state_dir=state_dir, auth_mode="dev", llm_backend="template",
                               auto_propose=False, explain_precompute=False))
+    def stop_bridge():
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=3)
+        assert not worker.is_alive()
     try:
         for tid in ("alpha", "beta"):
             ctx.inventory.add(Target(tid, tid, "linux", transport="simulated", simulated=True, environment=tid))
@@ -143,13 +150,20 @@ def integrated(state_dir, tmp_path, certificates, signing_keys, profile_factory,
         with TestClient(create_app(ctx)) as api:
             state.api = api
             auth = ClientAuth(profile, store=TokenStore(profile.digest, root=tmp_path / "client-private"))
-            yield auth, state, ctx, proposals
+            try:
+                yield auth, state, ctx, proposals
+            finally:
+                # No handler may enter/use TestClient during its portal teardown.
+                stop_bridge()
     finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=3)
-        assert not worker.is_alive()
+        stop_bridge()
         ctx.store.close()
+
+
+@pytest.fixture
+def integrated(state_dir, tmp_path, certificates, signing_keys, profile_factory, monkeypatch):
+    with integrated_environment(state_dir, tmp_path, certificates, signing_keys, profile_factory, monkeypatch) as environment:
+        yield environment
 
 
 def args(group, operation, **values):
