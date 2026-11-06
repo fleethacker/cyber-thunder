@@ -1,11 +1,13 @@
 """Image baselines stay within explicit namespace and account permissions."""
 from copy import deepcopy
 from contextlib import contextmanager
+from dataclasses import replace
 import json
+from pathlib import Path
 
 import pytest
 
-from cyberthunder.control.principal import Principal, principal_scope
+from cyberthunder.control.principal import Principal, principal_scope, operation_scope
 from cyberthunder.inventory.targets import ScopeViolation
 from tests.cluster.test_guardrails import (
     ACTOR, APP_IMAGE, completed, ctx, external_calls, fake_tools, target,
@@ -272,3 +274,196 @@ def test_namespace_response_bounds_and_envelope(fault, monkeypatch):
         payload = payload[:-1] + ',"untrusted": NaN}'
     with pytest.raises(ValueError):
         scope.decode_list(payload, 'deployments', 'mission')
+
+
+@pytest.mark.parametrize('args', [('get', 'pods', '-A'), ('get', 'pods', '-n', 'outside')])
+def test_review_selected_account_cannot_expand_namespace_reads(selected_cluster, monkeypatch, args):
+    context, selected, person, _, _, calls = selected_cluster
+    restrict(context, selected, ['mission'])
+    # A backing tool that would allow the read must not expand the app's scope.
+    def permissive(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return completed(argv, {'items': []})
+    monkeypatch.setattr('subprocess.run', permissive)
+    with principal_scope(person), operation_scope('scan'):
+        binding = context.cluster._binding(selected.id)
+        with pytest.raises(PermissionError):
+            context.cluster._kubectl_json(binding, person.actor, *args)
+    assert calls == []
+
+
+def test_review_broad_credential_never_scans_unselected_images(ctx, target, external_calls):
+    restrict(ctx, target, ['mission'])
+    def broad_account(argv, **kwargs):
+        # The backing account would allow the legacy global survey, including ops.
+        return tools(argv, **kwargs) if '-n' in argv else fake_tools(argv, **kwargs)
+    external_calls[0].side_effect = broad_account
+    result = ctx.cluster.scan(actor=ACTOR)
+    requests = [c.args[0] for c in external_calls[0].call_args_list]
+    assert result['status'] == 'done'
+    assert {w['namespace'] for w in result['survey']['workloads']} == {'mission'}
+    assert {p['namespace'] for p in result['namespaces']} == {'mission'}
+    assert all('-A' not in argv and 'namespaces' not in argv for argv in requests)
+    assert {argv[-1] for argv in requests if argv[0] == 'trivy'} == {APP_IMAGE}
+    assert all(f.collection_provenance['workload']['namespace'] == 'mission'
+               for f in ctx.store.current_findings() if f.is_open)
+
+
+def test_review_verified_baseline_never_publishes_other_namespace(selected_cluster, monkeypatch):
+    context, selected, person, _, _, calls = selected_cluster
+    restrict(context, selected, ['mission'])
+    @contextmanager
+    def database():
+        yield {'cache_dir': context.store.root / 'cache', 'generation': 'fixture-generation', 'state': 'ready'}
+    monkeypatch.setattr(context.vulnerabilities, 'scan_context', database)
+    def broad_account(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return tools(argv, **kwargs) if '-n' in argv else fake_tools(argv, **kwargs)
+    monkeypatch.setattr('subprocess.run', broad_account)
+    with principal_scope(person):
+        result = context.cluster.scan(actor=person.actor, target_id=selected.id)
+    scanned = {argv[-1] for argv, _ in calls if argv[0] == 'trivy'}
+    published = {f.collection_provenance['workload']['namespace']
+                 for f in context.store.current_findings() if f.is_open}
+    assert {'scanned_images': scanned, 'published_namespaces': published} == {
+        'scanned_images': {APP_IMAGE}, 'published_namespaces': {'mission'}}
+    assert result['status'] == 'done'
+    assert all('-A' not in argv and 'namespaces' not in argv for argv, _ in calls)
+    assert all(argv[argv.index('--image-src') + 1] == 'remote' for argv, _ in calls if argv[0] == 'trivy')
+
+
+@pytest.mark.parametrize('namespaces', [None, ('mission', 'outside')])
+def test_review_forged_binding_cannot_remove_namespace_limit(ctx, target, external_calls, namespaces):
+    restrict(ctx, target, ['mission'])
+    binding = replace(ctx.cluster._binding(target.id), namespaces=namespaces)
+    with pytest.raises(ScopeViolation):
+        ctx.cluster._kubectl_json(binding, ACTOR, 'get', 'pods', '-A')
+    external_calls[0].assert_not_called()
+
+
+def test_review_namespace_selection_comes_from_persisted_target(selected_cluster, monkeypatch):
+    context, selected, person, _, _, calls = selected_cluster
+    restrict(context, selected, ['mission'])
+    selected.options['namespaces'] = ['cached-outside']  # deliberately unsaved
+    def capture(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return tools(argv, **kwargs)
+    monkeypatch.setattr('subprocess.run', capture)
+    with principal_scope(person):
+        result = context.cluster.survey(actor=person.actor, target_id=selected.id)
+    assert result['target']['namespaces'] == ['mission']
+    assert len(calls) == 6
+    assert all(argv[argv.index('-n') + 1] == 'mission' for argv, _ in calls)
+
+
+def test_review_partial_rescan_clears_only_observed_namespace(ctx, target, external_calls):
+    restrict(ctx, target)
+    process = external_calls[0]
+    process.side_effect = tools
+    ctx.cluster.scan(actor=ACTOR)
+    previous = {f.collection_provenance['workload']['namespace']: f.id
+                for f in ctx.store.current_findings() if f.is_open}
+    assert set(previous) == {'mission', 'ops'}
+    def partial(argv, **kwargs):
+        if argv[0] == 'trivy':
+            return completed(argv, {'Results': [{'Target': 'fixture-image', 'Class': 'os-pkgs', 'Type': 'debian'}]})
+        if 'deployments' in argv and 'ops' in argv:
+            answer = completed(argv, {})
+            answer.returncode, answer.stderr = 1, 'Forbidden: ops deployments'
+            return answer
+        return tools(argv, **kwargs)
+    process.side_effect = partial
+    result = ctx.cluster.scan(actor=ACTOR)
+    assert result['status'] == 'partial'
+    assert {f.id for f in ctx.store.current_findings() if f.is_open} == {previous['ops']}
+    assert any(f.rule_id.startswith('cluster-survey:') for f in ctx.store.current_findings())
+
+
+@pytest.mark.parametrize('filename', ['trivy-config.yaml', 'trivy-ignore', 'raw-report'])
+def test_review_scanner_file_denial_is_unavailable(ctx, target, external_calls, monkeypatch, filename):
+    restrict(ctx, target, ['mission'])
+    external_calls[0].side_effect = tools
+    original = Path.write_text
+    def denied(path, *args, **kwargs):
+        if path.name == filename or (filename == 'raw-report' and path.name.startswith('trivy_') and path.suffix == '.json'):
+            raise PermissionError('private-fixture-workspace-path')
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'write_text', denied)
+    result = ctx.cluster.scan(actor=ACTOR)
+    assert result['status'] == 'partial'
+    assert 'private-fixture-workspace-path' not in json.dumps(result)
+    assert any('workspace unavailable (PermissionError)' in error for error in result['errors'])
+    findings = ctx.store.load_findings(result['id'])
+    assert any(f.rule_id.startswith('cluster-coverage:') and f.status == 'error' for f in findings)
+    assert all(f.collection_provenance['kubernetes_scope']['namespaces'] == ['mission'] for f in findings)
+
+
+@pytest.mark.parametrize('error_type', [OSError, PermissionError])
+def test_review_fatal_namespace_error_keeps_scope(ctx, target, external_calls, monkeypatch, error_type):
+    restrict(ctx, target, ['mission'])
+    external_calls[0].side_effect = tools
+    original = Path.mkdir
+    def failed(path, *args, **kwargs):
+        if path.parent == ctx.cluster.root / 'baselines':
+            raise error_type('private-fixture-run-path')
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'mkdir', failed)
+    with pytest.raises(RuntimeError, match='workspace unavailable'):
+        ctx.cluster.scan(actor=ACTOR)
+    findings = ctx.store.current_findings()
+    assert len(findings) == 1 and findings[0].status == 'error'
+    assert findings[0].collection_provenance['kubernetes_scope'] == {
+        'mode': 'namespace', 'namespaces': ['mission'], 'cluster_complete': False, 'namespace_lists_complete': False}
+    assert 'private-fixture-run-path' not in findings[0].evidence
+
+
+@pytest.mark.parametrize('stage', ['execute', 'workspace'])
+def test_review_revocation_overrides_scanner_os_denial(selected_cluster, monkeypatch, stage):
+    context, selected, person, _, policy, calls = selected_cluster
+    restrict(context, selected, ['mission'])
+    @contextmanager
+    def database():
+        yield {'cache_dir': context.store.root / 'cache', 'generation': 'fixture-generation', 'state': 'ready'}
+    monkeypatch.setattr(context.vulnerabilities, 'scan_context', database)
+    original_mkdir = Path.mkdir
+    def directory_denied(path, *args, **kwargs):
+        if stage == 'workspace' and path.name == 'scanner-home':
+            policy.write_text('{"version":1,"entries":[]}', encoding='utf-8')
+            raise PermissionError('private-fixture-directory-path')
+        return original_mkdir(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'mkdir', directory_denied)
+    def revoked(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if argv[0] == 'trivy':
+            policy.write_text('{"version":1,"entries":[]}', encoding='utf-8')
+            raise PermissionError('private-fixture-executable-path')
+        return tools(argv, **kwargs)
+    monkeypatch.setattr('subprocess.run', revoked)
+    with principal_scope(person), pytest.raises(PermissionError):
+        context.cluster.scan(actor=person.actor, target_id=selected.id)
+    assert len(calls) == (7 if stage == 'execute' else 6)
+    assert context.store.current_findings() == []
+    assert context.store.read_json(context.cluster.root / 'latest.json') is None
+
+
+@pytest.mark.parametrize('resource', list(TYPES))
+@pytest.mark.parametrize('fault', ['container_name', 'foreign_namespace', 'missing_image', 'wrong_template'])
+def test_review_all_workload_kinds_reject_malformed_identities(resource, fault):
+    from cyberthunder.cluster.scope import decode_list
+    kind, api = TYPES[resource]
+    pod = {'containers': [{'name': 'nginx', 'image': APP_IMAGE}]}
+    spec = pod if kind == 'Pod' else {'template': {'spec': pod}}
+    if kind == 'CronJob':
+        spec = {'jobTemplate': {'spec': spec}}
+    item = {'apiVersion': api, 'kind': kind, 'metadata': {'name': 'valid-name', 'namespace': 'mission', 'uid': 'fixture-uid'}, 'spec': spec}
+    if fault == 'container_name':
+        pod['containers'][0]['name'] = '../../escape'
+    elif fault == 'foreign_namespace':
+        item['metadata']['namespace'] = 'outside'
+    elif fault == 'missing_image':
+        pod['containers'][0].pop('image')
+    else:
+        item['spec'] = {'unexpected': pod}
+    doc = {'apiVersion': api, 'kind': kind + 'List', 'metadata': {}, 'items': [item]}
+    with pytest.raises(ValueError):
+        decode_list(json.dumps(doc), resource, 'mission')

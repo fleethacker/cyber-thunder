@@ -19,6 +19,11 @@ MAX_LIST_ITEMS = 10000
 _LABEL = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?')
 
 
+def collection_scope(namespaces: tuple[str, ...], *, complete: bool) -> dict:
+    return {'mode': 'namespace', 'namespaces': list(namespaces),
+            'cluster_complete': False, 'namespace_lists_complete': complete}
+
+
 def guard_read(args: tuple[str, ...], namespaces: tuple[str, ...]) -> None:
     if (len(args) != 4 or args[0] != 'get' or args[1] not in _TYPES
             or args[2] != '-n' or args[3] not in namespaces):

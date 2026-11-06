@@ -42,6 +42,11 @@ coverage; the service does not retry with a broader account or a cluster-wide
 command. Valid observed images can still yield findings. Unobserved image scopes
 do not clear earlier findings.
 
+Local scanner execution or workspace file denials are unavailable coverage,
+with sanitized errors. They are distinct from current account authorization
+failures, which stop the operation before publication. Fatal namespace baseline
+errors retain the selected namespaces in their error-finding provenance.
+
 ## Image availability remains separate
 
 This change does not import images, enable a Docker socket, choose a local archive,

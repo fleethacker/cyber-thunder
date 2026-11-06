@@ -27,7 +27,7 @@ from cyberthunder.control.principal import authorize, current_operation, operati
 from cyberthunder.cluster.findings import (
     database_provenance, is_stale, mark_missing_sections, normalize_findings, parse_report,
 )
-from cyberthunder.cluster.scope import WORKLOAD_KINDS, decode_list, guard_read
+from cyberthunder.cluster.scope import WORKLOAD_KINDS, collection_scope, decode_list, guard_read
 from cyberthunder.findings.schema import Finding, summarize, utcnow
 from cyberthunder.inventory.targets import Inventory, ScopeViolation, Target
 from cyberthunder.scan import ScanRun, TargetScanResult
@@ -341,8 +341,7 @@ class ClusterBaselineService:
         result = {"surveyed_at": utcnow(), "namespaces": namespaces, "workloads": [w.to_dict() for w in workloads],
                   "errors": errors}
         if binding.namespaces is not None:
-            result['collection_scope'] = {'mode': 'namespace', 'namespaces': list(binding.namespaces),
-                                          'cluster_complete': False, 'namespace_lists_complete': not errors}
+            result['collection_scope'] = collection_scope(binding.namespaces, complete=not errors)
         return result
 
     @operation("scan")
@@ -359,7 +358,10 @@ class ClusterBaselineService:
                 if self.ctx.store.load_scan_run(details["run_id"]) is None:
                     self._guard(binding, details["requested_by"])
                     error = f"Cluster vulnerability assessment failed ({type(exc).__name__})"
-                    findings, _ = normalize_findings(binding.target_id, {"errors": [error]}, {}, None,
+                    failed_survey = {"errors": [error]}
+                    if binding.namespaces is not None:
+                        failed_survey['collection_scope'] = collection_scope(binding.namespaces, complete=False)
+                    findings, _ = normalize_findings(binding.target_id, failed_survey, {}, None,
                                                      details["run_id"], target_binding=binding.to_dict())
                     findings = [f for f in findings if f.rule_id.startswith("cluster-survey:")]
                     self.ctx.store.save_findings(details["run_id"], findings)
@@ -394,7 +396,10 @@ class ClusterBaselineService:
         run_id = details["run_id"]
         run_dir = self.root / "baselines" / run_id
         self._guard(binding, actor)
-        run_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(f"Image scan workspace unavailable ({type(exc).__name__})") from None
         image_reports: dict[str, dict] = {}
         errors: list[str] = list(survey.get("errors") or [])
         if snapshot_error:
@@ -475,8 +480,14 @@ class ClusterBaselineService:
         # CLI flags take precedence, and inherited configuration/filters must not silently narrow
         # coverage or enable database updates. Keep ordinary registry/proxy credentials available.
         config_path, ignore_path = run_dir / "trivy-config.yaml", run_dir / "trivy-ignore"
-        config_path.write_text("{}\n", encoding="utf-8")
-        ignore_path.write_text("", encoding="utf-8")
+        isolated = run_dir / "scanner-home"
+        try:
+            config_path.write_text("{}\n", encoding="utf-8")
+            ignore_path.write_text("", encoding="utf-8")
+            if binding.account is not None:
+                isolated.mkdir(mode=0o700, exist_ok=True)
+        except OSError as exc:
+            return None, f"Trivy workspace unavailable ({type(exc).__name__})"
         args = [self.ctx.settings.trivy_binary, "image", "--quiet", "--format", "json",
                 "--config", str(config_path), "--ignorefile", str(ignore_path),
                 "--cache-dir", str(snapshot["cache_dir"]), "--cache-backend", "memory",
@@ -485,8 +496,6 @@ class ClusterBaselineService:
         env = {key: value for key, value in os.environ.items() if not key.upper().startswith("TRIVY_")}
         if binding.account is not None:
             from cyberthunder.vulnerabilities.engine import environment
-            isolated = run_dir / "scanner-home"
-            isolated.mkdir(mode=0o700, exist_ok=True)
             env = environment(isolated)
             # No daemon or shared registry-account fallback in a user's scan.
             args[2:2] = ["--image-src", "remote"]
@@ -509,7 +518,10 @@ class ClusterBaselineService:
         except OSError as exc:
             return None, f"Trivy could not execute ({type(exc).__name__})"
         raw_path = run_dir / f"trivy_{_safe_name(image)}_{hashlib.sha256(image.encode()).hexdigest()[:12]}.json"
-        raw_path.write_text(p.stdout or "", encoding="utf-8")
+        try:
+            raw_path.write_text(p.stdout or "", encoding="utf-8")
+        except OSError as exc:
+            return None, f"Trivy workspace unavailable ({type(exc).__name__})"
         if p.returncode != 0:
             return None, f"Trivy failed (exit {p.returncode}); image access or vulnerability coverage is unavailable"
         try:
