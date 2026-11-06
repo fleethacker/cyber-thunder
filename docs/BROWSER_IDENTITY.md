@@ -312,3 +312,55 @@ strict profile. Public-client refresh rotation must also be enforced by that
 provider. No real IdP account, provider configuration or external target network
 was changed. These fixtures do not establish production PKI, remote revocation
 or full zero-trust compliance.
+
+### Shared browser certificate fixture: cross-platform check
+
+Tested parent checkpoint `48bb9e7`, including the separate OIDC strict-TLS fixture
+correction. The unchanged `crypto()` fixture in `tests/security/test_sessions.py`
+and its consumer `tests/security/test_browser_api_identity.py` passed together
+on Linux. The suspected certificate failure did not reproduce, so no fixture,
+production code, TLS/expiry protection or skip policy was changed.
+
+The Linux run used a native source snapshot at
+`/home/joshua/.cache/ct-browser-tests/native-z5ozbc6i`, with test state and
+certificates beneath its `.pytest-baseline` directory. The filesystem was native
+Linux (`stat -f` reported `ext2/ext3`). The application and both test modules
+matched the checkpoint byte for byte. The actual JWKS cache was owned by UID
+1000 with mode `0600`; its parent was UID 1000/mode `0700`.
+
+The interpreter and all test dependencies came from the native virtual
+environment `/home/joshua/.cache/ct-browser-tests/venv`. An initial attempt using
+shared Windows packages could not collect: the system `typing_extensions` was
+too old for AnyIO, and a Windows Pydantic extension cannot run on Linux. Creating
+the native environment corrected that test setup; repository dependency
+manifests were unchanged. Versions used were CPython 3.14.4, OpenSSL 3.5.5,
+cryptography 50.0.2, PyJWT 2.15.1, FastAPI 0.162.0, Pydantic 2.14.2 / core 2.50.2,
+Starlette 1.10.0, AnyIO 4.16.0 and pytest 9.2.0.
+
+The default Linux SSL context had `VERIFY_X509_STRICT` enabled (flags `557088`),
+`CERT_REQUIRED`, and hostname checking. The shared fixture explicitly trusts
+the self-signed certificate that its loopback provider serves. Its real HTTPS
+PKCE flow and JWKS retrieval succeeded under those settings, while the existing
+untrusted-CA and wrong-host rejection tests also passed. This fixture validates
+that direct trust arrangement; the separate OIDC fixture exercises an issued
+server certificate under a CA. No trust flags were relaxed for either fixture.
+
+Both document backends were enabled with `CT_STATE_BACKENDS=json,sqlite` and
+plugin autoload was disabled. The focused selection was:
+
+```text
+python -m pytest tests/security/test_sessions.py tests/security/test_browser_api_identity.py -o addopts= -q -rs --tb=short -p no:cacheprovider
+```
+
+Linux used the same selection through `pytest.main`, with the native
+`--basetemp` above and a receipt plugin recording all outcomes: **123 passed,
+zero skips in 24.37s**. This includes 117 session cases and all six browser API
+cases across JSON and SQLite. All compiled and pure Python dependencies used
+by that final run were native to the virtual environment.
+
+The identical two-module selection on Windows CPython 3.12.10 / OpenSSL 3.0.16
+returned **123 passed, zero skips in 81.07s**, using the shared environment and
+the same listed package versions. Both platforms reported 25 existing
+FastAPI/Starlette deprecation warnings for the httpx test-client backend and
+startup/shutdown event handlers. No full gate, UI changes or live-provider work
+was performed for this bounded check.
