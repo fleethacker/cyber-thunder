@@ -91,6 +91,7 @@ class AppContext:
         from cyberthunder.control.principal import current_principal, require_current
         from cyberthunder.inventory.host import persisted_target
         from cyberthunder.security.resources import target_scope
+        from cyberthunder.security.step_up import StepUpRequired, require_step_up
         principal = current_principal()
         try:
             principal = require_current(action, actor)
@@ -107,7 +108,13 @@ class AppContext:
             else:
                 resource = target
             self.access.require(principal, action, resource)
+            require_step_up(self.settings, principal, action)
             return principal
+        except StepUpRequired as exc:
+            self.audit.append("authorization.denied", principal.actor,
+                {"action": action, "target": getattr(target, "id", target), "step_up": exc.challenge()},
+                outcome="rejected")
+            raise
         except (PermissionError, KeyError):
             self.audit.append("authorization.denied", principal.actor if principal else "unverified",
                 {"action": action, "target": getattr(target, "id", target), "reason": "permission denied"},

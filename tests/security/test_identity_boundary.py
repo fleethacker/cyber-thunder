@@ -25,7 +25,7 @@ from cyberthunder.remediation.library import FixEntry
 
 def identity(subject="first-user", roles=("analyst", "approver"), kind="human"):
     return Principal("https://identity.example.test", subject, "Test operator", roles=roles,
-                     kind=kind, expires_at=time.time() + 300)
+                     kind=kind, expires_at=time.time() + 300, auth_time=int(time.time()), acr="urn:ct:test:strong")
 
 
 def proposal(ctx, target):
@@ -47,6 +47,7 @@ def verified_app(state_dir, monkeypatch):
         rule_id="test-rule", title="Finding on " + tid, severity=Severity.MEDIUM,
         status=Status.OPEN) for tid in ("alpha", "beta")])
     ctx.settings.auth_mode = "oidc"
+    ctx.settings.step_up_acr_values = ("urn:ct:test:strong",)
     path = state_dir / "auth" / "access.json"
     path.parent.mkdir(mode=0o700)
     path.write_text(json.dumps({"version": 1, "entries": [
@@ -72,7 +73,7 @@ def verified_app(state_dir, monkeypatch):
             if p.expires_at <= time.time():
                 raise ValueError("expired")
             return {"iss": p.issuer, "sub": p.subject, "name": p.display_name, "ct_kind": p.kind,
-                    "ct_roles": list(p.roles), "exp": p.expires_at}
+                    "ct_roles": list(p.roles), "exp": p.expires_at, "auth_time": p.auth_time, "acr": p.acr}
 
     monkeypatch.setattr("cyberthunder.api.auth.make_validator", lambda *_: Validator())
     app = create_app(ctx)

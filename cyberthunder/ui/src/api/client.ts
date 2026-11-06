@@ -10,7 +10,7 @@ import type {
   VulnerabilityJob, VulnerabilitySettings, VulnerabilitySettingsInput, VulnerabilityStatus,
   HostRegistration, RuntimeContext, TargetReadiness, ScopeRangeInput, ScopeRangePreview, SavedScopeRanges,
 } from './types';
-import { sessionIdentity, sessionHeaders, sessionExpired } from './identity';
+import { sessionIdentity, sessionHeaders, sessionExpired, parseStepUpChallenge, stepUpRequired, type StepUpChallenge } from './identity';
 
 export const API_BASE = '/api/v1';
 const ACTOR_KEY = 'ct.actor';
@@ -38,10 +38,12 @@ export function setActor(name: string): void {
 export class ApiError extends Error {
   status: number;
   detail: string;
-  constructor(status: number, detail: string) {
+  stepUp?: StepUpChallenge;
+  constructor(status: number, detail: string, stepUp?: StepUpChallenge) {
     super(detail);
     this.status = status;
     this.detail = detail;
+    this.stepUp = stepUp;
   }
 }
 
@@ -64,10 +66,12 @@ export function url(path: string, q?: Query): string {
 
 async function parseError(res: Response): Promise<ApiError> {
   let detail = `${res.status} ${res.statusText}`;
+  let challenge: StepUpChallenge | undefined;
   try {
     const text = await res.text();
     try {
       const body = JSON.parse(text) as { detail?: unknown };
+      if (res.status === 401) challenge = parseStepUpChallenge(body);
       if (typeof body.detail === 'string') detail = body.detail;
       else if (body.detail !== undefined) detail = JSON.stringify(body.detail);
       else if (text) detail = text;
@@ -77,7 +81,11 @@ async function parseError(res: Response): Promise<ApiError> {
   } catch {
     /* keep status text */
   }
-  return new ApiError(res.status, detail);
+  if (res.status === 401) {
+    if (challenge) stepUpRequired(challenge);
+    else sessionExpired();
+  }
+  return new ApiError(res.status, detail, challenge);
 }
 
 export async function request<T>(method: string, path: string, opts: { query?: Query; body?: unknown; form?: FormData } = {}): Promise<T> {
@@ -96,7 +104,6 @@ export async function request<T>(method: string, path: string, opts: { query?: Q
   } catch (e) {
     throw new ApiError(0, `API unreachable: ${(e as Error).message}`);
   }
-  if (res.status === 401) sessionExpired();
   if (!res.ok) throw await parseError(res);
   const ct = res.headers.get('content-type') ?? '';
   if (ct.includes('application/json')) return (await res.json()) as T;
@@ -121,7 +128,6 @@ async function vulnerabilityZip(path: 'import' | 'export', file?: File): Promise
   } catch (e) {
     throw new ApiError(0, `API unreachable: ${(e as Error).message}`);
   }
-  if (res.status === 401) sessionExpired();
   if (!res.ok) throw await parseError(res);
   return res;
 }

@@ -27,6 +27,7 @@ from cyberthunder.control.approvals import IllegalTransition
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.inventory.targets import ScopeViolation
 from cyberthunder.transport.base import TransportError
+from cyberthunder.security.step_up import StepUpRequired, ERROR
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +83,8 @@ def status_for(exc: BaseException) -> tuple[int, str] | None:
     # order matters: ScopeViolation is a PermissionError; the RuntimeError family is checked by subtype
     if isinstance(exc, RequestValidationError):
         return 400, _validation_detail(exc)
+    if isinstance(exc, StepUpRequired):
+        return 401, str(exc)
     if isinstance(exc, (ScopeViolation, PermissionError)):
         return 403, str(exc) or "forbidden"
     if isinstance(exc, IllegalTransition):
@@ -117,6 +120,10 @@ def status_for(exc: BaseException) -> tuple[int, str] | None:
 
 
 def error_response(exc: BaseException) -> JSONResponse | None:
+    if isinstance(exc, StepUpRequired):
+        return JSONResponse({"detail": str(exc), "error": ERROR, "step_up": exc.challenge()}, status_code=401,
+                            headers={"WWW-Authenticate": exc.authenticate_header(), "Cache-Control": "no-store",
+                                     "Pragma": "no-cache"})
     mapped = status_for(exc)
     if mapped is None:
         return None

@@ -2,6 +2,7 @@
 
 from base64 import b64encode, urlsafe_b64encode
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import hmac
@@ -20,6 +21,7 @@ from urllib.parse import parse_qsl, quote_plus, urlsplit
 from oauthlib.oauth2 import WebApplicationClient
 
 from .oidc import AuthenticationError, OIDCConfig, OIDCValidator
+from .step_up import StepUpPolicy
 
 SESSION_COOKIE = "__Host-ct_session"
 LOGIN_COOKIE = "__Host-ct_login"
@@ -103,9 +105,12 @@ class SessionConfig:
     login_timeout_s: int = 300
     max_sessions: int = 256
     max_pending: int = 128
+    step_up_max_age_s: int = 300
+    step_up_acr_values: tuple[str, ...] = ()
 
     def __post_init__(self):
         try:
+            StepUpPolicy(self.step_up_max_age_s, self.step_up_acr_values)
             for endpoint in (self.issuer, self.authorization_endpoint, self.token_endpoint, self.redirect_uri):
                 _url(endpoint)
             if _url(self.redirect_uri).path != CALLBACK_PATH or not _text(self.client_id, 512):
@@ -142,6 +147,10 @@ class _Pending:
     nonce: str
     verifier: str
     deadline: float
+    return_to: str = "/"
+    step_up_started: int | None = None
+    subject: str | None = None
+    session_fingerprint: str | None = None
 
 
 @dataclass(repr=False)
@@ -156,6 +165,7 @@ class _Session:
     access_deadline: float
     access_expiry: int
     lease_fingerprint: str
+    assurance: dict
     generation: int = 0
 
 
@@ -305,13 +315,22 @@ class SessionService:
                 or site is not None and site not in {"same-origin", "none"}):
             raise CSRFError()
 
-    def start_login(self, headers) -> tuple[str, str]:
+    def start_login(self, headers, *, step_up: bool = False, return_to: str = "/") -> tuple[str, str]:
         """Return authorization URL and independent browser-binding cookie."""
         try:
             with self._lock:
+                if (type(step_up) is not bool or not _text(return_to, 2048)
+                        or not return_to.startswith("/") or return_to.startswith("//")
+                        or "\\" in return_to or urlsplit(return_to).netloc):
+                    raise ValueError()
+                parameters, previous = {}, None
+                if step_up:
+                    self.csrf_check("POST", headers)
+                    _, previous = self._live(headers)
+                    parameters = StepUpPolicy(self.config.step_up_max_age_s, self.config.step_up_acr_values).login_parameters()
                 self._origin_check(headers)
                 cookies = _cookies(headers)
-                _, mono = self._now()
+                wall, mono = self._now()
                 self._prune(mono)
                 self._rate(self._login_attempts, mono, 20)
                 self._pending.pop(cookies.get(LOGIN_COOKIE), None)
@@ -325,9 +344,13 @@ class SessionService:
                     self.config.authorization_endpoint, state=state,
                     redirect_url=self.config.redirect_uri, scope=self.config.scope.split(),
                     nonce=nonce, code_challenge=challenge, code_challenge_method="S256",
-                    response_mode="query",
+                    response_mode="query", **parameters,
                 )
-                self._pending[cookie] = _Pending(state, nonce, verifier, mono + self.config.login_timeout_s)
+                if len(url) > 8192:
+                    raise ValueError()
+                self._pending[cookie] = _Pending(state, nonce, verifier, mono + self.config.login_timeout_s,
+                    return_to, int(wall) if step_up else None, previous.subject if previous else None,
+                    previous.lease_fingerprint if previous else None)
                 return url, cookie
         except Exception:
             raise AuthenticationError() from None
@@ -375,6 +398,7 @@ class SessionService:
         if access_claims.get("azp") != self.config.client_id or self.config.client_id in access_audiences:
             raise ValueError()
         identity = response.get("id_token")
+        assurance = deepcopy(previous.assurance) if previous is not None else None
         if previous is None or "id_token" in response:
             if not _text(identity, 16384):
                 raise ValueError()
@@ -388,6 +412,11 @@ class SessionService:
                     raise ValueError()
             if id_claims["sub"] != access_claims["sub"] or id_claims["iss"] != access_claims["iss"]:
                 raise ValueError()
+            if previous is None:
+                # Only the nonce-bound interactive ID token establishes browser assurance.
+                # Roles and account kind continue to come from the API access token.
+                assurance = {"auth_time": id_claims.get("auth_time"), "acr": id_claims.get("acr"),
+                             "amr": deepcopy(id_claims.get("amr", []))}
             if "at_hash" in id_claims:
                 expected = urlsafe_b64encode(hashlib.sha256(access.encode("ascii")).digest()[:16]).rstrip(b"=").decode()
                 if not isinstance(id_claims["at_hash"], str) or not hmac.compare_digest(expected, id_claims["at_hash"]):
@@ -398,9 +427,12 @@ class SessionService:
         if access_claims["exp"] <= wall:
             raise ValueError()
         deadline = mono + min(response["expires_in"], access_claims["exp"] - wall)
-        return access, refresh, access_claims, deadline
+        return access, refresh, access_claims, deadline, assurance
 
     def complete_login(self, query_string: str, headers) -> str:
+        return self.finish_login(query_string, headers)[0]
+
+    def finish_login(self, query_string: str, headers) -> tuple[str, str]:
         """Consume the browser-bound transaction once and return a new cookie."""
         try:
             with self._lock:
@@ -429,18 +461,27 @@ class SessionService:
                     code_verifier=pending.verifier, include_client_id=self.config.client_secret_ref is None,
                 )
                 response = self._exchange(body)
-                access, refresh, claims, deadline = self._tokens(response, pending.nonce)
+                access, refresh, claims, deadline, assurance = self._tokens(response, pending.nonce)
                 wall, mono = self._now()
                 if mono >= pending.deadline or mono >= deadline or wall >= claims["exp"]:
                     raise ValueError()
+                if pending.step_up_started is not None:
+                    _, previous = self._live(headers)
+                    if (previous.lease_fingerprint != pending.session_fingerprint or claims["sub"] != pending.subject):
+                        raise ValueError()
+                    from cyberthunder.control.principal import Principal
+                    principal = Principal.from_claims({**claims, **assurance}, via="oidc")
+                    StepUpPolicy(self.config.step_up_max_age_s, self.config.step_up_acr_values).require(principal, now=wall)
+                    if principal.auth_time < pending.step_up_started:
+                        raise ValueError()
                 session_id = secrets.token_urlsafe(32)
                 fingerprint = hashlib.sha256(b"ct-session-lease-v1\0" + session_id.encode("ascii")).hexdigest()
                 self._remove_session(cookies.get(SESSION_COOKIE))
                 self._sessions[session_id] = _Session(access, refresh, claims["sub"], pending.nonce,
                                                       secrets.token_urlsafe(32), mono, mono, deadline,
-                                                      claims["exp"], fingerprint)
+                                                      claims["exp"], fingerprint, assurance)
                 self._lease_index[fingerprint] = session_id
-                return session_id
+                return session_id, pending.return_to
         except Exception:
             raise AuthenticationError() from None
 
@@ -487,7 +528,7 @@ class SessionService:
                     options = {"client_id": self.config.client_id} if self.config.client_secret_ref is None else {}
                     body = client.prepare_refresh_body(refresh_token=session.refresh_token, **options)
                     response = self._exchange(body)
-                    access, refresh, claims, deadline = self._tokens(response, session.nonce, previous=session)
+                    access, refresh, claims, deadline, _ = self._tokens(response, session.nonce, previous=session)
                     # Recheck idle/absolute deadlines after the bounded exchange.
                     self._live(headers)
                     session.access_token, session.refresh_token = access, refresh
@@ -502,7 +543,9 @@ class SessionService:
                     raise ValueError()
                 if touch:
                     session.last_used = mono
-                return claims
+                # A refresh never advances the original authentication event, even if
+                # a refreshed access or ID token claims a newer auth_time or ACR.
+                return {**claims, **deepcopy(session.assurance)}
         except Exception:
             if session_id is not None:
                 with self._lock:

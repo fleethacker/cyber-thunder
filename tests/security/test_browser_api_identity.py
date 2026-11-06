@@ -1,5 +1,6 @@
 """Real signed browser sessions at the application API boundary."""
 from contextvars import copy_context
+from dataclasses import replace
 import json
 import time
 
@@ -32,7 +33,8 @@ def browser_api(state_dir, configured, provider, monkeypatch):
     ctx.library.add(FixEntry("fixture:setting", "Change setting", "linux", [finding.rule_id],
                              payload="reviewed setting"))
     ctx.settings.auth_mode = "oidc"
-    ctx.session_config = config
+    ctx.settings.step_up_acr_values = ("urn:ct:test:strong",)
+    ctx.session_config = replace(config, step_up_acr_values=ctx.settings.step_up_acr_values)
     path = state_dir / "auth" / "access.json"
     path.parent.mkdir(mode=0o700)
     path.write_text(json.dumps({"version": 1, "entries": [{"issuer": ISSUER, "subject": "operator-123",
@@ -49,6 +51,7 @@ def browser_api(state_dir, configured, provider, monkeypatch):
     with principal_scope(proposer):
         item = ctx.engine.propose(ctx.store.get_finding(finding.id), actor=proposer.actor)
     provider.access_changes.update(ct_kind="human", ct_roles=["analyst", "approver"])
+    provider.id_changes.update(auth_time=int(time.time()), acr="urn:ct:test:strong", amr=["fixture"])
     monkeypatch.setattr("cyberthunder.api.auth.make_validator", lambda *_: OIDCValidator(access))
     app = create_app(ctx)
     with TestClient(app, base_url=ORIGIN) as client:

@@ -9,6 +9,7 @@ import os
 import platform
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+from cyberthunder.security.step_up import StepUpPolicy, parse_acr_values, parse_max_age
 
 _TRUE = {"1", "true", "yes", "on"}
 
@@ -81,6 +82,8 @@ class Settings:
     # web
     auth_mode: str = field(default_factory=lambda: _env("CT_AUTH_MODE", "dev"))
     security_mode: str = field(default_factory=lambda: _env("CT_SECURITY_MODE", "range"))
+    step_up_max_age_s: int = field(default_factory=lambda: parse_max_age(os.environ.get("CT_STEP_UP_MAX_AGE_SECONDS")))
+    step_up_acr_values: tuple[str, ...] = field(default_factory=lambda: parse_acr_values(os.environ.get("CT_STEP_UP_ACR_VALUES")))
     oidc_issuer: str = field(default_factory=lambda: _env("CT_OIDC_ISSUER", ""))
     oidc_audience: str = field(default_factory=lambda: _env("CT_OIDC_AUDIENCE", ""))
     oidc_jwks_url: str = field(default_factory=lambda: _env("CT_OIDC_JWKS_URL", ""))
@@ -103,6 +106,9 @@ class Settings:
     # identity of this node in the audit log
     node: str = field(default_factory=lambda: _env("CT_NODE", platform.node() or "cyberthunder"))
 
+    def __post_init__(self):
+        StepUpPolicy.from_settings(self)
+
     @classmethod
     def from_env(cls, **overrides) -> "Settings":
         s = cls()
@@ -112,6 +118,7 @@ class Settings:
             if k not in {f.name for f in fields(cls)}:
                 raise KeyError(f"unknown setting {k}")
             setattr(s, k, Path(v) if isinstance(getattr(s, k), Path) else v)
+        StepUpPolicy.from_settings(s)
         return s
 
     def to_dict(self) -> dict:
