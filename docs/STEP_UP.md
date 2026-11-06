@@ -115,12 +115,12 @@ this step-up guard, without changing quorum requirements or recorded decisions.
 Standalone gates and custom service contexts must wire this authorizer; the
 lower-level identity/role check alone is not the step-up policy. Delayed admin
 publication can lose freshness while work is running and must then be refused.
-The existing bulk proposal handler catches per-item exceptions: an expiry during
-an already-started batch remains a refused item with status 401 inside its results.
-The parent-owned bulk route should preserve the structured challenge for this
-case (for example by propagating `StepUpRequired`). Earlier successful items must
-remain visible and must never be automatically replayed. Entry-time expiry already
-receives the normal top-level challenge from the middleware.
+The bulk proposal handler preserves per-item outcomes: expiry during a batch
+returns status 401, the error code and a structured `step_up` challenge on the
+refused item. The browser keeps earlier results, prompts for deliberate
+reauthentication and never replays the batch. Entry-time expiry receives the
+normal top-level challenge from the middleware. Regressions advance the clock
+after the first recorded decision and verify that its vote remains intact.
 
 Parent integration must preserve the `AppContext.authorize` hook, API error mapping,
 session assurance snapshot and client 401 distinction together. Rebuild the combined

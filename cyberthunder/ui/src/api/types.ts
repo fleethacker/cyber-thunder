@@ -319,7 +319,8 @@ export interface ProposalDiff {
   files: DiffFile[];
 }
 
-export type BulkItem = { id: string; state: ProposalState } | { id: string; error: string };
+export type BulkItem = { id: string; state: ProposalState } | { id: string; error: string; status?: number;
+  code?: string; step_up?: { reason: string; max_age: number; acr_values: string[] } };
 export interface BulkResult { results: BulkItem[] }
 
 export interface Target {

@@ -62,9 +62,11 @@ def signing(key_directory, monkeypatch):
 def verified(state_dir, signing):
     ctx = make_ctx(state_dir)
     ctx.settings.auth_mode = "oidc"
+    ctx.settings.step_up_acr_values = ("urn:ct:test:strong",)
     ctx.content_signature_config = signing[0]
     principal = Principal("https://id.example", "human-1", "Operator", kind="human",
-                          roles=("analyst", "admin", "auditor"), expires_at=time.time() + 600)
+                          roles=("analyst", "admin", "auditor"), expires_at=time.time() + 600,
+                          auth_time=int(time.time()), acr="urn:ct:test:strong")
     policy = state_dir / "auth" / "access.json"
     policy.parent.mkdir(exist_ok=True)
     policy.write_text(json.dumps({"version": 1, "entries": [{"issuer": principal.issuer,
@@ -397,7 +399,8 @@ def test_api_override_uses_authenticated_context(verified, tmp_path, monkeypatch
     class IdentityValidator:
         def validate(self, _):
             return {"iss": human.issuer, "sub": human.subject, "name": human.display_name,
-                    "ct_kind": human.kind, "ct_roles": list(human.roles), "exp": human.expires_at}
+                    "ct_kind": human.kind, "ct_roles": list(human.roles), "exp": human.expires_at,
+                    "auth_time": human.auth_time, "acr": human.acr}
     monkeypatch.setattr("cyberthunder.api.auth.make_validator", lambda *a: IdentityValidator())
     media, _ = bundle(tmp_path, ctx.content_signature_config, signed=False)
     def send(client, reason=None, authenticated=True):

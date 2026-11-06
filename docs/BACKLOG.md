@@ -55,7 +55,7 @@ The implementation tests use isolated identity and transport fixtures. They do n
 - Done when: an approve after the idle period gets 401 and redirects; a cross-site form POST to approve is rejected; `localStorage` holds no token or name; sign-out in one tab ends access in another.
 
 **ZT-05 Step-up re-authentication for approve, policy sign, kill-switch release and scope changes.** Pillars: User. Step: 90 days. Effort: 3 days. Depends: ZT-03, ZT-04, a CAC/X.509 authenticator in the enclave realm.
-- Today: Verified identity and role/resource authorization are enforced, but authentication-age and CAC-level step-up policies are not yet enforced. Enabled standing approvals are refused in verified mode.
+- Today: Implemented signed authentication-age and exact configured assurance checks, bounded reauthentication challenges, retained browser assurance across refresh and deliberate UI re-login without mutation replay ([STEP_UP](STEP_UP.md)). Bulk outcomes preserve earlier decisions if assurance expires mid-batch. Live realm mapping, authenticator/CAC acceptance and the operational policy for long-running administration remain open. Enabled standing approvals are refused in verified mode.
 - Target: `require_step_up(max_age, min_acr)` on those routes (default 5 minutes); otherwise 401 with a challenge carrying `max_age` and `acr_values`, and the UI re-runs login. auth_time, acr and amr go into the record (ZT-23).
 - Done when: a 10-minute-old token cannot approve and the refusal is audited; after re-login it can; a password-only login cannot approve when the floor is set to the CAC level.
 

@@ -15,6 +15,7 @@ from cyberthunder.api.schemas import (ApplyBody, ApprovalBody, AssessmentReviewB
                                      BulkBody, ImpactBody, NoteBody)
 from cyberthunder.api.util import ActorDep, CtxDep, proposal_plus
 from cyberthunder.control.approvals import IllegalTransition, ProposalState
+from cyberthunder.security.step_up import StepUpRequired, ERROR as STEP_UP_ERROR
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["proposals"], route_class=MappedRoute)
@@ -71,6 +72,10 @@ def bulk(body: BulkBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
             p = _decide(ctx, pid, body.action, actor, body.note)
             results.append({"id": pid, "state": p.state.value})
         except Exception as e:  # noqa: BLE001  each id reports its own outcome
+            if isinstance(e, StepUpRequired):
+                results.append({"id": pid, "error": str(e), "status": 401,
+                                "code": STEP_UP_ERROR, "step_up": e.challenge()})
+                continue
             mapped = status_for(e)
             if mapped is None:
                 log.exception("bulk %s failed on %s", body.action, pid)

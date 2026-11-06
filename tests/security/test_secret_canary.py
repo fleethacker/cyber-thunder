@@ -180,7 +180,7 @@ def lifecycle(state_dir, monkeypatch, caplog):
     monkeypatch.setenv("CT_CRED_" + REFERENCE, CANARY)
     principal = Principal("https://identity.example.test", "fixture-operator", "Fixture operator",
                           kind="human", roles=("analyst", "approver", "admin", "auditor"),
-                          expires_at=time.time() + 300)
+                          expires_at=time.time() + 300, auth_time=int(time.time()), acr="urn:ct:test:strong")
     proposer = replace(principal, subject="fixture-proposer", display_name="Fixture proposer",
                        roles=("analyst",))
     path = state_dir / "auth" / "access.json"
@@ -248,6 +248,7 @@ def lifecycle(state_dir, monkeypatch, caplog):
 
     monkeypatch.setattr(context_module, "make_transport", transport_factory)
     ctx = AppContext(Settings(state_dir=state_dir, auth_mode="oidc", security_mode="fleet",
+                              step_up_acr_values=("urn:ct:test:strong",),
                               llm_backend="template", auto_propose=False, explain_precompute=False))
     ctx.library = FixLibrary.from_adapters(registry)
     ctx.inventory.add(Target(HOST, "Fixture host", "linux", "ssh", address=ADDRESS,
@@ -262,7 +263,8 @@ def lifecycle(state_dir, monkeypatch, caplog):
             if token != CANARY:
                 raise ValueError("invalid fixture token")
             return {"iss": principal.issuer, "sub": principal.subject, "name": principal.display_name,
-                    "ct_roles": list(principal.roles), "ct_kind": principal.kind, "exp": principal.expires_at}
+                    "ct_roles": list(principal.roles), "ct_kind": principal.kind, "exp": principal.expires_at,
+                    "auth_time": principal.auth_time, "acr": principal.acr}
 
     monkeypatch.setattr("cyberthunder.api.auth.make_validator", lambda *_: Validator())
     with TestClient(create_app(ctx)) as client:

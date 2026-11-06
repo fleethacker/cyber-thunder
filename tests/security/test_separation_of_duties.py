@@ -27,6 +27,8 @@ ACK = "Reviewed the unresolved dependencies and the recovery procedure with the 
 
 
 def person(subject, *, issuer=ISSUER, roles=("analyst", "approver"), kind="human", **kw):
+    kw.setdefault("auth_time", int(time.time()))
+    kw.setdefault("acr", "urn:ct:test:strong")
     return Principal(issuer, subject, "Operator", kind=kind, roles=roles, expires_at=time.time() + 600, **kw)
 
 
@@ -65,6 +67,7 @@ def setup(state_dir):
 
     def make(*, mode="oidc"):
         ctx = AppContext(Settings(state_dir=state_dir, auth_mode=mode, security_mode="range",
+                                  step_up_acr_values=("urn:ct:test:strong",),
                                   llm_backend="template", auto_propose=False, explain_precompute=False))
         ctx.library = FixLibrary([deepcopy(fix)])
         contexts.append(ctx)
@@ -496,7 +499,7 @@ def api(setup, monkeypatch):
         def validate(self, token):
             p = tokens[token]
             return {"iss": p.issuer, "sub": p.subject, "name": p.display_name, "ct_kind": p.kind,
-                    "ct_roles": list(p.roles), "exp": p.expires_at}
+                    "ct_roles": list(p.roles), "exp": p.expires_at, "auth_time": p.auth_time, "acr": p.acr}
 
     monkeypatch.setattr("cyberthunder.api.auth.make_validator", lambda *_: Validator())
 
@@ -539,6 +542,30 @@ def test_api_bulk_preserves_partial_state_and_rejects_duplicate_vote(setup, api)
     assert response.status_code == 200, response.text
     results = response.json()["results"]
     assert results[0]["state"] == "proposed" and results[1]["status"] == 403
+
+
+def test_batch_expiry_keeps_recorded_vote_and_returns_a_step_up_challenge(setup, api, monkeypatch):
+    ctx, _, _, _ = setup
+    p = propose(setup)
+    client, headers = api
+    clock = [int(time.time())]
+    monkeypatch.setattr("cyberthunder.security.step_up.time.time", lambda: clock[0])
+    approve_one = ctx.gate.approve
+
+    def advance_after_first(*args, **kwargs):
+        result = approve_one(*args, **kwargs)
+        clock[0] += 301
+        return result
+
+    monkeypatch.setattr(ctx.gate, "approve", advance_after_first)
+    response = client.post("/api/v1/proposals/bulk", headers=headers("bob"),
+                           json={"action": "approve", "ids": [p.id, p.id]})
+    assert response.status_code == 200
+    first, second = response.json()["results"]
+    assert first["state"] == "proposed" and len(ctx.gate.get(p.id).approvals) == 1
+    assert second["status"] == 401 and second["code"] == "insufficient_user_authentication"
+    assert second["step_up"] == {"reason": "authentication_too_old", "max_age": 300,
+                                  "acr_values": ["urn:ct:test:strong"]}
 
 
 def test_api_can_read_legacy_proposal_without_upgrading_its_authority(setup, api):

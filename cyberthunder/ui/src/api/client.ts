@@ -196,7 +196,15 @@ export const api = {
   rollback: (id: string) => post<unknown>(`/proposals/${enc(id)}/rollback`),
   diff: (id: string) => get<ProposalDiff>(`/proposals/${enc(id)}/diff`),
   verify: (id: string) => post<ProposalPlus>(`/proposals/${enc(id)}/verify`),
-  bulk: (action: 'approve' | 'deny', ids: string[], note?: string) => post<BulkResult>('/proposals/bulk', { action, ids, note }),
+  bulk: async (action: 'approve' | 'deny', ids: string[], note?: string) => {
+    const result = await post<BulkResult>('/proposals/bulk', { action, ids, note });
+    for (const item of result.results) {
+      if (!('error' in item) || item.status !== 401) continue;
+      const challenge = parseStepUpChallenge({ error: item.code, step_up: item.step_up });
+      if (challenge) { stepUpRequired(challenge); break; }
+    }
+    return result; // Earlier decisions remain visible; the caller must never replay the batch.
+  },
 
   audit: (q?: Query) => get<AuditPage>('/audit', q),
   auditVerify: () => get<AuditVerify>('/audit/verify'),

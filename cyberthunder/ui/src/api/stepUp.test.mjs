@@ -13,7 +13,9 @@ function setup(t, result = body, status = 401) {
   const calls = [], challenges = [], expired = [];
   window.addEventListener('ct:step-up', event => challenges.push(event.detail));
   window.addEventListener('ct:session-expired', () => expired.push(true));
-  globalThis.fetch = async (...args) => { calls.push(args); return new Response(JSON.stringify(result), { status }); };
+  globalThis.fetch = async (...args) => { calls.push(args); return new Response(JSON.stringify(result), {
+    status, headers: { 'Content-Type': 'application/json' },
+  }); };
   const load = createModuleLoader();
   const metadata = load(new URL('./identity.ts', import.meta.url));
   metadata.setSessionIdentity(identity);
@@ -44,6 +46,16 @@ test('ordinary 401 expires identity rather than manufacturing a step-up challeng
   assert.equal(f.expired.length, 1);
   assert.deepEqual(f.challenges, []);
   assert.equal(f.calls.length, 1);
+});
+
+test('batch step-up preserves earlier results and never retries the successful or refused items', async t => {
+  const results = { results: [{ id: 'earlier', state: 'approved' }, { id: 'later', error: body.detail,
+    status: 401, code: body.error, step_up: challenge }] };
+  const f = setup(t, results, 200);
+  assert.deepEqual(await f.api.bulk('approve', ['earlier', 'later']), results);
+  assert.deepEqual(f.challenges, [challenge]);
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual(f.expired, []);
 });
 
 test('malformed, oversized and unknown challenges are not accepted', () => {
