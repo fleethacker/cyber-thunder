@@ -337,7 +337,7 @@ def _finding(bulletin: Bulletin, target: "Target", pkg: str, installed: str, bel
 
 # -- inventories on disk --------------------------------------------------------------------------
 
-def latest_collected(store: "StateStore") -> dict[str, dict]:
+def latest_collected(store: "StateStore", *, guard=None) -> dict[str, dict]:
     """Newest collected.json per target across all scan runs (runs ordered newest first)."""
     out: dict[str, dict] = {}
     seen_dirs: list[Path] = []
@@ -353,6 +353,10 @@ def latest_collected(store: "StateStore") -> dict[str, dict]:
         for p in sorted(raw.glob("*/collected.json")):
             tid = p.parent.name
             if tid in out:
+                continue
+            # The service can authorize the source observation before raw IO.
+            # Keep denials outside the malformed-file recovery below.
+            if guard is not None and not guard(d.name, tid):
                 continue
             try:
                 out[tid] = json.loads(p.read_text(encoding="utf-8"))

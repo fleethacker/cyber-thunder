@@ -14,10 +14,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
 from cyberthunder.findings.schema import summarize, utcnow
+from cyberthunder.control.principal import authorize, require_current
 from cyberthunder.ingest import bulletin as bl
 from cyberthunder.ingest import compress, delta as dl
 from cyberthunder.ingest.link import Link, LinkState, transfer_seconds
 from cyberthunder.ingest.outbox import Outbox
+from cyberthunder.security.resources import check_record
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -191,12 +193,20 @@ class IngestService:
 
     # -- bulletins ---------------------------------------------------------------------------------
     def ingest_bulletin(self, data: bytes | str | Mapping, *, actor: str = "operator") -> dict:
+        self._guard_bulletin([], actor, action="import")
         b = bl.parse_bulletin(data)
-        collected, stale = self._in_scope(bl.latest_collected(self.store))
+        ownership = {}
+        guard = self._collected_guard(actor, "read", ownership)
+        collected, stale = self._in_scope(bl.latest_collected(self.store, guard=guard))
         targets = {t.id: t for t in self.ctx.inventory.all()}
         findings = bl.match(b, collected, targets)
+        for finding in findings:
+            finding.authorization_scope = ownership.get(finding.host)
         hosts = bl.affected_hosts(findings)
-        scan_id = self._save_bulletin_run(findings, actor, {"trigger": "bulletin", "bulletin_id": b.id})
+        scan_id = self._save_bulletin_run(findings, actor, {"trigger": "bulletin", "bulletin_id": b.id}, action="import")
+        self._guard_bulletin(hosts, actor, action="import")
+        for host in collected:
+            check_record(self.ctx, {"host": host, "authorization_scope": ownership.get(host)})
         bl.save_bulletin(self.store, b, {"ingested_at": utcnow(), "ingested_by": actor, "hosts_affected": hosts,
                                          "hosts_checked": sorted(collected), "findings": len(findings),
                                          "scan_id": scan_id})
@@ -207,21 +217,31 @@ class IngestService:
         return {"bulletin_id": b.id, "hosts_affected": hosts, "hosts_checked": sorted(collected),
                 "findings": [f.to_dict() for f in findings], "scan_id": scan_id}
 
-    def rematch_all(self, scan_id: str, *, actor: str = "scanner") -> dict:
+    def rematch_all(self, scan_id: str, *, actor: str | None = None) -> dict:
         """Re-run every stored bulletin against the inventories collected by scan_id.
 
         Bulletins stay in force until the packages are patched: the current picture is the newest full scan
         plus newer partial runs, so after each full scan the bulletins are matched again and saved as one
         partial run (trigger 'bulletin'). Hosts that are no longer in scope are left out."""
+        if actor is None:
+            actor = (require_current("scan").actor if getattr(self.ctx.settings, "auth_mode", "dev") != "dev"
+                     else "scanner")
         collected: dict[str, dict] = {}
+        ownership = {}
+        guard = self._collected_guard(actor, "scan", ownership)
         raw = self.store.scans_dir / scan_id / "raw"
         if raw.is_dir():
             for p in sorted(raw.glob("*/collected.json")):
+                if not guard(scan_id, p.parent.name):
+                    continue
                 try:
                     collected[p.parent.name] = json.loads(p.read_text(encoding="utf-8"))
                 except (OSError, ValueError):
                     continue
         collected, stale = self._in_scope(collected)
+        # A full scan reevaluates previously accepted bulletin data with scan
+        # authority. It must not obtain import privilege or create new bulletins.
+        self._guard_bulletin(collected, actor, action="scan")
         stored = bl.list_bulletins(self.store)
         if not stored or not collected:
             return {"scan_id": None, "bulletins": [], "findings": 0, "hosts_affected": []}
@@ -235,9 +255,11 @@ class IngestService:
                 continue
             ids.append(b.id)
             findings.extend(bl.match(b, collected, targets))
+        for finding in findings:
+            finding.authorization_scope = ownership.get(finding.host)
         hosts = bl.affected_hosts(findings)
         run_id = self._save_bulletin_run(findings, actor, {"trigger": "bulletin", "bulletin_ids": ids,
-                                                           "rematch_of": scan_id})
+                                                           "rematch_of": scan_id}, action="scan")
         self.audit.append("ingest.bulletin_rematch", actor, {"scan_id": scan_id, "bulletins": ids,
                                                              "hosts_checked": len(collected), "hosts_affected": hosts,
                                                              "findings": len(findings), "run_id": run_id,
@@ -249,7 +271,33 @@ class IngestService:
         keep = {tid: c for tid, c in collected.items() if self.ctx.inventory.in_scope(tid)}
         return keep, sorted(tid for tid in collected if tid not in keep)
 
-    def _save_bulletin_run(self, findings: list, actor: str, meta: dict) -> str | None:
+    def _collected_guard(self, actor, action, ownership):
+        def guard(scan_id, host):
+            if getattr(self.ctx.settings, "auth_mode", "dev") == "dev":
+                return True
+            if not self.ctx.inventory.in_scope(host):
+                return False
+            run = self.store.load_scan_run(scan_id) or {}
+            scopes = run.get("authorization_scopes")
+            targets = run.get("targets")
+            matches = [s for s in scopes if isinstance(s, dict) and s.get("target_id") == host] if (
+                isinstance(scopes, list) and isinstance(targets, list) and host in targets) else []
+            scope = matches[0] if len(matches) == 1 else None
+            check_record(self.ctx, {"host": host, "authorization_scope": scope}, action)
+            authorize(self.ctx, action, actor=actor, target=host)
+            self.ctx.killswitch.guard("ingest.bulletin", actor)
+            ownership[host] = scope
+            return True
+        return guard
+
+    def _guard_bulletin(self, hosts, actor: str, *, action: str) -> None:
+        if action == "import":
+            authorize(self.ctx, "import", actor=actor)
+        for host in sorted(set(hosts)):
+            authorize(self.ctx, action, actor=actor, target=host)
+        self.ctx.killswitch.guard("ingest.bulletin", actor)
+
+    def _save_bulletin_run(self, findings: list, actor: str, meta: dict, *, action: str) -> str | None:
         """Persist bulletin findings as one partial scan run. No findings, no run."""
         from cyberthunder.scan import ScanRun, TargetScanResult
         if not findings:
@@ -267,8 +315,14 @@ class IngestService:
         run = ScanRun(id=scan_id, targets=hosts, modules=["cve"], trigger="bulletin", requested_by=actor,
                       status="done", started_at=now, finished_at=now, results=results,
                       findings_count=len(findings), summary=summarize(findings))
-        self.store.save_scan_run(run.to_dict())
+        self._guard_bulletin(hosts, actor, action=action)
+        for finding in findings:
+            check_record(self.ctx, finding, action)
         self.store.save_findings(scan_id, findings, meta=meta)
+        self._guard_bulletin(hosts, actor, action=action)
+        for finding in findings:
+            check_record(self.ctx, finding, action)
+        self.store.save_scan_run(run.to_dict())
         return scan_id
 
     # -- history -----------------------------------------------------------------------------------
