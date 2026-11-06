@@ -50,6 +50,13 @@ jobs:
       - name: Install Python test dependencies
         run: python -m pip install -e '.[dev]'
 
+      - name: Acquire pinned UDS for Linux rendering tests
+        if: runner.os == 'Linux'
+        run: |
+          python scripts/ci_setup_uds.py --directory "$RUNNER_TEMP/ct-ci-uds"
+          "$RUNNER_TEMP/ct-ci-uds/uds" version
+          echo "$RUNNER_TEMP/ct-ci-uds" >> "$GITHUB_PATH"
+
       - name: Check committed whitespace before generating UI assets
         run: git show --check --format= HEAD
 

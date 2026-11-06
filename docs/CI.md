@@ -95,13 +95,45 @@ The reviewed allowances are:
 | Linux | `tests/state/test_file_read_sharing.py::test_windows_scope_retry_observes_revocation[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |
 | Linux | `tests/state/test_file_read_sharing.py::test_json_run_read_survives_windows_sharing` | 1 | `requires Windows file sharing semantics` |
 | Linux | `tests/state/test_file_read_sharing.py::test_audit_checkpoint_survives_windows_sharing` | 1 | `requires Windows file sharing semantics` |
-| Linux | The 19 exact `tests/test_dev.py::DevelopmentModeTests` methods below | 19 | `UDS CLI is required for configuration and payload rendering.` |
 
-The UDS CLI is not installed by this workflow. These configuration-rendering
-tests are collected on Linux but skip without it. Other deployment tests use
-fake command shims. This is a coverage limitation, not evidence of a successful
-deployment or a fully exercised UDS integration. Installing a reviewed UDS CLI
-for these tests is a future improvement; simply widening the allowance is not.
+The Linux job acquires UDS CLI 0.39.0 with `scripts/ci_setup_uds.py` into
+`$RUNNER_TEMP/ct-ci-uds` and adds only that directory to the job PATH. This is a
+separate future TST-01 candidate, not current-release acceptance. The helper
+supports Linux amd64 only, uses the Python standard library, and verifies the
+reviewed SHA-256 before publishing an executable. Missing downloads, malformed
+content, hash mismatches and unsupported platforms fail setup. Existing cache
+bytes are rehashed on every invocation; a corrupt cache fails without fallback.
+`--offline` permits only an already verified cache. No system installation or
+shared PATH changes are needed. Use a task-owned directory with trusted parents.
+
+The pin matches the repository bootstrap version; `scripts/wsl-bootstrap.sh`
+is unchanged. Primary sources are the [official release](https://github.com/defenseunicorns/uds-cli/releases/tag/v0.39.0)
+and its [checksum manifest](https://github.com/defenseunicorns/uds-cli/releases/download/v0.39.0/checksums.txt).
+The asset `uds-cli_v0.39.0_Linux_amd64` has SHA-256
+`a40495f2c5c78507bd1b99fbaab59508f5dab71546f7cc09a902a7b07969b7a4`.
+This fixed digest is the trust anchor; runtime downloads do not choose their own
+expected checksum. Updating the pin requires reviewing the official manifest
+and rerunning the rendering tests.
+
+All 19 rendering methods below must execute on Linux: their former skip
+allowances are removed. The existing shims intercept Docker, k3d, deployment,
+and HTTP calls and forward only `uds zarf tools yq` to the actual binary.
+This proves configuration/payload rendering with shimmed orchestration, not
+production deployment, live cluster behavior or full UDS integration.
+
+Focused candidate validation on 2026-11-06 used an isolated native Linux source
+copy of `96c18233f2d8c8234e01109e04229613ac73e829` plus the recorded CI overlay,
+Python 3.12.16 and the actual verified UDS binary. All three deployment modules
+passed: 59 tests, zero skips, including exactly all 19 rendering methods.
+The 49 policy tests and final 19 setup/enforcement tests passed on both Linux
+and Windows (the initial combined run had 64 tests; the setup module was then
+expanded and rerun). Real-binary offline-cache verification also succeeded.
+The [validation receipt](ci-deployment-rendering-validation.json) records exact
+case names, source/receipt hashes, commands, native source path and evidence ZIP
+SHA-256. Linux allowances changed from 113 to 94; Windows remains 87. Every
+other node ID and reason was compared against the base and is unchanged.
+No full gate, hosted workflow, push, merge or live deployment was performed.
+The existing native Windows deployment omissions remain as documented below.
 
 Credential-resolver tests add 44 exact POSIX cases skipped on Windows and six
 native Windows cases skipped on Linux. Their node IDs, reasons and receipt
@@ -117,7 +149,7 @@ client-storage case skipped on Linux. [Their receipt hashes and exact reasons](o
 are mirrored in `NATIVE_OPERATOR_SKIPS`. Signed-checkpoint and authenticated-client
 fixtures do not establish independent off-node custody or a live enclave login.
 
-The exact UDS method allowlist is also stored as `UDS_TESTS` in the helper:
+The former 19 UDS skip IDs remain as `UDS_TESTS` for enforcement tests, not allowances:
 
 ```text
 test_normal_deployment_excludes_identity_and_credentials
@@ -147,7 +179,7 @@ Windows-only cases on Linux. Their literal IDs and reasons are listed in
 [the native review receipts](NODE_HARDENING_REVIEW.md). These are individual
 case allowances, not module omissions.
 
-That permits at most **104 skipped cases on Linux and 35 on Windows**, with every
+That permits at most **94 skipped cases on Linux and 87 on Windows**, with every
 case individually constrained. Missing Git or Bash is not an allowed skip on
 either runner. Windows runs the command-shell and file-sharing tests that
 Linux skips.

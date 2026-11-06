@@ -18,7 +18,7 @@ WINDOWS_IGNORED = frozenset({
 MODEL_REASON = "set CT_TEST_LLM=1 to test against a local model server"
 SHARING_REASON = "requires Windows file sharing semantics"
 UDS_REASON = "UDS CLI is required for configuration and payload rendering."
-# Exact names: a new test in this class must not silently inherit an allowance.
+# Former skip IDs retained for coverage and missing-tool enforcement tests.
 UDS_TESTS = (
     "test_normal_deployment_excludes_identity_and_credentials",
     "test_dev_deployment_selects_bootstrap_and_prints_credentials",
@@ -288,10 +288,6 @@ def expected_skips(platform: str) -> dict[str, str]:
         allowed["tests/security/test_access_file_trust.py::test_actual_windows_junction_parent_denied"] = (
             "requires Windows NTFS junction support"
         )
-        allowed.update({
-            f"tests/test_dev.py::DevelopmentModeTests::{name}": UDS_REASON
-            for name in UDS_TESTS
-        })
         allowed["tests/report/test_reports.py::test_commander_reproduce_command_runs_in_cmd"] = (
             "runs the command through cmd.exe"
         )
