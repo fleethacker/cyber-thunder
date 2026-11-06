@@ -171,10 +171,17 @@ def test_same_subject_from_another_explicitly_authorized_issuer_is_distinct(setu
         assert ctx.gate.approve(p.id, other.actor).state == ProposalState.APPROVED
 
 
-@pytest.mark.parametrize("who", [person("mallory"), person("admin", roles=("admin",)),
-                                  person("bob", roles=("analyst",)), person("service", kind="workload"),
-                                  replace(person("bob"), expires_at=1)])
-def test_each_approval_requires_current_human_role_session_and_target_permission(setup, who):
+@pytest.mark.parametrize("subject,claims,expired", [
+    ("mallory", {}, False), ("admin", {"roles": ("admin",)}, False),
+    ("bob", {"roles": ("analyst",)}, False), ("service", {"kind": "workload"}, False),
+    ("bob", {}, True),
+])
+def test_each_approval_requires_current_human_role_session_and_target_permission(setup, subject, claims, expired):
+    # Build each identity when its case runs, so a long suite cannot make role
+    # or target-denial tests pass merely because a collection-time token expired.
+    who = person(subject, **claims)
+    if expired:
+        who = replace(who, expires_at=1)
     ctx, _, _, _ = setup
     p = propose(setup)
     with principal_scope(who), pytest.raises(PermissionError):
