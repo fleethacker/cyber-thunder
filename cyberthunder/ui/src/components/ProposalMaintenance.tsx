@@ -31,16 +31,18 @@ export function MaintenanceOverrideButton({ proposalId, disabled }: { proposalId
   const [busy, setBusy] = useState(false);
   const sequence = useRef(0);
   const pending = useRef(false);
-  const allowed = identity.mode !== 'dev' && permission.can(['apply', 'maintenance.override']);
-  const live = useRef({ authority, allowed, disabled });
-  live.current = { authority, allowed, disabled };
-  const current = () => live.current.authority === authority && live.current.allowed && !live.current.disabled;
+  const allowed = identity.authenticated && identity.mode !== 'dev' && permission.can(['apply', 'maintenance.override']);
+  const live = useRef({ authority, proposalId, allowed, disabled, opened, review, reason });
+  live.current = { authority, proposalId, allowed, disabled, opened, review, reason };
+  const current = () => live.current.authority === authority && live.current.proposalId === proposalId
+    && live.current.opened && live.current.allowed && !live.current.disabled;
   useEffect(() => {
     setOpened(false); setReview(null); setReason(''); setError(null); setAccepted(false); setBusy(false);
-    return () => { sequence.current++; pending.current = false; };
+    return () => { sequence.current++; pending.current = false; live.current.review = null; };
   }, [proposalId, authority]);
   const close = () => {
     sequence.current++; pending.current = false;
+    live.current.review = null; live.current.opened = false;
     setOpened(false); setReview(null); setReason(''); setError(null); setAccepted(false); setBusy(false);
   };
   const requestReview = async () => {
@@ -49,7 +51,7 @@ export function MaintenanceOverrideButton({ proposalId, disabled }: { proposalId
     pending.current = true; setBusy(true); setReview(null); setReason(''); setError(null); setAccepted(false);
     try {
       const p = await api.proposal(proposalId);
-      if (version !== sequence.current) return;
+      if (version !== sequence.current || !current()) return;
       if (p.id !== proposalId || p.state !== 'approved' || !p.maintenance?.override) {
         throw new Error('A maintenance override is unavailable for this account or change. Review the current proposal.');
       }
@@ -58,10 +60,19 @@ export function MaintenanceOverrideButton({ proposalId, disabled }: { proposalId
     finally { if (version === sequence.current) { pending.current = false; setBusy(false); } }
   };
   const submit = async () => {
-    if (!current() || pending.current || !review?.maintenance?.override || reason.trim().length < 10) return;
+    if (!current() || pending.current || !review?.maintenance?.override
+      || live.current.review !== review || live.current.reason !== reason
+      || reason.trim().length < 10 || reason.trim().length > 1000) return;
+    const expires = Date.parse(review.maintenance.override.expires_at);
+    if (!Number.isFinite(expires) || expires <= Date.now()) {
+      live.current.review = null;
+      setReview(null); setReason(''); setError('This review expired. Review the current change again.');
+      return;
+    }
     const override = { ...review.maintenance.override, reason: reason.trim() };
     const version = ++sequence.current;
     // Discard before awaiting: double clicks, authentication and rerenders cannot replay it.
+    live.current.review = null;
     pending.current = true; setBusy(true); setReview(null); setReason(''); setError(null);
     try {
       await api.applyWithMaintenanceOverride(proposalId, override);

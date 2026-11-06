@@ -569,3 +569,258 @@ def test_legacy_missing_ownership_requires_new_proposal_only_when_configured(ctx
         assert p.state.value == 'approved' and fakes.HOSTS[HOST] == host
     else:
         assert ctx.engine.execute(p.id, actor=SAILOR).state.value == 'verified'
+
+
+@pytest.mark.parametrize('change', ['removed', 'changed', 'missing', 'ownership', 'expired'])
+def test_queued_apply_keeps_request_policy_observation(api, clock, monkeypatch, change):
+    ctx, p, _, client, headers, queued = api
+    schedule(ctx)
+    host = deepcopy(fakes.HOSTS[HOST])
+    response = client.post(f'/api/v1/proposals/{p.id}/apply', headers=headers(), json={})
+    assert response.status_code == 202 and len(queued) == 1
+    if change == 'removed': ctx.settings.maintenance_policy = None
+    if change == 'changed':
+        path = ctx.store.root / 'maintenance.json'
+        path.write_bytes(path.read_bytes() + b' ')
+    if change == 'missing': (ctx.store.root / 'maintenance.json').unlink()
+    if change == 'ownership':
+        ctx.inventory.get(HOST).authorization_id = 'f' * 32; ctx.inventory.save()
+    if change == 'expired': clock[0] += timedelta(hours=1)
+    monkeypatch.setattr(ctx, 'transport_for', lambda *_: pytest.fail('queued stale request connected'))
+    with principal_scope(identity()), pytest.raises(PermissionError): queued[0]()
+    assert ctx.gate.get(p.id).state.value == 'approved'
+    assert fakes.HOSTS[HOST] == host
+
+
+@pytest.mark.parametrize('change', ['expired', 'removed'])
+def test_start_transition_rechecks_maintenance_before_connection(ctx, clock, monkeypatch, change):
+    p = root_login_proposal(ctx)
+    schedule(ctx)
+    start = ctx.gate.start_apply
+    def transitioned(*args, **kwargs):
+        result = start(*args, **kwargs)
+        if change == 'expired': clock[0] += timedelta(hours=1)
+        else: ctx.settings.maintenance_policy = None
+        return result
+    monkeypatch.setattr(ctx.gate, 'start_apply', transitioned)
+    monkeypatch.setattr(ctx, 'transport_for', lambda *_: pytest.fail('stale maintenance connected'))
+    with pytest.raises(MaintenanceBlocked): ctx.engine.execute(p.id, actor=SAILOR)
+    assert ctx.gate.get(p.id).state.value == 'failed'
+    assert fakes.HOSTS[HOST] == fakes.seed_state()
+
+
+def test_capture_audit_error_never_initiates_rollback(ctx, clock, monkeypatch):
+    p = root_login_proposal(ctx)
+    schedule(ctx)
+    append = ctx.audit.append
+    def failed(action, *args, **kwargs):
+        if action == 'remediation.before_state': raise OSError('capture audit unavailable')
+        return append(action, *args, **kwargs)
+    monkeypatch.setattr(ctx.audit, 'append', failed)
+    monkeypatch.setattr(ctx.engine, '_auto_rollback', lambda *a: pytest.fail('payload never ran; rollback attempted'))
+    assert ctx.engine.execute(p.id, actor=SAILOR).state.value == 'failed'
+    assert fakes.HOSTS[HOST] == fakes.seed_state()
+
+
+@pytest.mark.parametrize('override_request', [False, True])
+def test_payload_change_at_final_maintenance_read_never_runs(secure, monkeypatch, override_request):
+    ctx, p, _ = secure
+    if not override_request: schedule(ctx)
+    guard = MaintenanceService.guard
+    def final_read(service, proposal, **kwargs):
+        result = guard(service, proposal, **kwargs)
+        if kwargs.get('boundary') == 'execution' and kwargs.get('record') is False:
+            ctx.library.get(p.fix_ref).payload += '\nchanged after approval'
+        return result
+    monkeypatch.setattr(MaintenanceService, 'guard', final_read)
+    adapter = ctx.engine._adapter(ctx.inventory.get(HOST))
+    monkeypatch.setattr(adapter, 'apply', lambda *a: pytest.fail('unapproved payload ran'))
+    monkeypatch.setattr(ctx.engine, '_auto_rollback', lambda *a: pytest.fail('payload never ran; rollback attempted'))
+    with principal_scope(identity()):
+        request = override(ctx, p) if override_request else None
+        with pytest.raises(PermissionError, match='approval requirements'):
+            ctx.engine.execute(p.id, actor=identity().actor, maintenance_override=request)
+    assert ctx.gate.get(p.id).state.value == 'failed'
+    assert fakes.HOSTS[HOST] == fakes.seed_state()
+
+
+@pytest.mark.parametrize('case', ['split_selectors', 'different_issuer', 'associated_account', 'role_only', 'group_fragment'])
+def test_override_grants_cannot_be_assembled(secure, case):
+    ctx, p, doc = secure
+    row = doc['entries'][1]
+    grant = row['grants'].pop()
+    person = identity()
+    if case == 'split_selectors':
+        row['grants'].extend([dict(actions=['maintenance.override'], target_ids=[HOST]),
+                              dict(actions=['maintenance.override'], environments=['default'])])
+    if case == 'different_issuer':
+        doc['entries'].append(dict(issuer='https://different.example', subject=person.subject,
+                                  node_actions=[], grants=[grant]))
+    if case == 'associated_account':
+        doc.update(version=2, approval_identity=dict(mode='person', version=1, namespace='crew', revision=1))
+        for entry in doc['entries']: entry['person_id'] = 'shared'
+        doc['entries'][2]['grants'].append(grant)
+    if case == 'role_only': person = replace(person, roles=('admin', 'approver'))
+    if case == 'group_fragment':
+        person = replace(person, groups=('operators',))
+        row['grants'].append(dict(actions=['maintenance.override'], target_ids=[HOST]))
+        doc['entries'].append(dict(issuer=person.issuer, group='operators', node_actions=[], grants=[grant]))
+    write_access(ctx, doc)
+    with principal_scope(person):
+        assert MaintenanceService(ctx).summary(p)['override'] is None
+        with pytest.raises(PermissionError): ctx.authorize('maintenance.override', actor=person.actor, target=HOST)
+
+
+@pytest.mark.parametrize('change', ['grant', 'step_up', 'expiry', 'binding_expiry', 'binding_value'])
+def test_queued_override_revalidates_exact_authority(api, clock, monkeypatch, change):
+    ctx, p, doc, client, headers, queued = api
+    url = f'/api/v1/proposals/{p.id}'
+    request = client.get(url, headers=headers()).json()['maintenance']['override']
+    request['reason'] = 'Owner requested immediate restoration of service'
+    if change == 'binding_expiry': request['expires_at'] = iso(NOW + timedelta(seconds=119))
+    if change == 'binding_value': request['binding'] = '0' * 64
+    response = client.post(url + '/apply', headers=headers(), json=dict(maintenance_override=request))
+    if change.startswith('binding_'):
+        assert response.status_code == 403 and not queued
+        return
+    assert response.status_code == 202 and len(queued) == 1
+    if change == 'grant': doc['entries'][1]['grants'].pop(); write_access(ctx, doc)
+    if change == 'step_up': monkeypatch.setattr(ctx.step_up_clock, 'now', lambda: time.time() + 301)
+    if change == 'expiry': clock[0] += timedelta(seconds=120)
+    monkeypatch.setattr(ctx, 'transport_for', lambda *_: pytest.fail('revoked queued override connected'))
+    with principal_scope(identity()), pytest.raises(PermissionError): queued[0]()
+    assert ctx.gate.get(p.id).state.value == 'approved'
+    assert fakes.HOSTS[HOST] == fakes.seed_state()
+
+
+@pytest.mark.parametrize('change', ['kill', 'scope', 'clock', 'step_up'])
+def test_other_guards_still_hold_after_final_maintenance_read(secure, clock, monkeypatch, change):
+    from cyberthunder.control.killswitch import KillSwitchEngaged
+    ctx, p, _ = secure
+    guard = MaintenanceService.guard
+    def final_read(service, proposal, **kwargs):
+        result = guard(service, proposal, **kwargs)
+        if kwargs.get('boundary') == 'execution' and kwargs.get('record') is False:
+            if change == 'kill': ctx.killswitch.engage(identity().actor, 'boundary stop')
+            if change == 'scope': ctx.inventory.get(HOST).in_scope = False; ctx.inventory.save()
+            if change == 'clock': clock[0] += timedelta(seconds=120)
+            if change == 'step_up': monkeypatch.setattr(ctx.step_up_clock, 'now', lambda: time.time() + 301)
+        return result
+    monkeypatch.setattr(MaintenanceService, 'guard', final_read)
+    monkeypatch.setattr(ctx.engine, '_auto_rollback', lambda *a: pytest.fail('payload never ran; rollback attempted'))
+    with principal_scope(identity()):
+        request = override(ctx, p)
+        with pytest.raises(KillSwitchEngaged if change == 'kill' else PermissionError):
+            ctx.engine.execute(p.id, actor=identity().actor, maintenance_override=request)
+    assert fakes.HOSTS[HOST] == fakes.seed_state()
+
+
+@pytest.mark.parametrize('raw', [
+    b'{"version":1,"version":1,"rules":[]}',
+    b'{"version":true,"rules":[]}', b'{"version":1,"rules":[]}',
+    b'{"version":1,"rules":null}', b'{"version":1,"rules":[],"extra":false}',
+    b'{"version":NaN,"rules":[]}', b'[' * 13 + b']' * 13,
+    b'{"version":1,"rules":[{"id":"r","target_ids":["a","a"],"windows":[]}]}',
+    b'{"version":1,"rules":[{"id":"r","target_ids":["a?"],"windows":[]}]}',
+])
+def test_strict_policy_shape_and_duplicate_keys(raw):
+    with pytest.raises(ValueError): parse(raw)
+
+
+def test_adjacent_windows_have_no_gap_and_intersection_cannot_widen(ctx, clock):
+    p = root_login_proposal(ctx)
+    schedule(ctx, rules=[dict(id='target', target_ids=[HOST], windows=[
+        dict(start=iso(NOW - timedelta(hours=1)), end=iso(NOW)),
+        dict(start=iso(NOW), end=iso(NOW + timedelta(hours=1)))]),
+        dict(id='environment', environments=['default'], windows=[
+            dict(start=iso(NOW), end=iso(NOW + timedelta(minutes=30)))])])
+    result = MaintenanceService(ctx).summary(p)
+    assert result['allowed'] and result['current_window'] == dict(start=iso(NOW), end=iso(NOW + timedelta(minutes=30)))
+    clock[0] += timedelta(minutes=30)
+    assert MaintenanceService(ctx).summary(p)['status'] == 'held'
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), -float('inf'), 1e30])
+def test_invalid_clock_never_opens_window(ctx, monkeypatch, value):
+    p = root_login_proposal(ctx)
+    schedule(ctx)
+    monkeypatch.setattr(ctx.step_up_clock, 'now', lambda: value)
+    assert MaintenanceService(ctx).summary(p)['status'] == 'invalid'
+    with pytest.raises(MaintenanceBlocked): ctx.engine.execute(p.id, actor=SAILOR)
+    assert ctx.gate.get(p.id).state.value == 'approved'
+
+
+def test_override_does_not_supply_apply_credentials(secure):
+    ctx, _, doc = secure
+    doc['entries'][1]['grants'][-1]['credential'] = dict(username='override-account', credential_ref='fixture',
+                                                       sudo=True, options={})
+    write_access(ctx, doc)
+    target = replace(ctx.inventory.get(HOST), transport='ssh', address='192.0.2.1')
+    with principal_scope(identity()):
+        ctx.access.require(identity(), 'maintenance.override', target)
+        with pytest.raises(PermissionError, match='credential binding'):
+            ctx.access.credential(identity(), 'apply', target)
+
+
+def test_override_cannot_release_active_risk_hold(secure, monkeypatch):
+    from cyberthunder.findings.review import ReviewService
+    from cyberthunder.remediation.engine import RemediationHeld
+    from tests.findings.test_risk_acceptance import accept
+    ctx, p, doc = secure
+    doc['entries'][1]['grants'][-1]['actions'].append('risk.accept')
+    write_access(ctx, doc)
+    with principal_scope(identity()):
+        request = override(ctx, p)
+        finding = ctx.store.get_finding(p.finding_id)
+        accept(ReviewService(ctx), finding, actor=identity().actor)
+        monkeypatch.setattr(ctx, 'transport_for', lambda *_: pytest.fail('risk hold connected'))
+        with pytest.raises(RemediationHeld): ctx.engine.execute(p.id, actor=identity().actor, maintenance_override=request)
+    assert ctx.gate.get(p.id).state.value == 'approved'
+    assert fakes.HOSTS[HOST] == fakes.seed_state()
+
+
+def test_override_cannot_replace_missing_approved_assessment(secure, monkeypatch):
+    from cyberthunder.control.assessment import AssessmentBlocked
+    ctx, p, _ = secure
+    p.assessment = dict(status='reviewed', id='missing-receipt', note='Previously reviewed dependencies')
+    with principal_scope(identity()):
+        request = override(ctx, p)
+        monkeypatch.setattr(ctx, 'transport_for', lambda *_: pytest.fail('missing assessment connected'))
+        with pytest.raises(AssessmentBlocked): ctx.engine.execute(p.id, actor=identity().actor, maintenance_override=request)
+    assert ctx.gate.get(p.id).state.value == 'approved'
+    assert fakes.HOSTS[HOST] == fakes.seed_state()
+
+
+def test_revoked_override_does_not_strand_applying_proposal(secure, monkeypatch):
+    ctx, p, doc = secure
+    adapter = ctx.engine._adapter(ctx.inventory.get(HOST))
+    capture = adapter.capture_before_state
+    def captured(*args):
+        before = capture(*args)
+        doc['entries'][1]['grants'].pop(); write_access(ctx, doc)
+        return before
+    monkeypatch.setattr(adapter, 'capture_before_state', captured)
+    monkeypatch.setattr(ctx.engine, '_auto_rollback', lambda *a: pytest.fail('revoked before payload; rollback attempted'))
+    with principal_scope(identity()):
+        request = override(ctx, p)
+        with pytest.raises(PermissionError): ctx.engine.execute(p.id, actor=identity().actor, maintenance_override=request)
+    assert ctx.gate.get(p.id).state.value == 'failed'
+    assert fakes.HOSTS[HOST] == fakes.seed_state()
+
+
+def test_manual_rollback_cannot_mutate_capture_only_failure(ctx, clock, monkeypatch):
+    from cyberthunder.remediation.rollback_guard import RollbackBlocked
+    p = root_login_proposal(ctx)
+    schedule(ctx)
+    adapter = ctx.engine._adapter(ctx.inventory.get(HOST))
+    capture = adapter.capture_before_state
+    def captured(*args):
+        before = capture(*args)
+        clock[0] += timedelta(hours=1)
+        return before
+    monkeypatch.setattr(adapter, 'capture_before_state', captured)
+    with pytest.raises(MaintenanceBlocked): ctx.engine.execute(p.id, actor=SAILOR)
+    assert ctx.gate.get(p.id).state.value == 'failed'
+    monkeypatch.setattr(ctx, 'transport_for', lambda *_: pytest.fail('capture-only rollback connected'))
+    with pytest.raises(RollbackBlocked): ctx.engine.rollback(p.id, actor=SAILOR)
+    assert fakes.HOSTS[HOST] == fakes.seed_state()

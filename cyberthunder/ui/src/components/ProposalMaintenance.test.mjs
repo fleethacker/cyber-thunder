@@ -53,6 +53,7 @@ function mount() {
     async identity(value) { identity = value; dirty = true; await settle(); },
     async close() { nodes().find((n) => n.type === 'Modal').props.onClose(); await settle(); },
     async disabled() { props.disabled = true; dirty = true; await settle(); },
+    async proposal(value) { props.proposalId = value; dirty = true; await settle(); },
     text() { return JSON.stringify(tree); },
     notice(value) { return JSON.stringify(components.MaintenanceNotice({ value })); },
   };
@@ -122,4 +123,32 @@ test('held and open schedules explain times and recovery without internal identi
   assert.match(open, /Apply must start before the end/);
   assert.match(open, /authorized verification or recovery/);
   assert.doesNotMatch(open, /aaaaaaaa|policy_sha256|authorization_id|access.json/);
+});
+
+for (const change of ['closed', 'rejected', 'reason', 'proposal', 'expired']) {
+  test(`retained submit cannot reuse a ${change} review`, async (t) => {
+    const panel = await reviewed();
+    const staleSubmit = panel.button('Apply once with this reason').props.onClick;
+    if (change === 'closed') { await panel.close(); await panel.click('Review window override'); }
+    if (change === 'rejected') {
+      await panel.click('Apply once with this reason');
+      panel.requests[1].reject(new Error('Fresh authentication required')); await panel.settle();
+    }
+    if (change === 'reason') await panel.reason('');
+    if (change === 'proposal') await panel.proposal('another-proposal');
+    if (change === 'expired') t.mock.method(Date, 'now', () => Date.parse(review().maintenance.override.expires_at));
+    const count = panel.requests.length;
+    staleSubmit(); await panel.settle();
+    assert.equal(panel.requests.length, count);
+  });
+}
+
+test('old account review response cannot populate the new account review', async () => {
+  const panel = mount(); await panel.settle(); await panel.click('Review window override');
+  await panel.click('Review current change');
+  await panel.identity({ mode: 'oidc', authenticated: true, permissions: ['apply', 'maintenance.override'], principal: { issuer: 'fixture', subject: 'second-user' } });
+  await panel.click('Review window override'); await panel.click('Review current change');
+  panel.requests[0].resolve(review()); await panel.settle();
+  assert.equal(panel.nodes().some((n) => n.type === 'Textarea'), false);
+  assert.equal(panel.requests.length, 2);
 });

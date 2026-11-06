@@ -183,14 +183,14 @@ def apply(pid: str, body: ApplyBody | None = None, ctx=CtxDep, actor: str = Acto
     body = body or ApplyBody()
     from cyberthunder.remediation.maintenance import MaintenanceService
     override = body.maintenance_override.model_dump() if body.maintenance_override is not None else None
-    MaintenanceService(ctx).guard(p, actor=actor, override=override, boundary="request")
+    maintenance = MaintenanceService(ctx).guard(p, actor=actor, override=override, boundary="request")
     # The demo toggle is consumed only when the request does not ask for a forced failure itself.
     simulate = True if body.simulate_verify_fail else _demo_forces_failure(ctx)
 
     from_toggle = simulate and not body.simulate_verify_fail
 
     def work() -> None:
-        with feature("remediation engine"):
+        with feature("remediation engine"), MaintenanceService(ctx).request_observation(pid, maintenance):
             options = {"maintenance_override": override} if override is not None else {}
             ctx.engine.execute(pid, actor=actor, simulate_verify_fail=simulate, **options)
 

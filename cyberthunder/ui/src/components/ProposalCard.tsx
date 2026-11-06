@@ -2,7 +2,7 @@
 // what is wrong, why it matters, what will change, could it break something, how to undo.
 import { Alert, Badge, Button, Card, Checkbox, Divider, Group, Stack, Text, Title, Tooltip } from '@mantine/core';
 import { IconArrowBackUp, IconCheck, IconChecklist, IconPlayerPlay, IconX } from '@tabler/icons-react';
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import type { ProposalPlus } from '../api/types';
 import { fmtAgo, fmtZonedTime, label } from '../lib/format';
 import { canRequestRollback, proposalChangedAt } from '../lib/proposalHistory';
@@ -73,6 +73,16 @@ export function ProposalCard({
   const historical = !['proposed', 'approved'].includes(p.state);
   const receiptOnly = approvalReceiptOnly(p);
   const approvalProblem = p.state === 'proposed' ? approvalBlockReason(p, actor) : null;
+  const applyBlocked = actionsDisabled || busy || suppressed || held || p.maintenance?.allowed === false;
+  const currentApply = useRef({ p, blocked: applyBlocked });
+  currentApply.current = { p, blocked: applyBlocked };
+  const apply = () => {
+    if (currentApply.current.p !== p || currentApply.current.blocked || p.state !== 'approved'
+      || !permission.can('apply')) return;
+    const end = p.maintenance?.current_window?.end;
+    if (end && (!Number.isFinite(Date.parse(end)) || Date.parse(end) <= Date.now())) return;
+    actions.apply(p);
+  };
 
   return (
     <Card
@@ -206,7 +216,7 @@ export function ProposalCard({
             </>
           )}
           {p.state === 'approved' && (
-            <PermissionButton action="apply" size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={actionsDisabled || busy || suppressed || held || p.maintenance?.allowed === false} onClick={() => { if (!held && p.maintenance?.allowed !== false) actions.apply(p); }}>Apply</PermissionButton>
+            <PermissionButton action="apply" size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={applyBlocked} onClick={apply}>Apply</PermissionButton>
           )}
           {p.state === 'applying' && <Button size="md" loading variant="light">Applying</Button>}
           {canRequestRollback(p) && (

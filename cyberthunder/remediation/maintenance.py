@@ -5,6 +5,9 @@ All decisions are reloaded; no policy failure falls back to an unrestricted sche
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -21,6 +24,7 @@ from cyberthunder.security.resources import target_scope
 from cyberthunder.security.step_up import StepUpPolicy, freshness_clock
 
 OVERRIDE_SECONDS = 120
+_request_observation = ContextVar('maintenance_request_observation', default=None)
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})\Z")
 
 
@@ -85,6 +89,21 @@ def parse(raw):
 class MaintenanceService:
     def __init__(self, ctx):
         self.ctx = ctx
+
+    @contextmanager
+    def request_observation(self, proposal_id, decision):
+        """Carry request expectations through worker and target-lock waits, never authority."""
+        token = _request_observation.set((self.ctx, proposal_id, deepcopy(decision)))
+        try:
+            yield
+        finally:
+            _request_observation.reset(token)
+
+    def expected_request(self, proposal_id):
+        observation = _request_observation.get()
+        if observation is not None and observation[0] is self.ctx and observation[1] == proposal_id:
+            return observation[2]
+        return None
 
     def _now(self):
         now = freshness_clock(self.ctx).now()
@@ -237,3 +256,19 @@ class MaintenanceService:
             # Audit IO cannot make an expired window, revoked grant or stale binding valid.
             result = self._check(proposal, actor, override, result)
         return result
+
+    def confirm_time(self, decision, *, actor, override=None):
+        """Final clock/assurance sample after execution guards; no policy or inventory IO.
+
+        The guard immediately above still owns file validation. This narrow check
+        prevents time spent in other guards from extending that observed window.
+        """
+        if override is not None:
+            principal = require_current('maintenance.override', actor)
+            StepUpPolicy.from_settings(self.ctx.settings).require(principal, now=freshness_clock(self.ctx).now())
+            if self._now() >= timestamp(override['expires_at']):
+                raise MaintenanceBlocked("Maintenance override expired before apply; review and submit again.")
+        elif decision['status'] == 'open':
+            window = decision['current_window']
+            if not timestamp(window['start']) <= self._now() < timestamp(window['end']):
+                raise MaintenanceBlocked("Outside maintenance window; apply is held.")
