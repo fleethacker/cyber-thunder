@@ -53,3 +53,19 @@ test('account change during body decoding discards an old successful response', 
   metadata.setSessionIdentity(second); pending.resolve({ targets: ['old private target'] });
   await assert.rejects(result, { status: 0 });
 });
+
+for (const operation of ['targets', 'importVulnerabilityBundle', 'exportVulnerabilityBundle'])
+test(`${operation}: account change during body decoding conceals the old parser error`, async t => {
+  const old = globalThis.fetch;
+  let rejectBody;
+  const pending = new Promise((_, reject) => { rejectBody = reject; });
+  globalThis.fetch = async () => ({ ok: true, headers: new Headers({ 'Content-Type': 'application/json' }),
+    json: () => pending, blob: () => pending });
+  t.after(() => { globalThis.fetch = old; });
+  const load = createModuleLoader(), metadata = load(new URL('./identity.ts', import.meta.url));
+  metadata.setSessionIdentity(first);
+  const result = load(new URL('./client.ts', import.meta.url)).api[operation](new File(['fixture'], 'fixture.zip'));
+  await new Promise(setImmediate);
+  metadata.setSessionIdentity(second); rejectBody(new SyntaxError('Old account private target in invalid JSON'));
+  await assert.rejects(result, error => error.status === 0 && !error.message.includes('private target'));
+});

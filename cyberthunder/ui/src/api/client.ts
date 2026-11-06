@@ -113,9 +113,12 @@ export async function request<T>(method: string, path: string, opts: { query?: Q
   requireAuthority(revision);
   if (!res.ok) throw await parseError(res, revision);
   const ct = res.headers.get('content-type') ?? '';
-  const result = ct.includes('application/json') ? await res.json() : await res.text();
-  requireAuthority(revision);
-  return result as T;
+  try {
+    return (ct.includes('application/json') ? await res.json() : await res.text()) as T;
+  } finally {
+    // A malformed old response must not publish its parser error to a new account.
+    requireAuthority(revision);
+  }
 }
 
 const get = <T>(p: string, query?: Query) => request<T>('GET', p, { query });
@@ -125,7 +128,9 @@ const del = <T>(p: string) => request<T>('DELETE', p);
 
 const enc = encodeURIComponent;
 
-async function vulnerabilityZip(path: 'import' | 'export', file?: File): Promise<Response> {
+async function vulnerabilityZip(path: 'import', file: File): Promise<VulnerabilityStatus>;
+async function vulnerabilityZip(path: 'export'): Promise<Blob>;
+async function vulnerabilityZip(path: 'import' | 'export', file?: File): Promise<VulnerabilityStatus | Blob> {
   const revision = authorityRevision();
   const headers: Record<string, string> = { Accept: path === 'export' ? 'application/zip' : 'application/json', ...sessionHeaders('POST') };
   const actor = getActor();
@@ -140,9 +145,11 @@ async function vulnerabilityZip(path: 'import' | 'export', file?: File): Promise
   requireAuthority(revision);
   if (!res.ok) throw await parseError(res, revision);
   // Consume the body before returning so a late export cannot cross accounts.
-  const body = await res.blob();
-  requireAuthority(revision);
-  return new Response(body, { status: res.status, headers: res.headers });
+  try {
+    return path === 'export' ? await res.blob() : await res.json() as VulnerabilityStatus;
+  } finally {
+    requireAuthority(revision);
+  }
 }
 
 export const api = {
@@ -153,8 +160,8 @@ export const api = {
   updateVulnerabilityDatabases: (include_java: boolean) => post<VulnerabilityJob>('/vulnerabilities/update', { include_java }),
   vulnerabilityJobs: () => get<{ jobs: VulnerabilityJob[] }>('/vulnerabilities/jobs'),
   vulnerabilityJob: (id: string) => get<VulnerabilityJob>(`/vulnerabilities/jobs/${enc(id)}`),
-  importVulnerabilityBundle: async (file: File): Promise<VulnerabilityStatus> => (await vulnerabilityZip('import', file)).json(),
-  exportVulnerabilityBundle: async (): Promise<Blob> => (await vulnerabilityZip('export')).blob(),
+  importVulnerabilityBundle: (file: File): Promise<VulnerabilityStatus> => vulnerabilityZip('import', file),
+  exportVulnerabilityBundle: (): Promise<Blob> => vulnerabilityZip('export'),
 
   targets: () => get<{ targets: Target[] }>('/targets'),
   runtimeContext: () => get<RuntimeContext>('/runtime/context'),
