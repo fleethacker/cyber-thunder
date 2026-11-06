@@ -1,11 +1,13 @@
 """Atomic local cache I/O. The service must own its cache directory and ACLs."""
 
+import hashlib
 import os
 from pathlib import Path
 import stat
 import tempfile
 
 MAX_CACHE_BYTES = 524288
+_UNCHECKED = object()
 
 
 def _is_link(info: os.stat_result) -> bool:
@@ -53,7 +55,17 @@ def read_cache(path: Path) -> bytes | None:
     return data
 
 
-def write_cache(path: Path, data: bytes) -> None:
+def digest(data: bytes | None) -> bytes | None:
+    """Bind a live verifier to the exact cache bytes it loaded or published."""
+    return hashlib.sha256(data).digest() if data is not None else None
+
+
+def check_cache(path: Path, expected_digest: bytes | None) -> None:
+    if digest(read_cache(path)) != expected_digest:
+        raise ValueError("Cache invalidated")
+
+
+def write_cache(path: Path, data: bytes, *, expected_digest=_UNCHECKED) -> None:
     if len(data) > MAX_CACHE_BYTES:
         raise ValueError("Oversized cache")
     _check_parent(path)
@@ -61,6 +73,8 @@ def write_cache(path: Path, data: bytes) -> None:
         _check_file(path.lstat())
     except FileNotFoundError:
         pass
+    if expected_digest is not _UNCHECKED:
+        check_cache(path, expected_digest)
     fd, temporary = tempfile.mkstemp(prefix=".oidc-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
@@ -73,6 +87,8 @@ def write_cache(path: Path, data: bytes) -> None:
             _check_file(path.lstat())
         except FileNotFoundError:
             pass
+        if expected_digest is not _UNCHECKED:
+            check_cache(path, expected_digest)
         os.replace(temporary, path)
         if os.name != "nt":
             directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))

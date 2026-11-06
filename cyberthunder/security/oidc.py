@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 import jwt
 
-from ._oidc_cache import read_cache, write_cache
+from ._oidc_cache import check_cache, digest, read_cache, write_cache
 
 MAX_TOKEN_BYTES = 16384
 MAX_TOKEN_LIFETIME_S = 3600
@@ -198,6 +198,8 @@ class OIDCValidator:
         self._wall_anchor = time.time()
         self._mono_anchor = time.monotonic()
         self._clock_failed = False
+        self._cache_failed = False
+        self._cache_digest = None
         self._loaded = False
         self._keys = {}
         self._jwks = {}
@@ -207,13 +209,18 @@ class OIDCValidator:
         self._negative = OrderedDict()
 
     def _now(self) -> float:
-        wall, mono = time.time(), time.monotonic()
+        before = time.monotonic()
+        wall = time.time()
+        mono = time.monotonic()
+        earliest = self._wall_anchor + (before - self._mono_anchor)
         projected = self._wall_anchor + (mono - self._mono_anchor)
-        # Reading two clocks is not atomic. Tolerate sampling jitter even when
-        # token leeway is zero; effective time still never goes backward.
+        # The wall sample occurred somewhere inside this monotonic interval.
+        # Compare rollback against its earliest possible time, not the end of
+        # a scheduler pause after the wall read. Still advance effective time
+        # through the end of the interval for token expiry and key-cache age.
         rollback_tolerance = max(self.config.clock_skew_s, CLOCK_SAMPLE_TOLERANCE_S)
-        if (self._clock_failed or not math.isfinite(wall) or not math.isfinite(mono)
-                or mono < self._mono_anchor or wall + rollback_tolerance < projected):
+        if (self._clock_failed or not all(math.isfinite(t) for t in (wall, before, mono, earliest, projected))
+                or before < self._mono_anchor or mono < before or wall + rollback_tolerance < earliest):
             self._clock_failed = True
             raise ValueError("Clock rollback")
         effective = max(wall, projected)
@@ -238,12 +245,36 @@ class OIDCValidator:
             self._fetched_at, self._observed_at = fetched, observed
             self._wall_anchor = max(self._wall_anchor, observed)
         self._loaded = True
+        self._cache_digest = digest(data)
+
+    def _check_cache(self) -> None:
+        # Never silently recreate a purged cache or overwrite another writer's
+        # key rotation with this instance's older key set/watermark. This check
+        # also reapplies the file safety checks after the initial load.
+        if self._cache_failed:
+            raise ValueError("Cache invalidated")
+        try:
+            check_cache(self.config.cache_path, self._cache_digest)
+        except Exception:
+            self._cache_failed = True
+            self._keys, self._jwks = {}, {}
+            raise
 
     def _persist(self, jwks: dict, fetched: int, observed: int) -> None:
         body = {"version": 1, "issuer": self.config.issuer, "audience": self.config.audience,
                 "authorized_party": self.config.authorized_party, "jwks_url": self.config.jwks_url,
                 "fetched_at": fetched, "observed_at": observed, "jwks": jwks}
-        write_cache(self.config.cache_path, json.dumps(body, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+        data = json.dumps(body, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        self._check_cache()
+        try:
+            write_cache(self.config.cache_path, data, expected_digest=self._cache_digest)
+        except Exception:
+            # A plain I/O failure may leave the old cache intact. A purge or
+            # replacement during persistence must latch invalidation instead.
+            self._check_cache()
+            raise
+        self._cache_digest = digest(data)
+        self._check_cache()
 
     def _refresh(self) -> None:
         self._last_attempt = time.monotonic()
@@ -332,6 +363,7 @@ class OIDCValidator:
                 self._claims(claims, now)
                 if not self._loaded:
                     self._load(now)
+                self._check_cache()
                 algorithm, key = self._key(header["kid"], self._now())
                 if header["alg"] != algorithm:
                     raise ValueError("Algorithm mismatch")
@@ -349,6 +381,13 @@ class OIDCValidator:
                 if observed > self._observed_at:
                     self._persist(self._jwks, self._fetched_at, observed)
                     self._observed_at = observed
+                self._check_cache()
+                # Local reads/fsync can also block. Do not return claims that
+                # expired (or used keys that aged out) during cache persistence.
+                now = self._now()
+                self._claims(claims, now)
+                if now - self._fetched_at >= self.config.max_age_s:
+                    raise ValueError("Expired cache")
                 return claims
         except Exception:
             raise AuthenticationError() from None

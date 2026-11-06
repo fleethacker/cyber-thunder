@@ -28,7 +28,7 @@ validator = OIDCValidator(OIDCConfig(
 The constructor fields and `validate(token) -> dict` are the complete public
 interface. Reuse one validator per configuration for all requests in a process.
 Do not construct one per token: refresh deduplication and rate limits are scoped
-to that instance. Separate processes should have separate cache files and an
+to that instance. Each live validator must have its own cache file. Separate processes should have separate cache files and an
 application-level request/refresh limit. The synchronous first fetch can block
 for up to five seconds; an asynchronous application should call it in its worker
 pool. The parent integration owns settings, startup wiring, authentication
@@ -151,6 +151,17 @@ running Python interpreter, never a shell command.
   atomic replacement (plus directory fsync on POSIX). Failed writes do not publish
   new keys. Successful validations persist a wall-clock high-water mark when
   its integer second advances. A persistence failure rejects that validation.
+- A live validator binds itself to a digest of the exact cache bytes it loaded
+  or wrote. Bounded file and safety checks run before key use, before writes and
+  before returning claims. Observed deletion, corruption or replacement latches
+  rejection and discards in-memory keys; it never silently republishes stale
+  keys over a cache purge or another writer's update. Restoring old cache bytes
+  does not release this latch. Recreate the validator to resume after repair.
+  Persistence also checks expected cache bytes before creating its temporary
+  file and immediately before replacement. These guards do not provide a
+  filesystem compare-and-swap against uncoordinated external writers.
+  Token lifetime and key-cache age are checked again after the final cache I/O
+  so a blocking persistence operation cannot return newly expired claims.
 - Cache files must be regular, singly linked files. Symlinks and Windows reparse
   points are rejected in the path and its existing ancestors. POSIX additionally
   requires service ownership, private file permissions and a parent directory
@@ -158,7 +169,11 @@ running Python interpreter, never a shell command.
   Windows deployment must enforce a service-only directory ACL: this module
   detects reparse points but does not inspect or set Windows ACLs.
 - Effective time is the maximum of wall time and monotonic elapsed time projected
-  from the previous check. Small backward corrections never extend token or key
+  from the previous check. The wall read is bracketed by monotonic samples:
+  rollback is compared against the beginning of that interval, while effective
+  time advances through its end. A scheduler pause between clock reads therefore
+  does not become a false permanent rollback, including with zero token skew.
+  Small backward corrections never extend token or key
   lifetime. Clock sampling has a minimum 10 ms measurement tolerance, including
   when token skew is zero; this never adds token-expiry leeway. A rollback
   exceeding the larger of skew and that tolerance latches rejection; repair
@@ -169,8 +184,12 @@ The cache is a trusted local file, not an authenticated backup format. A party
 able to edit its contents can substitute keys. Rolling back both the cache and
 clock across a restart cannot be detected without an external monotonic anchor
 or protected hardware state. Protect the directory and backups and provision a
-trusted clock. Offline key revocation may take up to the configured cache age;
-immediate revocation requires online checking or an operational cache purge.
+trusted clock. Offline key revocation may take up to the configured cache age.
+For coordinated immediate revocation, stop authentication traffic, purge the
+affected caches, and recreate all affected validators before resuming against
+the trusted issuer. A detected live purge rejects subsequent validation, but
+requests already in flight and an external writer racing the final filesystem
+replacement cannot be revoked atomically by these file guards alone.
 
 ## Verification and external acceptance
 
@@ -208,3 +227,8 @@ trusted clock/CA deployment, and authorized testing of an actual provider's
 token/JWKS profile and rotation behavior. No IdP account, external configuration
 or live network was changed by this implementation. Local fixtures do not close
 those deployment acceptance items.
+
+An independent follow-up review and its adversarial regressions are recorded in
+[OIDC_REVIEW.md](OIDC_REVIEW.md). It addresses live cache invalidation, clock
+sampling under scheduler pauses and expiry during persistence without changing
+this module's public interface.
