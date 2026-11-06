@@ -204,7 +204,7 @@ def select(entries: list[Entry], targets: Iterable, collected: Mapping[str, Mapp
     collected = collected or {}
     # Local XML can claim any identity/release. It is useful reference content, but it
     # must not suppress an official download without verified publisher provenance.
-    held = [r for r in held if r.get("source") != "uploaded" and
+    held = [r for r in held if r.get("active") is not False and r.get("source") != "uploaded" and
             (r.get("ingest") or {}).get("upload", {}).get("authenticity_verified") is not False]
     hosts = frozenset(allowed_hosts)
     requested_kinds = set(content_kinds) if content_kinds is not None else None

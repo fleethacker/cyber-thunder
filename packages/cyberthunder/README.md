@@ -6,6 +6,57 @@ read-only cluster survey RBAC, kubeconfig and 10 GiB PVC from `deploy/kubernetes
 `uds.yaml` configures Istio ingress and Keycloak SSO at
 `https://cyberthunder.uds.dev` (or `cyberthunder.<DOMAIN>`).
 
+**Source identity migration:** a rebuilt image/package now requires a protected
+PVC account policy and uses native application OIDC sessions. Read
+[PACKAGE_IDENTITY.md](../../docs/PACKAGE_IDENTITY.md) before deploying. The
+checked-in `0.2.6` archives below remain historical artifacts with the earlier
+gateway/typed-actor behavior; they have not been rebuilt by these source changes.
+The two source build definitions now share the guarded CLI entrypoint and
+digest-pinned Trivy 0.71.1.
+
+## Rebuilt-source identity configuration
+
+See the [package identity review](docs/IDENTITY_REVIEW.md) for corrected traffic
+selectors, the alternate Service port change, removal of `nodes/proxy`, and
+the required per-account kubeconfig provisioning and live acceptance boundary.
+
+`zarf.yaml` includes `identity.yaml`, the read-only identity preflight, and the
+canonical UID/GID 10001 deployment. `DOMAIN` supplies the explicit UDS issuer,
+JWKS/auth/token endpoints and `/auth/callback` origin. `uds.yaml` registers the
+confidential `cyber-thunder-app` client with PKCE and a separate
+`cyber-thunder-api` access-token audience; its generated
+`cyberthunder-oidc-client` Secret supplies the app's client secret. The manifest
+also permits HTTPS egress to that issuer host. Private issuer PKI must be trusted
+inside the application runtime.
+
+The realm administrator must configure permitted application client roles and
+their scope mappings, an administrator-controlled `ct_kind` attribute for named
+human accounts, and refresh rotation. The storage administrator must provision
+the PVC root/auth directory and regular `auth/access.json` before deployment;
+see the exact ownership, policy example and migration steps in the linked
+document. There is no shared-admin seed or trust-copying init container.
+`fsGroup` is no longer used because it conflicts with protected policy paths.
+Review the provisioner-created PVC root as well as the application directory:
+a root-owned `0777` ancestor remains unsafe even with a UID 10001 `0700` child.
+See [PVC trust and bounded acceptance](../../docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md#pvc-root-and-namespace-acceptance-limits);
+development-mode persistence does not establish protected-policy acceptance.
+
+This source profile replaces the former Authservice `/login` flow with the
+application's native `/auth/callback`. The UI/login endpoints load before
+authentication; artifact APIs remain protected. Reconcile away the old
+Authservice injection and verify native login with two separately scoped
+accounts. Gateway SSO cookies alone do not establish an application session,
+and `/UDS Core/Admin` membership alone grants no application permissions.
+Keep UDS TLS ingress and authenticated mesh transport; `mesh` is not a setting
+for an ordinary plaintext deployment.
+
+The alternate `app.yaml` remains a UID 1000/5 GiB deployment for the teammate's
+Containerfile workflow and now consumes the same identity/preflight inputs.
+Its Service now uses port 80, matching the shared UDS route; the container still
+listens on port 8000. It is not selected by `zarf.yaml`; apply the shared preflight ConfigMap separately
+when using it. Its image source/context and delegated cluster/transport setup
+still require validation. Do not treat the old image tag as an identity update.
+
 ## Report history
 
 Version `0.2.6` adds searchable saved reports. Open **Reports → Report history**
@@ -37,6 +88,15 @@ It mounts a rotating projected token and a kubeconfig that points at the local
 cluster, and allows Kubernetes API egress through UDS. It cannot mutate cluster
 resources or read Secrets. Deployment does not start a baseline automatically.
 
+A namespace-only Role is not equivalent to this cluster-wide survey role:
+the default collectors still issue cluster-wide requests. Local
+acceptance with seven readable resource types in one namespace established
+limited namespace evidence, not an end-to-end collector scan, verified-account
+authentication or SSO. See the [acceptance limits](../../docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md#pvc-root-and-namespace-acceptance-limits).
+The optional [namespace collector](../../docs/KUBERNETES_NAMESPACE_SCOPE.md)
+accepts explicit target namespaces for read-only configuration collection. It
+does not change this packaged Role or authorize namespace remediation.
+
 ### Upgrade existing scan permissions
 
 The package includes the correction introduced in `0.2.5` for configuration scan `Forbidden` errors for
@@ -63,10 +123,10 @@ and is not enabled by these RBAC changes.
 An image and package rebuilt from this source add **Local Kubernetes cluster**
 (`local-cluster`) to **Assets** at startup, using the mounted
 `/etc/cyberthunder/kubeconfig` and its `in-cluster` context. The asset is visible
-but **out of scope**. No manual registration or external kubeconfig is needed
-for the host cluster. Enter your operator name in **Settings**, enable the
-asset's scope, then use **Discover** to retrieve the Kubernetes version, node
-names and readiness. Discover returns HTTP 403 before scope is authorized.
+but **out of scope**. No manual registration is needed for this inventory record.
+Use a verified named account with the appropriate roles, server policy and
+delegated credential binding to enable scope and discover it. Typed actor names
+and the mounted service account alone do not authorize access in verified mode.
 
 The already-built `0.2.4`, `0.2.5` and `0.2.6` archives retain the earlier behavior:
 newly registered host-cluster assets start in scope. Those archives have not
@@ -83,12 +143,18 @@ to disable startup registration; `CT_BOOTSTRAP_CLUSTER_TARGET_ID` and
 Automatic registration is enabled by this Kubernetes deployment; ordinary CLI
 and standalone server runs retain their existing explicit inventory setup.
 
+For verified account operations, the projected bootstrap kubeconfig and its
+`tokenFile` are not a supported credential binding. Provision a protected regular
+per-account kubeconfig and explicit policy binding before scanning; see the
+[credential provisioning seam](docs/IDENTITY_REVIEW.md#account-kubernetes-credentials-required-provisioning-seam).
+The pod's survey role and inventory registration do not grant account rights.
+
 ### Cluster baseline API
 
 With an authenticated browser session, the cluster API provides:
 
 - `GET /api/v1/cluster/survey`: namespaces and workload images.
-- `POST /api/v1/cluster/baseline` with `{"use_openai": false}` and an `X-Actor` header naming the operator: scan images and save risk profiles.
+- `POST /api/v1/cluster/baseline` with `{"use_openai": false}`: scan images and save risk profiles for the authorized account (application session and CSRF headers required).
 - `GET /api/v1/cluster/risk`: the latest saved profiles.
 
 Trivy's vulnerability database and target images are not included in this app
@@ -116,7 +182,11 @@ them requires a key provided through a Kubernetes Secret and explicit egress to
 `api.openai.com:443`; the default package configures neither. The request sends
 the namespace risk profile to that external service.
 
-## Deploy to a remote cluster
+## Historical archive deployment
+
+These steps describe the existing split archives, not a rebuilt identity-aware
+source release. Do not publish them as containing the current startup guard or
+account isolation. Rebuilt deployments require the provisioning steps above.
 
 Copy these artifacts from `packages/` to the deployment machine:
 
@@ -161,12 +231,17 @@ The application image and SBOM are carried in the archive, so no public image
 registry is needed during deployment. The package is unsigned; the checksum
 verifies transfer integrity, not publisher identity.
 
-The app uses one replica, persistent file state, and template explanations by
-default. See [runtime configuration and scanning limitations](../../deploy/kubernetes/README.md).
+The app uses one replica and one API worker because verified browser sessions
+are process-local. Documents use `CT_STATE_BACKEND=json` (default) or `sqlite`;
+audit, inventory, proposals and other artifacts remain files on the PVC under
+both backends. Back up the whole state directory; see [State](../../docs/STATE.md).
+Template explanations are the default. See
+[runtime configuration and scanning limitations](../../deploy/kubernetes/README.md).
 Target and model-server egress must be explicitly allowed in the UDS Package for
 your environment. A non-default storage class requires updating the PVC manifest
-and rebuilding. SSO controls access; audit actions still use the app's configured
-actor name in Settings.
+and rebuilding. In rebuilt source, verified account identity, application roles
+and server policy control access and attribution; a configured actor name does
+not authorize an operation.
 
 ## SSH access to an external VM
 
@@ -185,23 +260,32 @@ Supply these values on subsequent upgrades too. UDS permits TCP egress only
 from the scanner to that CIDR and SSH port, alongside existing Kubernetes API
 access. This rule does not enable external Kubernetes API or WinRM access.
 
-The Deployment also mounts the optional `cyberthunder-target-credentials`
-Secret read-only at `/etc/cyberthunder/targets`, with mode `0440`. Create it
-using an existing key authorized on the target and a verified known-hosts file:
+The optional `cyberthunder-target-credentials` Secret remains mounted read-only
+at `/etc/cyberthunder/targets` with mode `0444`. **Do not select its projected
+`id_ed25519` as an SSH private key.** The protected key reader rejects symlinks
+and group/world permission bits. Changing only the mount mode does not provide
+a protected regular file or an account binding.
 
-```sh
-kubectl -n cyberthunder create secret generic cyberthunder-target-credentials \
-  --from-file=id_ed25519=/path/to/target-key \
-  --from-file=known_hosts=/path/to/verified-known-hosts
-```
+Provision a protected regular key through the storage administrator, then bind
+its absolute runtime path and remote username to the exact named account,
+target, environment and action in `auth/access.json`. Use a read-only target
+account with `sudo: false` for scans and a separately authorized apply account
+with only the remote privileges required by the reviewed fix. Retain verified
+SSH host trust. Inventory key fields and egress rules cannot supply the account
+grant. Fleet password references instead require an explicit protected
+`CT_CREDENTIAL_SOURCES` registry; `CT_CRED_*` target-password fallback is refused.
+The OIDC browser client secret remains a separate application credential.
 
-Set the asset's SSH key file to `/etc/cyberthunder/targets/id_ed25519`. The
-Secret is optional so installations that only scan the local cluster still
-start without target credentials. No Secret-read permission is added to the
-scanner's service account.
-
-The existing archives are unchanged; rebuild to include these source changes.
-For an already deployed package, use the [local QEMU repair patches](../../range/README.md#qemu-ssh-from-a-uds-deployment).
+See [Deployment credential provisioning](../../docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md)
+for file-based configuration examples, native alternatives and exact protection
+requirements. The package has no end-to-end target credential provisioner: it
+does not install those files, populate the registry or create remote accounts.
+The preflight validates application identity/policy, not target authentication.
+The [local QEMU repair patches](../../range/README.md#qemu-ssh-from-a-uds-deployment)
+describe legacy egress/Secret wiring and do not close this credential gap.
+The existing archives are unchanged; rebuilding alone does not provision
+credentials. Remaining provisioning/acceptance work is tracked in
+[BACKLOG.md](../../docs/BACKLOG.md), ZT-19 and ZT-13.
 
 ## Verify
 
@@ -214,10 +298,16 @@ From the repository root after deployment:
 ./scripts/verify-cyberthunder.sh CONTEXT DOMAIN
 ```
 
-The check requires a Ready UDS Package and Deployment, an injected Istio sidecar,
+For the historical Authservice archives, the check requires a Ready UDS Package and Deployment, an injected Istio sidecar,
 Keycloak redirects for the UI/API/assets, and rejection of invalid bearer tokens.
 Also sign in with an authorized user and confirm that the UI and `/api/v1/status`
 load. A user outside `/UDS Core/Admin` must be denied access.
+
+The existing verification script assumes the old gateway flow and is not an
+acceptance test for this native-session source profile. For a rebuilt release,
+check `/auth/status` (public 200), anonymous `/api/v1/status` (401), native browser
+login, CSRF, logout, and denial of a second account outside its assigned
+environment. Do not change the API to satisfy the obsolete anonymous probe.
 
 ## Rebuild
 
@@ -236,4 +326,6 @@ registry. Lint warns that this local image uses a tag rather than a registry
 and digest; the built archive carries the captured image and content checksums.
 The default kubectl matches Kubernetes 1.36; set `--build-arg KUBECTL_VERSION=vX.Y.Z`
 when rebuilding for a different cluster minor version. Bump the image tag and
-package version together for subsequent releases.
+package version together for subsequent releases, including the init-container
+image. The commands above are operator release steps; no image/package build or
+live realm acceptance was performed for this source integration.

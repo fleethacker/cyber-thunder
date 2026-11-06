@@ -32,12 +32,16 @@ def test_factory_preserves_range_default_for_older_settings(kind, monkeypatch):
     assert make_transport(target(kind)).security_mode == "range"
 
 
-def test_factory_preserves_trust_and_kerberos_configuration(certificates, monkeypatch):
+def test_factory_preserves_trust_and_kerberos_configuration(certificates, monkeypatch, tmp_path):
     monkeypatch.setenv("CT_CRED_FACTORY", "fixture-secret")
     settings = SimpleNamespace(security_mode="fleet")
     pin = "SHA256:" + "A" * 43
-    ssh = make_transport(target("ssh", host_key_sha256=pin), settings)
-    winrm = make_transport(target("winrm", ca_trust_path=certificates["ca"]), settings)
+    ssh_target = target("ssh", host_key_sha256=pin, key_file=str(tmp_path / "fixture-key"))
+    ssh_target.credential_ref = None
+    kerberos_target = target("winrm", ca_trust_path=certificates["ca"], transport="kerberos")
+    kerberos_target.credential_ref = None
+    ssh = make_transport(ssh_target, settings)
+    winrm = make_transport(kerberos_target, settings)
     assert ssh.security_mode == "fleet" and ssh.host_key_sha256 == pin
     assert winrm.security_mode == "fleet" and winrm.ssl and winrm.auth == "kerberos"
 

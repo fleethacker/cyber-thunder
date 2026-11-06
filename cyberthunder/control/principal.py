@@ -67,10 +67,17 @@ class Principal:
         return self.via in {"oidc", "mesh"}
 
     def evidence(self) -> dict:
+        # Correlate decisions without persisting or exporting the issuer's raw
+        # session identifier. This reference never authenticates an operation.
+        session_fingerprint = None
+        if self.session_id is not None:
+            material = "\x00".join((self.issuer, self.subject, self.session_id)).encode("utf-8")
+            session_fingerprint = "sha256:" + hashlib.sha256(b"ct-session-reference-v1\x00" + material).hexdigest()
         return {"kind": self.kind, "iss": self.issuer, "sub": self.subject, "name": self.display_name,
                 "roles": list(self.roles), "groups": list(self.groups), "scopes": list(self.scopes),
                 "via": self.via, "verified": self.verified, "acr": self.acr, "amr": list(self.amr),
-                "auth_time": self.auth_time, "expires_at": self.expires_at, "session_id": self.session_id}
+                "auth_time": self.auth_time, "expires_at": self.expires_at, "session_id": None,
+                "session_fingerprint": session_fingerprint}
 
     @classmethod
     def from_claims(cls, claims: dict, *, via: str, roles_claim: str = "ct_roles") -> "Principal":

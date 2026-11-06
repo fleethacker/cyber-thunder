@@ -19,6 +19,10 @@ class FakeIngest:
         self.deltas = []
         self.pending = [{"name": "commander.html", "kind": "commander", "bytes": 4096, "created_at": "t"}]
         self.seen_path = None
+        self.content = self
+
+    def import_stig(self, path, actor, override_reason=None):
+        return self.ingest_stig(path, actor)
 
     def link_state(self):
         return dict(self.link)

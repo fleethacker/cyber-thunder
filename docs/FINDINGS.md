@@ -19,7 +19,8 @@ are shown separately from the immutable original scanner result; see [change his
 
 Each quick view replaces the filters and clears search, keeping the chosen sort. **Clear filters**
 also shows all results. **Reset defaults** returns to all open results with the original priority sort.
-Search, filters and sorting persist in this browser through refresh and navigation using local preferences.
+Search, filters and sorting persist in this browser through refresh and navigation using local preferences,
+separately for each signed-in account. Development-mode preferences retain their existing keys.
 Pagination returns to page one when a filter or sort changes.
 
 Search matches CVE and STIG references, rule IDs/versions, group IDs, title, machine ID, source,
@@ -51,6 +52,16 @@ filtering and pagination, so narrowing one filter does not remove choices from a
 values absent from a refreshed view remain available with a zero count and can be cleared.
 The page displays matching versus total counts and the range shown on the current page.
 
+**Reassessment** filters the API's read-only history annotation: **Not reassessed**,
+**No known gap**, or **Unknown**. No known gap does not establish freshness, complete
+coverage, or a current pass. Unknown means the available history cannot establish
+reassessment. These states are separate from scanner status, evidence confidence,
+and human review; see [finding reassessment](FINDING_REASSESSMENT.md). The filter
+combines with the other selectors and uses complete authorized-view counts before
+pagination. Clear filters and quick views clear it; Reset defaults also restores
+priority order. Servers without this facet pause the saved filter and observation-time
+sort until support is available.
+
 ## Scanner result and remediation
 
 | Display | Existing API status |
@@ -81,7 +92,11 @@ the page filters. Open a finding using its rule/identifier button to inspect evi
 
 Default priority keeps the original order: highest severity, open first, machine, then STIG ID/rule.
 Choose an explicit field and ascending/descending direction for severity, machine, asset type,
-category, title, rule ID, STIG ID/rule version, source, observation time, benchmark, release, confidence or review.
+category, title, rule ID, STIG ID/rule version, source, observation time, collection time,
+benchmark, release, confidence or review. **Observation time** sorts the API's
+`reassessment.observation.observed_at`, which uses recorded provenance time when present
+and otherwise collection time. Unknown or timezone-free observation times stay last
+in either direction. **Collection time** retains the existing `collected_at` sort.
 Observation time compares actual instants across time zones. Text sorts ignore case; releases sort
 as text, not semantic versions. Category sorting compares each finding's alphabetically ordered
 category names. Equal sort values always use finding ID ascending. Missing values and unknown
@@ -100,7 +115,7 @@ facets beyond the first page, missing values, stable ordering, observation time 
 overlays, explicit historical scans, verified remediation, empty views and invalid input:
 
 ```text
-python -m pytest tests/api/test_findings_query.py tests/api/test_core.py tests/api/test_review_fixes.py
+python -m pytest tests/api/test_findings_query.py tests/api/test_reassessment_query.py tests/api/test_findings_reassessment.py tests/api/test_core.py tests/api/test_review_fixes.py
 ```
 
 Build the UI from `cyberthunder/ui` with `npm run build`.

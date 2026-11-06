@@ -41,16 +41,20 @@ test('Findings retains semantic table rows, a detail button, and the separate re
   browser(t);
   const finding = { id: 'finding-one', title: 'Check SSH', rule_id: 'rule-one', rule_version: 'STIG-1', host: 'server', status: 'not_reviewed',
     scanner_status: 'not_a_finding', needs_rescan: true,
-    severity: 'high', categories: ['stig'], source: 'scanner', references: [], review: null };
+    severity: 'high', categories: ['stig'], source: 'scanner', references: [], review: null,
+    collected_at: '2026-11-05T10:30:00Z', reassessment: { status: 'not_reassessed',
+      observation: { observed_at: '2026-11-05T10:00:00Z' }, latest_attempt: { started_at: '2026-11-05T12:00:00Z' } } };
   let result;
   const panel = mount((hooks) => {
     const libHooks = evaluate(new URL('../lib/hooks.ts', import.meta.url), { react: hooks, '../api/client': { errorText } });
+    const query = evaluate(new URL('../lib/findingsQuery.ts', import.meta.url), { './hooks': libHooks });
     return evaluate(new URL('./Findings.tsx', import.meta.url), {
       react: hooks, '@mantine/core': ui, '@mantine/hooks': { useDebouncedValue: (value) => [value] },
       '@mantine/notifications': { notifications: { show() {} } }, '../api/client': { errorText, api: { findings: async () => result } },
       '../components/common': ui, '../components/FindingDrawer': ui, '../components/FindingAssurance': ui,
+      '../components/FindingReassessment': ui,
       '../lib/findingAssurance': { CONFIDENCE_LABELS: {}, REVIEW_LABELS: {} }, '../lib/format': format,
-      '../lib/hooks': libHooks, '../lib/findingRow': rowHelpers,
+      '../lib/findingsQuery': query, '../lib/findingRow': rowHelpers,
     }).default;
   });
   result = { findings: [finding], total: 1, unfiltered_total: 1, offset: 0, facets: { confidence: [], review: [] } };
@@ -62,6 +66,16 @@ test('Findings retains semantic table rows, a detail button, and the separate re
   assert.match(row().props.className, /finding-row/);
   assert.match(text(row()), /needs rescan after rollback/);
   assert.doesNotMatch(text(row()), /verified fix/);
+  assert.match(text(row()), /2026-11-05T10:00:00Z/);
+  const badge = panel.nodes(body()).find((node) => node.type === 'FindingReassessment');
+  assert.equal(badge.props.reassessment, finding.reassessment);
+  assert.equal(badge.props.compact, true);
+  const observed = () => text(panel.nodes(row()).filter((node) => node.type === 'Table.Td')[8]);
+  assert.equal(observed(), '2026-11-05T10:00:00Z');
+  finding.reassessment.observation.observed_at = null;
+  assert.equal(observed(), 'Not recorded', 'An unknown API observation time must not fall back to collection or scan start time');
+  delete finding.reassessment;
+  assert.equal(observed(), finding.collected_at, 'Legacy servers retain their recorded collection timestamp');
   assert.ok(panel.nodes(body()).some((node) => node.type === 'Button' && node.props.children === 'View details'));
   panel.nodes(body()).find((node) => node.type === 'ReviewBadge').props.onClick();
   row().props.onClick(pointer({ target: { closest: () => ({}) } })); await panel.settle();

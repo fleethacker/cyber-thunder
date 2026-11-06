@@ -1,6 +1,6 @@
-import { Alert, Badge, Button, Card, Group, Loader, Stack, Text, Title } from '@mantine/core';
+import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, Text, Title } from '@mantine/core';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { sessionHeaders, setSessionIdentity, authorityKey, type SessionIdentity } from '../api/identity';
+import { sessionHeaders, setSessionIdentity, authorityKey, parseStepUpChallenge, type SessionIdentity, type StepUpChallenge } from '../api/identity';
 import { PermissionProvider } from '../components/PermissionGate';
 
 interface IdentityContext {
@@ -25,9 +25,20 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
+  const [challenge, setChallenge] = useState<StepUpChallenge | null>(null);
+  const [reauthError, setReauthError] = useState<string | null>(null);
+  const [reauthBusy, setReauthBusy] = useState(false);
+  const reauthPending = useRef<number | null>(null);
+  const reauthGeneration = useRef(0);
   const authority = useRef(authorityKey(null));
   const acceptIdentity = useCallback((value: SessionIdentity | null) => {
-    authority.current = authorityKey(value);
+    const next = authorityKey(value);
+    if (next !== authority.current) {
+      authority.current = next;
+      reauthGeneration.current++;
+      reauthPending.current = null;
+      setReauthBusy(false); setReauthError(null); setChallenge(null);
+    }
     setSessionIdentity(value);
     setIdentity(value);
   }, []);
@@ -55,8 +66,13 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh();
     const expire = () => { acceptIdentity(null); void refresh(); };
+    const stepUp = (event: Event) => {
+      const value = parseStepUpChallenge({ error: 'insufficient_user_authentication', step_up: (event as CustomEvent).detail });
+      if (value) { setChallenge(value); setReauthError(null); }
+    };
     window.addEventListener('ct:session-expired', expire);
-    return () => { generation.current++; window.removeEventListener('ct:session-expired', expire); };
+    window.addEventListener('ct:step-up', stepUp);
+    return () => { generation.current++; reauthGeneration.current++; window.removeEventListener('ct:session-expired', expire); window.removeEventListener('ct:step-up', stepUp); };
   }, [refresh, acceptIdentity]);
 
   useEffect(() => {
@@ -68,6 +84,8 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
   const logout = async () => {
     const previousAuthority = authority.current;
     generation.current++;
+    reauthGeneration.current++;
+    setReauthBusy(false);
     const response = await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin',
       headers: sessionHeaders('POST') });
     if (previousAuthority !== authority.current) return;
@@ -76,9 +94,47 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
     await refresh();
   };
 
+  const reauthenticate = async () => {
+    if (reauthPending.current !== null || !identity?.authenticated || !identity.login_available || !challenge?.acr_values.length) return;
+    const version = ++reauthGeneration.current;
+    reauthPending.current = version; setReauthBusy(true); setReauthError(null);
+    try {
+      const returnTo = window.location.pathname + window.location.search + window.location.hash;
+      const response = await fetch('/auth/reauthenticate', { method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { ...sessionHeaders('POST'), 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ return_to: returnTo }) });
+      if (!response.ok) throw new Error();
+      const body = await response.json();
+      if (version !== reauthGeneration.current) return;
+      if (typeof body.authorization_url !== 'string' || body.authorization_url.length > 8192) throw new Error();
+      const destination = new URL(body.authorization_url);
+      if (destination.protocol !== 'https:' || destination.username || destination.password || destination.hash) throw new Error();
+      window.location.assign(destination.href);
+    } catch {
+      if (version === reauthGeneration.current) setReauthError('Reauthentication could not be started. Refresh sign-in and try again.');
+    } finally {
+      if (reauthPending.current === version) reauthPending.current = null;
+      if (version === reauthGeneration.current) setReauthBusy(false);
+    }
+  };
+
   if (identity && (identity.mode === 'dev' || identity.authenticated)) {
     return <IdentityProvider key={authorityKey(identity)} identity={identity} logout={logout}>
       {children}
+      <Modal opened={!!challenge} onClose={() => { if (!reauthBusy) setChallenge(null); }} title="Reauthenticate before deciding"
+        closeOnClickOutside={!reauthBusy} closeOnEscape={!reauthBusy}>
+        <Stack>
+          <Text>This request was refused. Sign in again, then review and submit the decision yourself. No action will be repeated automatically.</Text>
+          <Text size="sm">The server requires an accepted authentication context and a sign-in no more than {challenge?.max_age} seconds old.</Text>
+          {!challenge?.acr_values.length && <Alert color="yellow">Accepted authentication contexts are not configured. An administrator must configure the node before this action can proceed.</Alert>}
+          {!identity.login_available && <Alert color="yellow">Browser sign-in is unavailable. Obtain fresh authentication through your configured identity client.</Alert>}
+          {reauthError && <Alert color="red">{reauthError}</Alert>}
+          <Group>
+            <Button onClick={() => void reauthenticate()} loading={reauthBusy} disabled={!identity.login_available || !challenge?.acr_values.length}>Reauthenticate</Button>
+            <Button variant="default" disabled={reauthBusy} onClick={() => setChallenge(null)}>Keep reviewing</Button>
+          </Group>
+        </Stack>
+      </Modal>
     </IdentityProvider>;
   }
   return <Card withBorder maw={520} mx="auto" mt="xl" p="xl">

@@ -8,7 +8,7 @@ import { PermissionButton, usePermissions } from './PermissionGate';
 import { api, errorText } from '../api/client';
 import type { FindingPlus, ProposalPlus } from '../api/types';
 import { fmtAgo, fmtTime } from '../lib/format';
-import { isSuppressed } from '../lib/findingAssurance';
+import { isSuppressed, isRemediationHeld } from '../lib/findingAssurance';
 import { findingResultLabel } from '../lib/findingRow';
 import { useAsync } from '../lib/hooks';
 import { CitationChips } from './CitationChips';
@@ -17,6 +17,8 @@ import { RiskTagsForFix } from './FixPanel';
 import { DiffButton } from './ProposalDiff';
 import { ConfidenceBadge } from './FindingAssurance';
 import { FindingReviewAccess } from './FindingActions';
+import { FindingCatalogReference } from './FindingCatalogReference';
+import { FindingReassessment } from './FindingReassessment';
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -73,7 +75,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
     }
   };
   const propose = async () => {
-    if (!permission.can('propose') || busy || isSuppressed(f.review)) return;
+    if (!permission.can('propose') || busy || isSuppressed(f.review) || isRemediationHeld(f.review)) return;
     setBusy('propose');
     setActionError(null);
     try {
@@ -91,6 +93,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
   const ex = f.explanation;
   const scannerStatus = f.scanner_status ?? f.remediated?.scan_status ?? f.status;
   const suppressed = isSuppressed(f.review);
+  const held = isRemediationHeld(f.review);
   const live = f.proposal && !['denied', 'cancelled', 'verified', 'rolled_back', 'failed'].includes(f.proposal.state);
   return (
     <Stack gap="md">
@@ -122,12 +125,18 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
         {f.evidence ? <CodeBlock code={f.evidence} maxHeight={220} /> : <Text size="sm" c="dimmed">No scanner evidence was recorded.</Text>}
       </Section>
 
+      <Section title="Reassessment">
+        <FindingReassessment reassessment={f.reassessment} />
+      </Section>
+
       <Section title="Evidence confidence">
         <Group><ConfidenceBadge confidence={f.confidence} /><Text size="xs" c="dimmed">Select the badge for reasons and collection details.</Text></Group>
         <Text size="sm">{f.confidence?.reason || 'This server has not reported evidence confidence.'}</Text>
       </Section>
 
       <FindingReviewAccess finding={f} opened={reviewOpen} onToggle={() => setReviewOpen((o) => !o)} onFinding={st.setData} onReviewed={onReviewed} />
+
+      <FindingCatalogReference finding={f} />
 
       <Section title="Citations">
         <CitationChips ids={citationsOf(f)} links />
@@ -170,7 +179,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
             <PermissionButton action="propose"
               size="sm"
               leftSection={<IconSend size={16} />}
-              disabled={!f.fix || !!live || f.status !== 'open' || suppressed}
+              disabled={!f.fix || !!live || f.status !== 'open' || suppressed || held}
               loading={busy === 'propose'}
               onClick={() => void propose()}
             >
@@ -190,6 +199,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
           )}
           {live && <Text size="xs" c="dimmed">A live proposal already exists ({f.proposal?.state}).</Text>}
           {suppressed && <Text size="sm" c="orange">Propose is disabled while this human dismissal is active. {f.review?.current?.reason} Review the current evidence to reverse the dismissal.</Text>}
+          {held && <Text size="sm" c="orange">Risk acceptance holds remediation. The scanner failure remains open. Use the risk review form to revoke acceptance, or reassess after expiry or changed evidence.</Text>}
         </Stack>
       </Paper>
 

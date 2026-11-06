@@ -7,6 +7,8 @@ the report embedded, so a printed page can be matched to the chain later.
 from __future__ import annotations
 
 import inspect
+import csv
+import io
 import json
 from typing import TYPE_CHECKING
 
@@ -43,7 +45,9 @@ class ReportService:
     # -- reports --------------------------------------------------------------------
     @access.rendered
     def commander(self, scan_id: str | None = None, fmt: str = "html") -> str:
-        fmt = self._fmt(fmt)
+        fmt = (fmt or "html").lower()
+        if fmt != "json":
+            fmt = self._fmt(fmt)
         text, data = onepager.render_commander(self.ctx, scan_id, fmt)
         run = self.ctx.store.load_scan_run(data["scan_id"]) or {}
         history.save(self.ctx, "commander", text, fmt, scan_id=data["scan_id"], targets=run.get("targets", []))
@@ -57,7 +61,7 @@ class ReportService:
         sid = scan_id or self.ctx.store.latest_scan_id()
         run = self.ctx.store.load_scan_run(sid) if sid else {}
         history.save(self.ctx, "poam", text, "csv", scan_id=sid, targets=(run or {}).get("targets", []))
-        self._audited("poam", head, scan_id=scan_id, rows=max(text.count("\n") - 1, 0))
+        self._audited("poam", head, scan_id=scan_id, rows=sum(1 for _ in csv.DictReader(io.StringIO(text))))
         return text
 
     @access.rendered

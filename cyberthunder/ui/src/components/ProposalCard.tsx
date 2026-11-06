@@ -2,14 +2,17 @@
 // what is wrong, why it matters, what will change, could it break something, how to undo.
 import { Alert, Badge, Button, Card, Checkbox, Divider, Group, Stack, Text, Title, Tooltip } from '@mantine/core';
 import { IconArrowBackUp, IconCheck, IconChecklist, IconPlayerPlay, IconX } from '@tabler/icons-react';
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import type { ProposalPlus } from '../api/types';
 import { fmtAgo, fmtZonedTime, label } from '../lib/format';
 import { canRequestRollback, proposalChangedAt } from '../lib/proposalHistory';
-import { isSuppressed } from '../lib/findingAssurance';
+import { isSuppressed, isRemediationHeld } from '../lib/findingAssurance';
+import { approvalBlockReason, approvalProgress, approvalReceiptOnly } from '../lib/proposalApprovals';
+import { ApprovalProgress } from './ApprovalProgress';
 import { ApplyTimeline } from './ApplyTimeline';
 import { CitationChips } from './CitationChips';
 import { DiffButton } from './ProposalDiff';
+import { MaintenanceNotice, MaintenanceOverrideButton } from './ProposalMaintenance';
 import { PreviewButton } from './ProposalPlan';
 import { PermissionButton, usePermissions } from './PermissionGate';
 import { RecordedIdentity } from './IdentityProvenance';
@@ -47,7 +50,7 @@ export function RiskTags({ p }: { p: ProposalPlus }) {
 }
 
 export function ProposalCard({
-  p, actions, busy, selected, onSelect, focused, actionsDisabled = false,
+  p, actions, busy, selected, onSelect, focused, actionsDisabled = false, actor = '',
 }: {
   p: ProposalPlus;
   actions: ProposalActions;
@@ -56,6 +59,7 @@ export function ProposalCard({
   onSelect?: (v: boolean) => void;
   focused?: boolean;
   actionsDisabled?: boolean;
+  actor?: string;
 }) {
   const permission = usePermissions();
   const f = p.finding;
@@ -65,7 +69,20 @@ export function ProposalCard({
   const ruleIds = [f?.rule_version, f?.rule_id].filter(Boolean) as string[];
   const auto = (p.decided_by ?? '').startsWith('policy:');
   const suppressed = isSuppressed(f?.review);
+  const held = isRemediationHeld(f?.review);
   const historical = !['proposed', 'approved'].includes(p.state);
+  const receiptOnly = approvalReceiptOnly(p);
+  const approvalProblem = p.state === 'proposed' ? approvalBlockReason(p, actor) : null;
+  const applyBlocked = actionsDisabled || busy || suppressed || held || p.maintenance?.allowed === false;
+  const currentApply = useRef({ p, blocked: applyBlocked });
+  currentApply.current = { p, blocked: applyBlocked };
+  const apply = () => {
+    if (currentApply.current.p !== p || currentApply.current.blocked || p.state !== 'approved'
+      || !permission.can('apply')) return;
+    const end = p.maintenance?.current_window?.end;
+    if (end && (!Number.isFinite(Date.parse(end)) || Date.parse(end) <= Date.now())) return;
+    actions.apply(p);
+  };
 
   return (
     <Card
@@ -100,6 +117,8 @@ export function ProposalCard({
           </Stack>
         </Group>
 
+        <ApprovalProgress proposal={p} actor={actor} />
+
         <Q n={1} title="What is wrong">
           <Text size="sm">{f?.description ? f.description.slice(0, 400) + (f.description.length > 400 ? '...' : '') : p.title}</Text>
         </Q>
@@ -133,9 +152,9 @@ export function ProposalCard({
             : p.assessment?.status === 'not_assessed' ? 'This decision was recorded without a dependency assessment.'
               : 'No dependency assessment is attached to this proposal.'}</Text>
           {actions.impact && <Group>
-            <PermissionButton allowed={historical || permission.can(p.state === 'approved' ? ['plan', 'review'] : 'plan')} reason={permission.reason(p.state === 'approved' ? ['plan', 'review'] : 'plan')} variant="light" disabled={busy || (!historical && actionsDisabled)}
-              onClick={() => actions.impact?.(p, p.state !== 'approved')}>
-              {historical ? 'View impact receipt' : p.state === 'approved' ? 'Review impact before apply' : 'Assess impact'}
+            <PermissionButton allowed={historical || permission.can(receiptOnly ? 'read' : p.state === 'approved' ? ['plan', 'review'] : 'plan')} reason={permission.reason(receiptOnly ? 'read' : p.state === 'approved' ? ['plan', 'review'] : 'plan')} variant="light" disabled={busy || (!historical && !receiptOnly && actionsDisabled)}
+              onClick={() => actions.impact?.(p, receiptOnly || p.state !== 'approved')}>
+              {historical || receiptOnly ? 'View impact receipt' : p.state === 'approved' ? 'Review impact before apply' : 'Assess impact'}
             </PermissionButton>
           </Group>}
         </Q>
@@ -144,7 +163,7 @@ export function ProposalCard({
           <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{p.rollback_plan || fix?.rollback_plan}</Text>
         </Q>
 
-        {(auto || p.policy?.auto_eligible) && (
+        {!approvalProgress(p).protected && (auto || p.policy?.auto_eligible) && (
           <Group gap="xs">
             {auto ? (
               <Badge color="cyan" variant="light" tt="none" size="lg">
@@ -177,6 +196,11 @@ export function ProposalCard({
         {p.state === 'rolled_back' && <Alert color="yellow">This change was rolled back. Earlier passing observations may no longer describe the target. Check its current condition with a fresh scan.</Alert>}
 
         <Divider />
+        <MaintenanceNotice value={p.maintenance} />
+        {p.state === 'approved' && p.maintenance?.status === 'held' && <MaintenanceOverrideButton proposalId={p.id} disabled={actionsDisabled || busy || suppressed || held} />}
+        {held && <Alert color="orange" title="Remediation held by risk acceptance">
+          <Text size="sm">{f?.review?.current?.reason} The scanner risk remains. Revoke acceptance in Finding detail, or reassess after expiry or changed evidence before applying.</Text>
+        </Alert>}
         {suppressed && <Alert color="orange" title="Apply blocked by human review">
           <Text size="sm">{f?.review?.current?.reason || 'An active dismissal applies to the current evidence.'}</Text>
           <Text size="sm">Open Finding detail to review the evidence and recorded decision.</Text>
@@ -184,12 +208,15 @@ export function ProposalCard({
         <Group gap="sm">
           {p.state === 'proposed' && (
             <>
-              <PermissionButton action={['approve', 'plan']} size="md" color="green" leftSection={<IconCheck size={18} />} loading={busy} disabled={actionsDisabled || busy} onClick={() => actions.approve(p)}>Approve</PermissionButton>
+              <PermissionButton action={['approve', 'plan']} allowed={permission.can(['approve', 'plan']) && !approvalProblem}
+                reason={permission.reason(['approve', 'plan']) || approvalProblem} size="md" color="green" leftSection={<IconCheck size={18} />}
+                loading={busy} disabled={actionsDisabled || busy || !!approvalProblem}
+                onClick={() => { if (permission.can(['approve', 'plan']) && !approvalBlockReason(p, actor)) actions.approve(p); }}>Approve</PermissionButton>
               <PermissionButton action="deny" size="md" color="red" variant="light" leftSection={<IconX size={18} />} disabled={actionsDisabled || busy} onClick={() => actions.deny(p)}>Deny</PermissionButton>
             </>
           )}
           {p.state === 'approved' && (
-            <PermissionButton action="apply" size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={actionsDisabled || busy || suppressed} onClick={() => actions.apply(p)}>Apply</PermissionButton>
+            <PermissionButton action="apply" size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={applyBlocked} onClick={apply}>Apply</PermissionButton>
           )}
           {p.state === 'applying' && <Button size="md" loading variant="light">Applying</Button>}
           {canRequestRollback(p) && (

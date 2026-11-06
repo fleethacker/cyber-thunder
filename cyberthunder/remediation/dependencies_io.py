@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 import json
+import math
 import os
 import shlex
 import signal
@@ -129,26 +131,51 @@ def _process(argv, timeout, *, cwd=None, env=None, guard=lambda: None):
         proc.stderr.close()
 
 
-def _ssh(transport, command, timeout, guard):
+@contextmanager
+def _close_after_read(resource):
+    failed = False
+    try:
+        yield resource
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        try:
+            resource.close()
+        except Exception:
+            if not failed:
+                raise
+
+
+def _ssh(transport, command, timeout, guard, *, deadline=None):
     # Share host trust policy; keep bounded probes free of implicit identities.
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + timeout if deadline is None else deadline
 
     def check():
+        if time.monotonic() >= deadline:
+            raise ReadFailure("timeout")
         transport._guard()
         guard()
+        if time.monotonic() >= deadline:
+            raise ReadFailure("timeout")
 
     check()
-    if not transport._password and not transport._key:
+    from cyberthunder.security.secret_resolver import CredentialUse
+    use = transport._credential_use
+    if use is not None and not isinstance(use, CredentialUse):
+        raise ReadFailure("explicit_ssh_credential_required")
+    if not transport._password and not transport._key and use is None:
         # Automatic agent/key discovery can try an unbounded number of identities.
         raise ReadFailure("explicit_ssh_credential_required")
-    client = transport.connect_client(timeout=min(3, timeout), guard=guard, allow_agent=False)
-    try:
+    client = transport.connect_client(timeout=min(3, deadline - time.monotonic()),
+                                      deadline=deadline, guard=check, allow_agent=False)
+    with _close_after_read(client):
         check()
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ReadFailure("timeout")
         channel = client.get_transport().open_session(timeout=remaining)
-        try:
+        with _close_after_read(channel):
             check()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -161,66 +188,52 @@ def _ssh(transport, command, timeout, guard):
                 check()
                 if time.monotonic() >= deadline:
                     raise ReadFailure("timeout")
+                channel.settimeout(deadline - time.monotonic())
                 if channel.recv_ready():
                     out.extend(channel.recv(4096))
+                    check()
                 if channel.recv_stderr_ready():
                     err.extend(channel.recv_stderr(4096))
+                    check()
                 _check_size(out, err)
                 if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
                     check()
-                    return CommandResult("", channel.recv_exit_status(),
+                    code = channel.recv_exit_status()
+                    check()
+                    return CommandResult("", code,
                                          out.decode("utf-8", "replace"), err.decode("utf-8", "replace"))
                 time.sleep(0.01)
-        finally:
-            channel.close()
-    finally:
-        client.close()
 
 
-def _winrm(transport, command, timeout, guard):
+def _winrm(transport, command, timeout, guard, *, deadline=None):
     # Session.run_ps/get_command_output retries operation timeouts indefinitely. Read single
     # protocol frames instead, with a deadline and short HTTP timeouts, then always clean up.
     from winrm.exceptions import WinRMOperationTimeoutError
 
-    transport.operation_timeout_s = 2
-    transport.read_timeout_s = 3
+    deadline = time.monotonic() + timeout if deadline is None else deadline
     if transport._session is not None:
         raise ReadFailure("reused_session")
-    protocol = transport._sess().protocol
-    deadline = time.monotonic() + timeout
-    shell = command_id = None
-    try:
-        guard()
-        shell = protocol.open_shell(noprofile=True, codepage=65001)
-        guard()
+    with transport.bounded_reader(guard=guard, deadline=deadline) as operation:
+        operation.open()
         encoded = base64.b64encode(command.encode("utf-16-le")).decode("ascii")
-        command_id = protocol.run_command(shell, "powershell.exe",
-                                         ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded])
-        guard()
+        operation.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded])
         out, err = bytearray(), bytearray()
         while time.monotonic() < deadline:
-            guard()
             try:
-                stdout, stderr, code, done = protocol.get_command_output_raw(shell, command_id)
+                stdout, stderr, code, done = operation.receive()
             except WinRMOperationTimeoutError:
-                guard()
                 continue
-            guard()
+            if not isinstance(stdout, bytes) or not isinstance(stderr, bytes) or type(done) is not bool:
+                raise ReadFailure("invalid_output")
+            if len(out) + len(err) + len(stdout) + len(stderr) > MAX_OUTPUT:
+                raise ReadFailure("output_limit")
             out.extend(stdout)
             err.extend(stderr)
-            _check_size(out, err)
             if done:
+                if type(code) is not int:
+                    raise ReadFailure("invalid_output")
                 return CommandResult("", code, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"))
         raise ReadFailure("timeout")
-    finally:
-        # Cleanup is required even after scope revocation/kill; it cancels our own read only.
-        try:
-            if command_id is not None:
-                protocol.cleanup_command(shell, command_id)
-        finally:
-            if shell is not None:
-                protocol.close_shell(shell)
-            transport._session = None
 
 
 def _fixture(transport, command):
@@ -245,6 +258,27 @@ def _fixture(transport, command):
 
 
 def read_command(transport, command, *, timeout, guard):
+    # Sanitize provider and cleanup errors outside their exception handlers so
+    # traceback chaining cannot export credentials. Keep authorization signals.
+    from cyberthunder.control.killswitch import KillSwitchEngaged
+    from cyberthunder.transport.trust import TrustError
+    failure = None
+    try:
+        return _read_command(transport, command, timeout=timeout, guard=guard)
+    except (ReadFailure, KillSwitchEngaged, TrustError):
+        raise
+    except PermissionError:
+        failure = "permission"
+    except TimeoutError:
+        failure = "timeout"
+    except Exception:
+        failure = "transport_failed"
+    if failure == "permission":
+        raise PermissionError("Dependency principal revoked or access refused") from None
+    raise ReadFailure(failure) from None
+
+
+def _read_command(transport, command, *, timeout, guard):
     """Only collector-built commands reach here. Unknown transports fail closed."""
     from cyberthunder.adapters.kubernetes.kubectl import KubectlTransport
     from cyberthunder.transport.fixture import FixtureTransport
@@ -252,13 +286,20 @@ def read_command(transport, command, *, timeout, guard):
     from cyberthunder.transport.ssh import SSHTransport
     from cyberthunder.transport.winrm import WinRMTransport
 
+    if isinstance(timeout, bool) or not isinstance(timeout, (float, int)) or not math.isfinite(timeout) or timeout <= 0:
+        raise ReadFailure("timeout")
+    deadline = time.monotonic() + timeout
     caller_guard = guard
     def guard():
+        if time.monotonic() >= deadline:
+            raise ReadFailure("timeout")
         caller_guard()
         for name in ("account_guard", "_guard"):
             check = getattr(transport, name, None)
             if callable(check):
                 check()
+        if time.monotonic() >= deadline:
+            raise ReadFailure("timeout")
 
     guard()
     if isinstance(transport, FixtureTransport):
@@ -274,12 +315,12 @@ def read_command(transport, command, *, timeout, guard):
         argv = shlex.split(command) if command.startswith("systemctl show ") else transport._argv(command)
         result = _process(argv, timeout, cwd=transport.cwd, env=transport.env, guard=guard)
     elif type(transport) is SSHTransport:
-        result = _ssh(transport, command, timeout, guard)
+        result = _ssh(transport, command, timeout, guard, deadline=deadline)
     elif type(transport) is WinRMTransport:
-        result = _winrm(transport, command, timeout, guard)
+        result = _winrm(transport, command, timeout, guard, deadline=deadline)
     else:
         raise ReadFailure("unsupported_transport")
-    if not isinstance(result.stdout, str) or not isinstance(result.stderr, str):
+    if not isinstance(result.stdout, str) or not isinstance(result.stderr, str) or type(result.exit_code) is not int:
         raise ReadFailure("invalid_output")
     _check_size(result.stdout.encode("utf-8"), result.stderr.encode("utf-8"))
     if result.exit_code != 0:

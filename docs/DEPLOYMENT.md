@@ -215,16 +215,19 @@ Ports 80, 443 and 6550 must be free on Windows as well as inside WSL, because WS
 Keep the clone in the Linux file system (`~`), not under `/mnt/c`: Docker bind mounts and k3d are far slower
 there.
 
-**Keep the WSL instance alive.** WSL stops the Ubuntu instance about a minute after the last `wsl.exe` session
-closes, and Docker and the cluster stop with it (they come back on the next launch, which takes a few minutes and
-leaves pods restarting). Two things prevent that: a session that stays open, started hidden from PowerShell,
+**Keep the WSL test instance alive.** Closing the last active WSL session can let
+the instance stop, taking Docker and the test cluster with it. The exact timing
+depends on the installed WSL version and configuration. Use the optional
+[per-user keep-alive helper](WSL_KEEPALIVE.md) from the stable Windows checkout:
 
 ```powershell
-Start-Process wsl.exe -ArgumentList '-d','Ubuntu','--exec','sleep','infinity' -WindowStyle Hidden
+powershell.exe -NoProfile -File C:\dev\cyber-thunder\scripts\wsl-keepalive.ps1 -Action Plan
 ```
 
-and `vmIdleTimeout=604800000` (one week, in milliseconds) under `[wsl2]` in `.wslconfig`, which applies after the
-next `wsl --shutdown`.
+Review the plan, then use explicit Install and Start actions as documented there.
+Installation does not start WSL. The helper leaves `.wslconfig` and current
+sessions unchanged; it provides Status, Stop and Remove actions. Its task state
+does not establish cluster health. Actual logon/reboot acceptance remains open.
 
 ### Scanning the cluster from Windows
 

@@ -76,37 +76,70 @@ class Protocol:
         self.calls = []
         self.result = result or (b'{"name":"WinRM"}', b"", 0, True)
         self.error = error
+        self.operation_timeout_sec = 60
+        from requests import Session
+        self.transport = SimpleNamespace(session=Session(), close_session=lambda: None)
+
+        class Sender:
+            def send_message(self, message):
+                return b"fixture"
+
+            def build_session(sender):
+                return self.transport.session
+
+        self._sender = Sender()
+        self.transport.send_message = self._sender.send_message
+        self.transport.build_session = self._sender.build_session
 
     def open_shell(self, **kwargs):
         self.calls.append(("open", kwargs))
+        self.transport.send_message("open")
         return "test-shell"
 
     def run_command(self, shell, program, arguments):
         self.calls.append(("run", program, arguments))
+        self.transport.send_message("run")
         return "test-command"
 
     def get_command_output_raw(self, shell, command):
         self.calls.append(("read",))
+        self.transport.send_message("read")
         if self.error:
             raise self.error
         return self.result
 
     def cleanup_command(self, shell, command):
+        from .test_dependencies_credentials import release_message
         self.calls.append(("cleanup",))
+        self.transport.send_message(release_message(shell, command))
 
-    def close_shell(self, shell):
+    def close_shell(self, shell, close_session=True):
+        from .test_dependencies_credentials import release_message
         self.calls.append(("close",))
+        self.transport.send_message(release_message(shell))
+
+
+def install_session(monkeypatch, transport, protocol):
+    def session(*, lease=None, bounded=None):
+        result = SimpleNamespace(protocol=protocol)
+        # A fresh provider sender for each operation; never reuse the old guard.
+        protocol.transport.send_message = protocol._sender.send_message
+        protocol.transport.build_session = protocol._sender.build_session
+        bounded.attach(result)
+        return result
+    monkeypatch.setattr(transport, "_sess", session)
 
 
 def test_winrm_frame_bounds_and_cleanup(monkeypatch):
     protocol = Protocol()
     transport = WinRMTransport("fixture", password="private-password")
-    monkeypatch.setattr(transport, "_sess", lambda: SimpleNamespace(protocol=protocol))
+    install_session(monkeypatch, transport, protocol)
     guard_calls = []
     command = "$s = Get-Service -Name 'WinRM'"
     result = io.read_command(transport, command, timeout=2, guard=lambda: guard_calls.append(True))
     assert result == '{"name":"WinRM"}'
-    assert transport.operation_timeout_s == 2 and transport.read_timeout_s == 3
+    assert transport.operation_timeout_s == 60 and transport.read_timeout_s == 90
+    assert 0 < protocol.transport.read_timeout_sec <= 2
     run = next(call for call in protocol.calls if call[0] == "run")
     assert base64.b64decode(run[2][-1]).decode("utf-16-le") == command
     assert protocol.calls[-2:] == [("cleanup",), ("close",)] and len(guard_calls) >= 4
@@ -121,22 +154,35 @@ def test_winrm_deadline_and_kill_between_open_and_command(monkeypatch):
 
     transport = WinRMTransport("fixture", password="private-password")
     protocol = Protocol(error=WinRMOperationTimeoutError())
-    monkeypatch.setattr(transport, "_sess", lambda: SimpleNamespace(protocol=protocol))
-    clock = iter([0, 0, 2])
-    monkeypatch.setattr(io.time, "monotonic", lambda: next(clock))
+    install_session(monkeypatch, transport, protocol)
+    clock = [0]
+    monkeypatch.setattr(io.time, "monotonic", lambda: clock[0])
+    original = protocol.get_command_output_raw
+    def expired(*args):
+        clock[0] = 2
+        return original(*args)
+    monkeypatch.setattr(protocol, "get_command_output_raw", expired)
     with pytest.raises(io.ReadFailure, match="timeout"):
-        io._winrm(transport, "fixed-read", 1, lambda: None)
+        io.read_command(transport, "fixed-read", timeout=1, guard=lambda: None)
     assert protocol.calls[-2:] == [("cleanup",), ("close",)]
     monkeypatch.setattr(io.time, "monotonic", lambda: 0)
     protocol.calls.clear()
 
     def guard():
-        if protocol.calls:
+        if protocol.calls and protocol.calls[-1][0] != "open":
             raise KillSwitchEngaged("test kill")
+
+    # Revoke after open_shell returns, while preserving its ID for cleanup.
+    opened = protocol.open_shell
+    def open_then_kill(**kwargs):
+        result = opened(**kwargs)
+        protocol.calls.append(("created",))
+        return result
+    monkeypatch.setattr(protocol, "open_shell", open_then_kill)
 
     with pytest.raises(KillSwitchEngaged):
         io._winrm(transport, "must-not-run", 1, guard)
-    assert [c[0] for c in protocol.calls] == ["open", "close"]
+    assert [c[0] for c in protocol.calls] == ["open", "created", "close"]
 
 
 def test_ssh_fixed_credentials_bounded_reads_and_guard(monkeypatch):

@@ -40,7 +40,7 @@ from .models import RUN_MODES, DiscoveredAsset, DiscoveryRun, DiscoveryScope, as
 from .oui import tag_virtual
 from .recipes import ScopeRecipeStore
 from .simulated import DEMO_SCOPE, SimulatedSweep
-from .sources import active_directory, hypervisor, kube, neighbors, network_gear, nmap
+from .sources import active_directory, hypervisor, kube, neighbors, network_gear, nmap, vsphere
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -323,8 +323,16 @@ class DiscoveryService:
 
     def _execute(self, run: DiscoveryRun, scopes: list[DiscoveryScope], actor: str, raise_stop: bool = False) -> None:
         try:
-            observed, baseline, incomplete = self._collect(run, scopes, actor)
-            self._finish(run, scopes, observed, baseline, actor, incomplete)
+            publication_guards = {
+                target.id: vsphere.source_guard(self.ctx, target, scopes, actor,
+                                                lambda scope: self._guard_scope(scope, actor))
+                for target in self.ctx.inventory.all()
+                if run.mode != "simulated" and target.in_scope and (target.options or {}).get("hypervisor") == "vsphere"
+                and (getattr(self.ctx.settings, "auth_mode", "dev") == "dev"
+                     or self.ctx.may_access(target, "discover"))
+            }
+            observed, baseline, incomplete = self._collect(run, scopes, actor, vsphere_access=publication_guards)
+            self._finish(run, scopes, observed, baseline, actor, incomplete, publication_guards=publication_guards)
         except KillSwitchEngaged as e:
             self._stopped(run, actor, str(e))
             if raise_stop:
@@ -343,7 +351,7 @@ class DiscoveryService:
             if lock is not None:
                 lock.release()
 
-    def _collect(self, run: DiscoveryRun, scopes: list[DiscoveryScope], actor: str):
+    def _collect(self, run: DiscoveryRun, scopes: list[DiscoveryScope], actor: str, *, vsphere_access=None):
         """Gather raw observations from every source. Returns (assets, baseline ports or None, incomplete),
         where incomplete maps a scope CIDR to SCOPE_PARTIAL (hosts known, port data missing) or SCOPE_FAILED
         (the liveness sweep failed, so nothing can be said about who is absent)."""
@@ -367,7 +375,7 @@ class DiscoveryService:
             self.ctx.killswitch.guard("discovery.sweep", actor)
             for scope in scopes:
                 self._guard_scope(scope, actor)
-            observed.extend(self._inventory_sources(scopes, run))
+            observed.extend(self._inventory_sources(scopes, run, vsphere_access=vsphere_access))
         return observed, baseline, incomplete
 
     # -- sources -------------------------------------------------------------------------------
@@ -462,7 +470,7 @@ class DiscoveryService:
             raise FileNotFoundError((r.stderr or "known_hosts not readable").strip()[:200])
         return r.stdout
 
-    def _inventory_sources(self, scopes: list[DiscoveryScope], run: DiscoveryRun) -> list[DiscoveredAsset]:
+    def _inventory_sources(self, scopes: list[DiscoveryScope], run: DiscoveryRun, *, vsphere_access=None) -> list[DiscoveredAsset]:
         """Switch tables, cluster nodes, directory and hypervisor listings from in-scope inventory targets."""
         got: list[DiscoveredAsset] = []
         for t in self.ctx.inventory.all():
@@ -470,6 +478,16 @@ class DiscoveryService:
             if not t.in_scope:
                 continue
             o = t.options or {}
+            if o.get("hypervisor") == "vsphere":
+                if (getattr(self.ctx.settings, "auth_mode", "dev") != "dev"
+                        and not self.ctx.may_access(t, "discover")):
+                    continue
+                if vsphere_access is not None and t.id not in vsphere_access:
+                    raise PermissionError("vsphere:source_configuration_changed")
+                got.extend(vsphere.collect(self.ctx, t, scopes, run.requested_by,
+                                           lambda scope: self._guard_scope(scope, run.requested_by),
+                                           access=vsphere_access.get(t.id) if vsphere_access is not None else None))
+                continue
             jobs: list[tuple[str, Callable[["Transport"], list[DiscoveredAsset]]]] = []
             if t.asset_type == "cisco_ios":
                 jobs.append(("network gear", lambda tr, t=t: self._gear(tr, t, run)))
@@ -502,8 +520,9 @@ class DiscoveryService:
             finally:
                 self._close(transport)
         # devices on the enclave only: anything a source reports outside the swept scopes is dropped,
-        # except powered-off VMs, which have no address and are tied to a hypervisor already in scope
-        return [a for a in got if any(s.contains(a.address) for s in scopes) or (not a.address and a.facts.get("vm_name"))]
+        # except addressless VM/host metadata from an explicitly scoped hypervisor source
+        return [a for a in got if any(s.contains(a.address) for s in scopes)
+                or (not a.address and (a.facts.get("vm_name") or vsphere.is_observation(a)))]
 
     @staticmethod
     def _gear(transport: "Transport", t: Target, run: DiscoveryRun) -> list[DiscoveredAsset]:
@@ -537,15 +556,19 @@ class DiscoveryService:
     # -- reconcile -----------------------------------------------------------------------------
     @staticmethod
     def merge_observations(observed: Iterable[DiscoveredAsset]) -> list[DiscoveredAsset]:
-        """One asset per device: observations sharing a MAC or an address are folded together."""
+        """Network observations share MAC/IP keys; vSphere inventory objects retain their own identity."""
         out: list[DiscoveredAsset] = []
         for a in observed:
-            hit = next((x for x in out if (a.mac and x.mac == a.mac) or (a.address and x.address == a.address)), None)
+            if vsphere.is_observation(a):
+                hit = next((x for x in out if vsphere.is_observation(x) and x.id == a.id), None)
+            else:
+                hit = next((x for x in out if not vsphere.is_observation(x)
+                            and ((a.mac and x.mac == a.mac) or (a.address and x.address == a.address))), None)
             if hit is None:
                 out.append(a)
                 continue
             hit.merge(a)
-            if hit.mac or hit.address:
+            if not vsphere.is_observation(hit) and (hit.mac or hit.address):
                 hit.id = asset_id_for(hit.mac, hit.address)
         return out
 
@@ -643,16 +666,29 @@ class DiscoveryService:
                     del previous[pid]
 
     def _finish(self, run: DiscoveryRun, scopes, observed, baseline, actor: str,
-                incomplete: dict[str, str] | None = None) -> None:
+                incomplete: dict[str, str] | None = None, *, publication_guards=None) -> None:
         incomplete = incomplete or {}
         unswept = {c for c, state in incomplete.items() if state == SCOPE_FAILED}
+
+        def check_publication():
+            for guard in (publication_guards or {}).values():
+                guard()
+
         with self._lock:
             previous = self._load_assets()
             assets, counts = self.reconcile(observed, scopes, baseline, previous, unswept)
             self._retire_stale(previous, assets)
             for a in assets:
                 previous[a.id] = a
+            # Other sources and reconciliation can outlast a vSphere request.
+            # Recheck the captured grants at the actual publication boundary.
+            if publication_guards is not None:
+                reporters = {a.facts.get("reported_by") for a in assets if vsphere.is_observation(a)}
+                if not reporters.issubset(publication_guards):
+                    raise PermissionError("vsphere:source_configuration_changed")
+                check_publication()
             self._save_assets(previous)
+            check_publication()
         for k, v in counts.items():
             setattr(run, k, v)
         run.asset_ids = [a.id for a in assets]
@@ -660,9 +696,12 @@ class DiscoveryService:
             run.errors.append("incomplete scopes (no missing-asset verdict where the sweep failed): " + ", ".join(
                 f"{c} {state}" for c, state in sorted(incomplete.items())))
         run.status, run.finished_at = ("partial" if incomplete else "finished"), utcnow()
+        check_publication()
         self._save_run(run, assets)
+        check_publication()
         self.ctx.audit.append("discovery.finish", actor, {"run": run.id, "status": run.status, "mode": run.mode,
                                                           **counts, "errors": run.errors[:5]}, subject=run.id)
+        check_publication()
 
     # -- runs and assets -----------------------------------------------------------------------
     def _save_run(self, run: DiscoveryRun, assets: list[DiscoveredAsset] | None = None) -> None:

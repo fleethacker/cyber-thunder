@@ -1,6 +1,6 @@
 # Testing checkpoint
 
-Feature work stops at this checkpoint so the integrated application can be tested at home and rehearsed for judging. [Backlog section 6](BACKLOG.md#6-requested-capabilities-at-the-testing-checkpoint) maps the requested capabilities to their implementation boundaries and remaining work.
+Use a recorded release revision and separate state to test the integrated application and rehearse the operator flow. The release's validation and backup receipts identify what was actually tested; this document does not declare a continuing feature freeze. [Backlog section 6](BACKLOG.md#6-requested-capabilities-at-the-testing-checkpoint) maps the requested capabilities to their implementation boundaries and remaining work.
 
 ## Start a separate simulated rehearsal
 
@@ -9,12 +9,14 @@ From the repository in the project Python environment, PowerShell can create a n
 ```powershell
 $env:CT_STATE_DIR = Join-Path $env:TEMP ('ct-checkpoint-' + [guid]::NewGuid().ToString('N'))
 $env:CT_STATE_BACKEND = 'sqlite'
+$env:CT_AUTH_MODE = 'dev'
+$env:CT_SECURITY_MODE = 'range'
 python -m cyberthunder demo load
 python -m cyberthunder scan
 python -m cyberthunder serve --host 127.0.0.1 --port 8001
 ```
 
-Open `http://127.0.0.1:8001`. Keep the printed/chosen state path to return to this rehearsal later; a new path creates a separate rehearsal. The same backend must be used by every process opening that directory. Do not point `demo reset` at existing operational state. [STATE](STATE.md) describes migration, local-volume SQLite limits and complete state backup.
+Open `http://127.0.0.1:8001`. This fresh-state, loopback development rehearsal uses unverified names and simulated targets; it does not test verified login or target credentials. Keep the printed/chosen state path to return to this rehearsal later; a new path creates a separate rehearsal. The same backend must be used by every process opening that directory. Do not point `demo reset` at existing operational state or use these development settings for a deployed service. [STATE](STATE.md) describes migration, local-volume SQLite limits and complete state backup.
 
 Native Python changes take effect after restarting the application process. A previously published container or Zarf package does not acquire source changes automatically; build and deploy the intended revision through the existing [deployment procedure](DEPLOYMENT.md).
 
@@ -37,4 +39,4 @@ The source recovery set is a source ZIP, an all-ref Git bundle, validation evide
 
 That source set is separate from runtime state, credentials, VM disks/snapshots, scanner databases and cached container images. Preserve those separately when carrying a working range home. Do not copy a running SQLite database by itself: stop all writers and follow [STATE](STATE.md#backups) for the complete directory, including the audit and other file-backed records.
 
-Application-level verified login, per-user target credentials, full dependency analysis, independent lockout recovery, durable registry image updates, persistent monitoring and platform validation remain explicitly tracked in the backlog. No uncompleted item is claimed production-ready at this checkpoint.
+Verified browser/CLI login and per-account target grants and credential selection are implemented and have separate local acceptance evidence; see [account access](ACCOUNT_ACCESS.md), [person/account acceptance](PERSON_ACCOUNT_LIVE.md) and [CLI acceptance](CLI_DEVICE_PKCE.md). Those checks do not establish the intended enclave's claim mappings, actual remote privileges, immediate token revocation or credential issuance. Full dependency analysis, independent lockout recovery, durable registry image updates, workload scheduling and platform validation remain tracked in the backlog. No uncompleted item is claimed production-ready at this checkpoint.

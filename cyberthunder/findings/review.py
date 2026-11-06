@@ -6,7 +6,7 @@ import json
 import re
 import time
 from contextlib import ExitStack, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -15,7 +15,8 @@ from cyberthunder.audit.chain import AuditLog
 from cyberthunder.control.identity import require_human
 from cyberthunder.control.principal import Principal, authorize, current_principal, require_current
 from cyberthunder.findings.lifecycle import (
-    LifecycleReentry, ReviewConflict, finding_key, finding_lifecycle_lock, review_coordination_lock,
+    LifecycleReentry, ReviewConflict, finding_key, finding_lifecycle_lock, finding_lifecycle_locks,
+    review_coordination_lock,
 )
 from cyberthunder.findings.schema import Finding, findings_from_doc
 
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
 
 DISPOSITIONS = frozenset({"unreviewed", "confirmed", "false_positive", "not_applicable", "needs_investigation"})
 SUPPRESSING = frozenset({"false_positive", "not_applicable"})
+RISK_DECISIONS = frozenset({"risk_accepted", "risk_revoked"})
+MAX_RISK_ACCEPTANCE_DAYS = 30
 MAX_REASON_LENGTH = 4000
 MAX_SUPPORTING_EVIDENCE_LENGTH = 16000
 MAX_HISTORY_EVENTS = 1000
@@ -77,8 +80,13 @@ def principal_from_evidence(actor, evidence, *, human=False) -> Principal:
     required = {"kind", "iss", "sub", "name", "via", "verified"}
     optional = {"roles", "groups", "scopes", "acr", "amr", "auth_time", "expires_at", "session_id"}
     if (not isinstance(evidence, dict) or not required <= evidence.keys()
-            or evidence.keys() - required - optional or evidence.get("verified") is not True):
+            or evidence.keys() - required - optional - {"session_fingerprint"} or evidence.get("verified") is not True):
         raise ValueError("invalid recorded principal")
+    reference = evidence.get("session_fingerprint")
+    if reference is not None and (not isinstance(reference, str) or len(reference) != 71
+                                 or not reference.startswith("sha256:")
+                                 or any(c not in "0123456789abcdef" for c in reference[7:])):
+        raise ValueError("invalid recorded session reference")
     principal = Principal(issuer=evidence["iss"], subject=evidence["sub"], display_name=evidence["name"],
                           kind=evidence["kind"], via=evidence["via"],
                           **{key: value for key, value in evidence.items() if key in optional})
@@ -101,14 +109,14 @@ def _owned_events(finding, events):
     return [event for event in events if event["scope"].get("authorization_scope") == owner]
 
 
-def _reviewer(ctx, finding, actor):
-    authorize(ctx, "review", actor=actor, target=finding.host)
+def _reviewer(ctx, finding, actor, action="review"):
+    authorize(ctx, action, actor=actor, target=finding.host)
     if getattr(getattr(ctx, "settings", None), "auth_mode", "dev") != "dev":
         from cyberthunder.security.resources import check_record
-        check_record(ctx, finding, "review")
+        check_record(ctx, finding, action)
     principal = current_principal()
     if principal is not None and principal.verified:
-        return require_current("review", actor).evidence()
+        return require_current(action, actor).evidence()
     return None
 
 
@@ -184,7 +192,7 @@ class ReviewService:
         for event in events:
             if (not isinstance(event, dict) or type(event.get("revision")) is not int
                     or event["revision"] <= previous_revision
-                    or event.get("disposition") not in DISPOSITIONS
+                    or event.get("disposition") not in DISPOSITIONS | RISK_DECISIONS
                     or not isinstance(event.get("scope"), dict)
                     or not isinstance(event.get("evidence_fingerprint"), str)
                     or not re.fullmatch(r"[0-9a-f]{64}", event["evidence_fingerprint"])
@@ -199,8 +207,13 @@ class ReviewService:
             expiry = event.get("expires_at")
             if expiry is not None:
                 parse_timestamp(expiry)
-            elif event["disposition"] in SUPPRESSING:
+            elif event["disposition"] in SUPPRESSING | {"risk_accepted"}:
                 raise ValueError("invalid review event: suppression requires an expiry")
+            if event["disposition"] == "risk_accepted":
+                _text(event["supporting_evidence"], "supporting_evidence", MAX_SUPPORTING_EVIDENCE_LENGTH, required=True)
+                duration = parse_timestamp(expiry) - parse_timestamp(event["reviewed_at"])
+                if not timedelta(0) < duration <= timedelta(days=MAX_RISK_ACCEPTANCE_DAYS):
+                    raise ValueError("invalid risk acceptance duration")
         seen = set()
         event_by_id = {event["id"]: event for event in events}
         if len(event_by_id) != len(events):
@@ -247,10 +260,24 @@ class ReviewService:
             elif current["expires_at"] is not None and parse_timestamp(current["expires_at"]) <= now:
                 reopened = "Review expired; a new review is required."
             else:
-                disposition = current["disposition"]
+                disposition = "unreviewed" if current["disposition"] == "risk_revoked" else current["disposition"]
                 active = disposition != "unreviewed"
+        risk = next((e for e in reversed(events) if e["disposition"] in RISK_DECISIONS), None)
+        risk_status = "none"
+        if risk is not None:
+            if risk["disposition"] == "risk_revoked":
+                risk_status = "revoked"
+            elif (any(e["review_event_id"] == risk["id"] for e in doc["invalidations"])
+                  or risk["scope"] != review_scope(finding) or risk["evidence_fingerprint"] != fingerprint):
+                risk_status = "reopened"
+            elif parse_timestamp(risk["expires_at"]) <= now:
+                risk_status = "expired"
+            else:
+                risk_status = "active" if risk is current and active else "reopened"
         return {"disposition": disposition, "active": active,
                 "suppressed": active and disposition in SUPPRESSING,
+                "remediation_held": active and disposition == "risk_accepted",
+                "risk_acceptance_status": risk_status, "risk_acceptance": risk,
                 # The opaque write revision still covers the whole document;
                 # history_count and returned events cover only this owner.
                 "revision": len(doc["history"]) + len(doc["invalidations"]), "evidence_fingerprint": fingerprint,
@@ -276,11 +303,31 @@ class ReviewService:
 
     def save(self, finding: Finding, *, actor, disposition, reason, supporting_evidence="",
              expires_at=None, expected_revision, evidence_fingerprint) -> dict:
-        actor = require_human(actor)
         if not isinstance(disposition, str) or disposition not in DISPOSITIONS:
-            raise ValueError("invalid review disposition")
+            raise ValueError("invalid review disposition; use the risk acceptance operation for risk decisions")
+        return self._save(finding, actor=actor, disposition=disposition, reason=reason,
+                          supporting_evidence=supporting_evidence, expires_at=expires_at,
+                          expected_revision=expected_revision, evidence_fingerprint=evidence_fingerprint)
+
+    def accept_risk(self, finding: Finding, *, actor, reason, supporting_evidence, expires_at,
+                    expected_revision, evidence_fingerprint) -> dict:
+        return self._save(finding, actor=actor, disposition="risk_accepted", reason=reason,
+                          supporting_evidence=supporting_evidence, expires_at=expires_at,
+                          expected_revision=expected_revision, evidence_fingerprint=evidence_fingerprint)
+
+    def revoke_risk(self, finding: Finding, *, actor, reason, expected_revision, evidence_fingerprint) -> dict:
+        return self._save(finding, actor=actor, disposition="risk_revoked", reason=reason,
+                          expected_revision=expected_revision, evidence_fingerprint=evidence_fingerprint)
+
+    def _save(self, finding: Finding, *, actor, disposition, reason, supporting_evidence="",
+              expires_at=None, expected_revision, evidence_fingerprint) -> dict:
+        actor = require_human(actor)
+        risk_decision = disposition in RISK_DECISIONS
+        action = "risk.accept" if risk_decision else "review"
+        audit_action = "finding.risk_acceptance" if risk_decision else "finding.review"
         reason = _text(reason, "reason", MAX_REASON_LENGTH, required=True)
-        supporting_evidence = _text(supporting_evidence, "supporting_evidence", MAX_SUPPORTING_EVIDENCE_LENGTH)
+        supporting_evidence = _text(supporting_evidence, "supporting_evidence", MAX_SUPPORTING_EVIDENCE_LENGTH,
+                                    required=disposition == "risk_accepted")
         if type(expected_revision) is not int or expected_revision < 0:
             raise ValueError("expected_revision must be a nonnegative integer")
         if not isinstance(evidence_fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", evidence_fingerprint):
@@ -288,6 +335,8 @@ class ReviewService:
         expiry = parse_timestamp(expires_at) if expires_at is not None else None
         if disposition in SUPPRESSING and expiry is None:
             raise ValueError("false_positive and not_applicable require a future expires_at")
+        if disposition == "risk_accepted" and expiry is None:
+            raise ValueError("risk acceptance requires a future expires_at")
 
         # The filesystem lock serializes review writers for either backend. The backend lock
         # additionally gives SQLite a consistent read/write transaction.
@@ -301,17 +350,29 @@ class ReviewService:
             events = doc["history"]
             now = _now()
             summary = self._summary(current, doc, now)
+            principal = _reviewer(self.ctx, current, actor, action)
             if expected_revision != summary["revision"]:
                 raise ReviewConflict("review revision changed; reload before saving")
             if evidence_fingerprint != summary["evidence_fingerprint"]:
                 raise ReviewConflict("finding evidence changed; reload before saving")
             if expiry is not None and expiry <= now:
                 raise ValueError("expires_at must be in the future")
+            if disposition == "risk_accepted":
+                if expiry > now + timedelta(days=MAX_RISK_ACCEPTANCE_DAYS):
+                    raise ValueError(f"risk acceptance is limited to {MAX_RISK_ACCEPTANCE_DAYS} days")
+                if not current.is_open:
+                    raise ValueError("risk acceptance requires an open scanner finding")
+                if summary["remediation_held"]:
+                    raise ReviewConflict("revoke the active risk acceptance before recording another acceptance")
+            elif disposition == "risk_revoked":
+                if not summary["current"] or summary["current"]["disposition"] != "risk_accepted":
+                    raise ReviewConflict("there is no current risk acceptance to revoke")
+            elif summary["remediation_held"]:
+                raise ReviewConflict("risk acceptance holds remediation; use the authorized risk revocation operation")
             if len(events) >= MAX_HISTORY_EVENTS:
                 raise ValueError(f"review history limit ({MAX_HISTORY_EVENTS}) reached; existing events are preserved")
-            if len(events) == MAX_HISTORY_EVENTS - 1 and disposition != "unreviewed":
+            if len(events) == MAX_HISTORY_EVENTS - 1 and disposition not in {"unreviewed", "risk_revoked"}:
                 raise ValueError("last review history slot is reserved for reversal to unreviewed")
-            principal = _reviewer(self.ctx, current, actor)
             event = {"id": uuid4().hex, "revision": summary["revision"] + 1,
                      "disposition": disposition, "reason": reason, "supporting_evidence": supporting_evidence,
                      "expires_at": expiry.isoformat() if expiry is not None else None,
@@ -319,22 +380,25 @@ class ReviewService:
                      "scope": review_scope(current), "evidence_fingerprint": summary["evidence_fingerprint"]}
             if principal is not None:
                 event["reviewed_principal"] = principal
-            self.ctx.killswitch.guard("finding.review", actor)
+            self.ctx.killswitch.guard(audit_action, actor)
             # Record the complete decision before persistence: an audit failure must never
             # activate an unaudited dismissal. Pending records also expose interrupted writes.
-            self.ctx.audit.append("finding.review", actor, {"finding_id": current.id, "event": event},
+            self.ctx.audit.append(audit_action, actor, {"finding_id": current.id, "event": event},
                                   subject=current.id, outcome="pending")
-            self.ctx.killswitch.guard("finding.review", actor)
+            self.ctx.killswitch.guard(audit_action, actor)
             # Check again before committing; scan publication uses the same lifecycle locks.
             latest = next((f for f in store.current_findings() if f.id == current.id), None)
             if latest is None or _evidence_fingerprint(latest) != summary["evidence_fingerprint"]:
-                self.ctx.audit.append("finding.review", actor, {"event_id": event["id"], "reason": "finding changed"},
+                self.ctx.audit.append(audit_action, actor, {"event_id": event["id"], "reason": "finding changed"},
                                       subject=current.id, outcome="rejected")
                 raise ReviewConflict("finding evidence changed; reload before saving")
-            _reviewer(self.ctx, latest, actor)
+            if _reviewer(self.ctx, latest, actor, action) != principal:
+                raise PermissionError("acting principal or assurance changed before saving")
+            if expiry is not None and expiry <= _now():
+                raise ReviewConflict("decision expired before saving; review again")
             updated = dict(doc, version=2, revision=event["revision"], history=[*events, event])
             store.write_json(self._path(current), updated)
-        self.ctx.audit.append("finding.review", actor, {"event_id": event["id"], "revision": event["revision"]},
+        self.ctx.audit.append(audit_action, actor, {"event_id": event["id"], "revision": event["revision"]},
                               subject=current.id, outcome="ok")
         return {**self._summary(current, updated, now), "history": _owned_events(current, updated["history"])}
 
@@ -378,7 +442,7 @@ def _publish_observation_once(store, scan_id: str, document: dict, *, kind: str)
             if not doc["history"]:
                 continue
             event = doc["history"][-1]
-            if event["disposition"] == "unreviewed" or any(
+            if event["disposition"] in {"unreviewed", "risk_revoked"} or any(
                     entry["review_event_id"] == event["id"] for entry in doc["invalidations"]):
                 continue
             reviewed.append((identity, doc, event))
@@ -399,10 +463,10 @@ def _publish_observation_once(store, scan_id: str, document: dict, *, kind: str)
             if fingerprint != event["evidence_fingerprint"]:
                 changed.append((identity, doc, event, fingerprint))
                 changed_ids.add(identity.id)
-        # Acquire in a stable order. Contention unwinds all locks before publication retries;
-        # unchanged or unrelated observations never require the held finding's lock.
-        for finding_id in sorted(changed_ids):
-            stack.enter_context(finding_lifecycle_lock(store.root, finding_id))
+        # The shared stripe mapping bounds descriptors even for large image results.
+        # Contention unwinds stripes and coordination before retrying fresh projections;
+        # unchanged observations need no stripe, while hash collisions may contend.
+        stack.enter_context(finding_lifecycle_locks(store.root, changed_ids))
         if not changed:
             # No review ledger needs updating, but all changed observation locks remain held
             # through the write even when there are no review documents at all.

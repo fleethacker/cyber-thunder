@@ -121,6 +121,7 @@ async function reviewPanel(t, history, readonly = false) {
     }
     return f.load(new URL('./FindingReviewPanel.tsx', import.meta.url), {
       react: hooks, '../api/client': { api: { finding: async () => finding, findingReview: async () => history }, errorText: (e) => e.message },
+      './PermissionGate': { usePermissions: () => ({ can: () => true, reason: () => null }) },
       '../state/AppState': { useAppState: () => ({ actor: 'human:current-user', status: { kill: { engaged: false } } }) },
     }).FindingReviewPanel;
   }, { finding, opened: true, onToggle() {}, onFinding() {} });

@@ -13,7 +13,7 @@ import { ReviewIdentity } from './IdentityProvenance';
 /** Keep recorded review evidence readable without mounting an editor that can submit a decision. */
 export function FindingReviewAccess(props: ComponentProps<typeof FindingReviewPanel>) {
   const permission = usePermissions();
-  if (permission.can('review')) return <FindingReviewPanel {...props} />;
+  if (permission.can('review') || permission.can('risk.accept')) return <FindingReviewPanel {...props} />;
   return <ReadOnlyReview finding={props.finding} />;
 }
 

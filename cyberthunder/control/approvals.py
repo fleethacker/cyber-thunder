@@ -17,6 +17,7 @@ import os
 import threading
 import uuid
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from pathlib import Path
@@ -26,6 +27,7 @@ from cyberthunder.audit.chain import AuditLog, file_lock
 from cyberthunder.control.identity import (MACHINE_ACTORS, POLICY_PREFIX, is_machine, is_policy_actor,
                                            normalize_actor, require_human)
 from cyberthunder.control.killswitch import KillSwitch
+from cyberthunder.control import separation
 from cyberthunder.findings.schema import utcnow
 from cyberthunder.state.json_files import replace_file
 
@@ -85,6 +87,11 @@ class Proposal:
     history: list[dict] = field(default_factory=list)
     assessment: dict | None = None   # immutable receipt reference reviewed by the approving person
     authorization_scope: dict | None = None
+    proposed_by: str | None = None
+    proposed_principal: dict | None = None
+    required_approvals: int | None = None  # None identifies legacy proposals; never inferred on load.
+    approval_requirements: dict | None = None
+    approvals: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -105,7 +112,7 @@ class ApprovalGate:
     is never written over a newer file."""
 
     def __init__(self, store: str | Path, audit: AuditLog, killswitch: KillSwitch,
-                 policy_path: str | Path | None = None):
+                 policy_path: str | Path | None = None, *, unverified_separation: bool = False):
         self.store = Path(store)
         self.audit = audit
         self.ks = killswitch
@@ -114,6 +121,9 @@ class ApprovalGate:
         self.authorizer = None
         self.resource_scope = None
         self.artifact_authorizer = None
+        self.separation_source = None
+        self.separation_policy = None
+        self.unverified_separation = unverified_separation  # Explicit local test mode, not verified identity.
         self._items: dict[str, Proposal] = {}
         self._sig: tuple[int, int] | None = None
         self._tlock = threading.RLock()
@@ -194,22 +204,46 @@ class ApprovalGate:
         `one_live_per_finding`, a proposal that is still live for the same finding is returned instead of a
         second one being created; the check runs under the cross-process lock, so two workers proposing for
         the same finding at the same moment end up with one proposal between them."""
+        if separation.RESERVED_FIELDS.intersection(kwargs):
+            raise PermissionError("approval requirements and identities are server-managed")
+        protected = separation.enforced(self)
+        if protected:
+            actor, _ = separation.actor_evidence(self, "propose", actor)
         if self.authorizer:
-            self.authorizer("propose", target=kwargs.get("host"))
+            self.authorizer("propose", actor=actor, target=kwargs.get("host"))
         with self._locked():
             if one_live_per_finding and kwargs.get("finding_id"):
                 live = [p for p in self._items.values()
                         if p.finding_id == kwargs["finding_id"] and p.state.value not in TERMINAL]
                 if live:
+                    self._authorize("propose", actor, live[-1])
                     return live[-1]
             p = Proposal(**kwargs)
+            if protected and (p.state != ProposalState.PROPOSED or p.decided_by is not None
+                              or p.decided_principal is not None or p.assessment is not None or p.history):
+                raise PermissionError("a new proposal cannot carry an existing decision")
             if self.resource_scope is not None:
                 p.authorization_scope = self.resource_scope(p.host)
+            if protected:
+                try:
+                    actor = separation.initialize(self, p, actor)
+                except PermissionError as exc:
+                    self.audit.append("proposal.create", actor, {"reason": str(exc)}, subject=p.id, outcome="rejected")
+                    raise
+                meta = {**(meta or {}), "severity": p.approval_requirements["source"]["severity"],
+                        "fix_sha256": p.approval_requirements["source"]["fix_sha256"]}
             entry = {"ts": p.created_at, "state": p.state.value, "actor": actor, "note": None}
             _add_principal(entry)
             if meta:
                 entry["meta"] = dict(meta)
             p.history.append(entry)
+            if protected:
+                try:
+                    self._authorize("propose", actor, p)
+                    separation.check_current_policy(self, p)
+                except PermissionError as exc:
+                    self.audit.append("proposal.create", actor, {"reason": str(exc)}, subject=p.id, outcome="rejected")
+                    raise
             self.audit.append("proposal.create", actor, {"proposal": p.to_dict(), "meta": dict(meta or {})}, subject=p.id)
             self._save([*self._items.values(), p])
             self._items[p.id] = p
@@ -271,6 +305,11 @@ class ApprovalGate:
                 raise IllegalTransition(f"{p.state.value} -> {new.value} not allowed for {pid}")
             try:
                 actor = self._check_actor(new, actor, _policy_checked)
+                if separation.enforced(self, p):
+                    if new == ProposalState.APPROVED:
+                        raise PermissionError("separated approvals must use individual human decisions")
+                    if new == ProposalState.APPLYING:
+                        self._validate_application(p, actor)
             except PermissionError as e:
                 self.audit.append(f"proposal.{new.value}", actor, {"from": p.state.value, "reason": str(e)},
                                   subject=pid, outcome="rejected")
@@ -302,6 +341,8 @@ class ApprovalGate:
         actor = normalize_actor(actor) or actor
         with self._locked():
             p = self._items[pid]
+            if separation.enforced(self, p):
+                return self._approve_separated(p, actor, note, assessment_id, assessment_note)
             self._authorize("approve", actor, p)
             try:
                 self._check_actor(ProposalState.APPROVED, actor, False)
@@ -325,6 +366,101 @@ class ApprovalGate:
                 raise
             return self._move(pid, ProposalState.APPROVED, actor, note, assessment=assessment)
 
+    def _approve_separated(self, p: Proposal, actor: str, note: str | None,
+                           assessment_id: str | None, assessment_note: str | None) -> Proposal:
+        """Called only under the proposal file lock; partial decisions stay PROPOSED."""
+        try:
+            self._authorize("approve", actor, p)
+            actor, evidence = separation.actor_evidence(self, "approve", actor, p)
+            if p.state != ProposalState.PROPOSED:
+                raise IllegalTransition(f"{p.state.value} -> approved not allowed for {p.id}")
+            requirements = separation.validate(self, p)
+            person_association = separation.participation(self, p, evidence)
+            assessment = self._assessment(p.id, assessment_id, assessment_note)
+            association = separation.assessment_association(assessment)
+            if p.approvals and separation.digest(association) != separation.digest(separation.assessment_association(p.assessment)):
+                raise PermissionError("all approvers must review the same assessment; create a new proposal to change it")
+            self._validate_approved_assessments(p)
+            # Assessment work may take time; its callbacks cannot make stale
+            # finding/fix facts count toward a new approval.
+            separation.validate(self, p)
+            self._authorize("approve", actor, p)
+            if separation.actor_evidence(self, "approve", actor, p)[1] != evidence:
+                raise PermissionError("approval identity changed during the decision")
+            if separation.participation(self, p, evidence) != person_association:
+                raise PermissionError("person association changed during the decision")
+        except Exception as exc:
+            self.audit.append("proposal.approved", actor, {"from": p.state.value,
+                              "reason": str(exc) if isinstance(exc, (PermissionError, IllegalTransition))
+                              else "approval requirements or assessment rejected"}, subject=p.id, outcome="rejected")
+            raise
+        vote = {"id": uuid.uuid4().hex, "actor": actor, "principal": evidence, "approved_at": utcnow(),
+                "note": note, "requirements_sha256": separation.digest(requirements),
+                "payload_sha256": requirements["payload_sha256"], "assessment": deepcopy(assessment),
+                "assessment_sha256": separation.digest(association)}
+        if person_association is not None:
+            vote["person_association"] = deepcopy(person_association)
+        q = Proposal.from_dict(p.to_dict())
+        q.approvals.append(vote)
+        q.assessment = deepcopy(assessment)
+        complete = len(q.approvals) == q.required_approvals
+        if complete:
+            q.state = ProposalState.APPROVED
+            q.decided_by, q.decided_at, q.decision_note = actor, vote["approved_at"], note
+            q.decided_principal = deepcopy(evidence)
+        entry = {"ts": vote["approved_at"], "state": q.state.value, "actor": actor, "note": note,
+                 "principal": deepcopy(evidence), "approval_id": vote["id"],
+                 "approvals_received": len(q.approvals), "required_approvals": q.required_approvals}
+        if person_association is not None:
+            entry["person_association"] = deepcopy(person_association)
+        q.history.append(entry)
+        self.audit.append("proposal.approved" if complete else "proposal.approval_recorded", actor,
+                          {"from": p.state.value, "state": q.state.value, "approval": deepcopy(vote),
+                           "assessment": deepcopy(assessment), "approvals_received": len(q.approvals),
+                           "required_approvals": q.required_approvals}, subject=p.id)
+        self._save([q if x.id == p.id else x for x in self._items.values()])
+        _copy_into(p, q)
+        return p
+
+    def _assessment(self, pid: str, assessment_id: str | None, note: str | None) -> dict:
+        if assessment_id and self.assessment_validator is None:
+            raise IllegalTransition("dependency assessment service unavailable")
+        return deepcopy(self.assessment_validator(pid, assessment_id, note) if self.assessment_validator else
+                        {"status": "not_assessed", "id": None,
+                         "note": note or "No dependency assessment was attached to this decision."})
+
+    def _validate_approved_assessments(self, p: Proposal) -> None:
+        for vote in p.approvals:
+            old = vote["assessment"]
+            fresh = self._assessment(p.id, old.get("id"), old.get("note"))
+            if separation.digest(separation.assessment_association(fresh)) != separation.digest(separation.assessment_association(old)):
+                raise PermissionError("an approved assessment changed; create a new proposal and collect approvals")
+
+    def _validate_application(self, p: Proposal, actor: str) -> None:
+        self._authorize("apply", actor, p)
+        if separation.enforced(self, p):
+            separation.validate(self, p, quorum=True)
+            self._validate_approved_assessments(p)
+            separation.validate(self, p, quorum=True)
+        # Revocation during receipt/source reads must stop this operation too.
+        self._authorize("apply", actor, p)
+        if separation.enforced(self, p):
+            separation.check_current_policy(self, p)
+
+    def validate_apply(self, pid: str, actor: str) -> None:
+        """Re-read authority immediately before mutation, after before-state IO."""
+        with self._locked():
+            p = self._items[pid]
+            self._authorize("apply", actor, p)
+            if p.state != ProposalState.APPLYING:
+                raise IllegalTransition("only the current applying proposal may execute")
+            try:
+                self._validate_application(p, actor)
+            except PermissionError as exc:
+                self.audit.append("proposal.apply_revalidated", actor, {"reason": str(exc)},
+                                  subject=pid, outcome="rejected")
+                raise
+
     def review_assessment(self, pid: str, actor: str, assessment_id: str,
                           note: str | None = None) -> Proposal:
         """Refresh a named human's receipt on an approved, not-yet-started change."""
@@ -334,6 +470,11 @@ class ApprovalGate:
         with self._locked():
             p = self._items[pid]
             self._authorize("review", actor, p)
+            if separation.enforced(self, p):
+                self.audit.append("proposal.assessment_reviewed", actor,
+                                  {"reason": "new assessment requires new separated approvals"},
+                                  subject=pid, outcome="rejected")
+                raise PermissionError("renewed assessments require a new proposal and fresh approvals")
             if p.state != ProposalState.APPROVED:
                 raise IllegalTransition("only an approved, not-yet-started proposal can be re-reviewed")
             if self.assessment_validator is None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import TYPE_CHECKING, Callable
 
 from cyberthunder.control.identity import MAX_ACTOR_LEN, normalize_actor
@@ -68,6 +69,8 @@ class RuntimeTasks:
         self.ctx = ctx
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
+        if hasattr(ctx, "_runtime_tasks"):
+            ctx._runtime_tasks.append(self)
 
     def start(self) -> None:
         if getattr(self.ctx.settings, "auth_mode", "dev") != "dev":
@@ -91,10 +94,16 @@ class RuntimeTasks:
                     and not (state.mode == "test" and not state.test_connected)):
                 ingest.link.probe(actor=self.ctx.settings.scheduler_actor, background=True)
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 5.0) -> bool:
+        """Stop producers within one deadline; False means state must remain open."""
         self._stop.set()
+        deadline = time.monotonic() + max(0, timeout)
         for th in self._threads:
-            th.join(timeout=5)
+            if th is threading.current_thread():
+                return False
+            if th.ident is not None:
+                th.join(timeout=max(0, deadline - time.monotonic()))
+        return not any(th.is_alive() for th in self._threads)
 
     def _start_interval(self, name: str, interval_s: int, fn: Callable[[], None]) -> None:
         if interval_s <= 0:

@@ -20,15 +20,17 @@ from cyberthunder.control.principal import Principal, current_principal, princip
 from cyberthunder.control.roles import permissions
 from cyberthunder.findings.schema import Finding, Severity, Status
 from cyberthunder.inventory.targets import Target
+from cyberthunder.remediation.library import FixEntry
 
 
 def identity(subject="first-user", roles=("analyst", "approver"), kind="human"):
     return Principal("https://identity.example.test", subject, "Test operator", roles=roles,
-                     kind=kind, expires_at=time.time() + 300)
+                     kind=kind, expires_at=time.time() + 300, auth_time=int(time.time()), acr="urn:ct:test:strong")
 
 
 def proposal(ctx, target):
-    return ctx.gate.propose(actor="seed", finding_id="f-" + target, host=target, title="Test change",
+    finding = next(f for f in ctx.store.load_findings("scan-both") if f.host == target)
+    return ctx.gate.propose(actor=current_principal().actor, finding_id=finding.id, host=target, title="Test change",
                             fix_ref="fixture:setting", fix_preview="reviewed setting", rollback_plan="restore",
                             risk="test fixture")
 
@@ -40,23 +42,30 @@ def verified_app(state_dir, monkeypatch):
     for tid in ("alpha", "beta"):
         ctx.inventory.add(Target(tid, tid, "linux", transport="simulated", simulated=True, environment=tid))
     ctx.inventory.save()
-    proposals = {tid: proposal(ctx, tid) for tid in ("alpha", "beta")}
     ctx.store.save_scan_run({"id": "scan-both", "targets": ["alpha", "beta"], "status": "done"})
     ctx.store.save_findings("scan-both", [Finding(host=tid, asset_type="linux", source="fixture",
         rule_id="test-rule", title="Finding on " + tid, severity=Severity.MEDIUM,
         status=Status.OPEN) for tid in ("alpha", "beta")])
     ctx.settings.auth_mode = "oidc"
+    ctx.settings.step_up_acr_values = ("urn:ct:test:strong",)
     path = state_dir / "auth" / "access.json"
     path.parent.mkdir(mode=0o700)
     path.write_text(json.dumps({"version": 1, "entries": [
         {"issuer": identity().issuer, "subject": subject,
          "node_actions": ["kill.engage", "kill.release", "audit"],
          "grants": [{"target_ids": [tid], "actions": sorted(ACTIONS - {"read.all"})}]}
-        for subject, tid in (("first-user", "alpha"), ("second-user", "beta"))]}))
+        for subject, tid in (("first-user", "alpha"), ("second-user", "beta"),
+                            ("fixture-proposer", "alpha"), ("fixture-proposer-beta", "beta"))]}))
     path.chmod(0o600)
     ctx.access = AccessPolicy(path)
     ctx.gate.authorizer = ctx.authorize
+    ctx.gate.separation_policy = ctx.access.approval_identity_source
     ctx.killswitch.authorizer = ctx.authorize
+    ctx.library.add(FixEntry("fixture:setting", "Test change", "linux", ["test-rule"], payload="reviewed setting"))
+    proposals = {}
+    for subject, tid in (("fixture-proposer", "alpha"), ("fixture-proposer-beta", "beta")):
+        with principal_scope(identity(subject, roles=("analyst",))):
+            proposals[tid] = proposal(ctx, tid)
     tokens = {}
 
     class Validator:
@@ -65,7 +74,7 @@ def verified_app(state_dir, monkeypatch):
             if p.expires_at <= time.time():
                 raise ValueError("expired")
             return {"iss": p.issuer, "sub": p.subject, "name": p.display_name, "ct_kind": p.kind,
-                    "ct_roles": list(p.roles), "exp": p.expires_at}
+                    "ct_roles": list(p.roles), "exp": p.expires_at, "auth_time": p.auth_time, "acr": p.acr}
 
     monkeypatch.setattr("cyberthunder.api.auth.make_validator", lambda *_: Validator())
     app = create_app(ctx)

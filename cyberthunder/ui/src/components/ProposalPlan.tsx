@@ -1,4 +1,5 @@
 import { Alert, Badge, Button, Group, Modal, Paper, SimpleGrid, Stack, Text, Tooltip } from '@mantine/core';
+import { MaintenanceNotice } from './ProposalMaintenance';
 import { IconEye } from '@tabler/icons-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, errorText } from '../api/client';
@@ -45,6 +46,7 @@ export function ProposalPlanView({ plan }: { plan: Plan }) {
   const { files, dirs, commands, path_modes, path_root, ...otherCapture } = fix.before_state;
   return <Stack gap="sm">
     <StaticNotice />
+    <MaintenanceNotice value={plan.maintenance} />
     <Group justify="space-between" gap="xs">
       <Text size="sm">Generated <time dateTime={plan.generated_at}>{fmtZonedTime(plan.generated_at)}</time></Text>
       <StateBadge state={plan.proposal_state} />

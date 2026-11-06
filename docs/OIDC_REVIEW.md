@@ -308,3 +308,35 @@ native certificate files. This was focused verification, not a full gate or
 hosted CI run. The earlier WSL failure report is resolved by these fixture
 changes; provider acceptance and Windows DACL provisioning remain external
 requirements described above.
+## Local independent-approval and freshness acceptance
+
+On 2026-11-06 UTC, a separate disposable Keycloak 26.7.4 password realm passed
+72 browser/API checks against unchanged source
+`f02e1130e181e4e2f465ef9f5e77d68dafdba19a`: six configuration/claim checks and
+33 decision checks on each of JSON and SQLite. Both persisted audit chains
+verified. The ten recorded identity, session, approval, configuration and context
+source hashes also match candidate `5d9437c995a7dafb2be47c2e10c9dd8b16b3727c`.
+The sanitized receipt is retained with the release evidence as
+`owner-evidence/identity-decisions/identity-decisions-receipt.json`.
+
+Real provider login and signatures were used. Self-approval, spoofed actor
+headers, duplicate votes and cross-target access were refused. The first CAT I
+vote remained partial; a second independently authenticated subject completed
+the quorum. A low-severity proposal required one independent vote.
+
+The default empty assurance allowlist refused approval. The fixture then
+explicitly accepted its provider's password `acr="1"` and a 20-second window.
+After 22 seconds, approval required reauthentication. A real login with S256
+PKCE, `prompt=login`, `acr_values=1` and `max_age=20` produced a fresh signed
+authentication event and rotated the application cookie/CSRF value. Old CSRF
+failed, no decision replayed automatically, and reauthentication did not turn
+the same subject into a second approver. Production defaults were unchanged.
+
+This exercised browser-held sessions and actual decision APIs, not the bundled
+next-generation UI or target remediation. The UI bundle at the tested source
+was not rebuilt for this check. Fixtures used protected Windows state, child-only
+certificate trust, five synthetic accounts and no existing realm changes; owned
+app/container processes were stopped afterward. This is not CAC/PIV, actual
+person correlation, an enclave deployment, or live target acceptance. Issuer and
+subject distinguish accounts; the organization must prevent one person using
+separate accounts to satisfy an independent-person requirement.

@@ -197,27 +197,32 @@ def deltas_dir(store: "StateStore") -> Path:
 
 
 def catalog_path(store: "StateStore", benchmark_id: str) -> Path:
+    from .content.publication import index
+    doc = index(store)
+    for generation in set(doc.get("active", {}).values()):
+        publication = doc["publications"][generation]
+        if (publication.get("delta") or {}).get("benchmark_id") == benchmark_id:
+            return Path(publication["delta"]["catalog_path"])
     return catalog_dir(store) / f"{safe_name(benchmark_id)}.xml"
 
 
 def apply(delta: DeltaReport, new_path: str | Path, store: "StateStore") -> Path:
-    """Make the new release the catalog copy and keep the delta report. Returns the catalog path."""
-    dest = catalog_path(store, delta.benchmark_id)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(".xml.tmp")
-    tmp.write_bytes(read_benchmark_xml(new_path))
-    tmp.replace(dest)
-    store.write_json(deltas_dir(store) / f"{delta.id}.json", delta.to_dict())
-    return dest
+    """Retained name for callers migrating to IngestService.ingest_stig."""
+    from .content.publication import PublicationError
+    raise PublicationError("Use the authorized publication service; raw catalog writes cannot activate content")
 
 
 def load_delta(store: "StateStore", delta_id: str) -> DeltaReport:
-    d = store.read_json(deltas_dir(store) / f"{safe_name(delta_id)}.json")
+    d = next((row for row in list_deltas(store) if row["id"] == delta_id), None)
     if d is None:
         raise KeyError(f"no delta {delta_id!r}")
     return DeltaReport.from_dict(d)
 
 
 def list_deltas(store: "StateStore") -> list[dict]:
+    from .content.publication import index
+    doc = index(store)
     out = [store.read_json(p) for p in store.list_json(deltas_dir(store))]
+    out += [dict(p["delta"], generation=gid, active=gid in set(doc["active"].values()),
+                 commit_status=p["commit_status"]) for gid, p in doc.get("publications", {}).items() if p.get("delta")]
     return sorted((d for d in out if d), key=lambda d: d.get("created_at", ""), reverse=True)

@@ -14,7 +14,7 @@ from tests.security.test_kube_credentials import cert_material, document, write,
 
 @pytest.fixture
 def selected_cluster(state_dir, cert_material, monkeypatch):
-    ctx = AppContext(Settings(state_dir=state_dir, auth_mode="oidc", security_mode="range",
+    ctx = AppContext(Settings(state_dir=state_dir, node="account-kubernetes-fixture", auth_mode="oidc", security_mode="range",
                               llm_backend="template", auto_propose=False, explain_precompute=False))
     target = Target("cluster-a", "Cluster A", "kubernetes", "kubeconfig", sudo=False,
                     options={"kubeconfig": "shared-administrator-config", "context": "admin"})

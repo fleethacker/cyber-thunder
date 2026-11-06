@@ -34,8 +34,8 @@ from .selection import generate_selected, isolated_backend, selected_identity
 MODEL_TIMEOUT_S = 300.0
 PROBE_TIMEOUT_S = 3.0
 MAX_GENERATE_ATTEMPTS = 2
-# Hung custom backends cannot grow an unbounded collection of threads. Late results
-# have no callback, state handle or publication path and are discarded by the caller.
+# Bound outstanding calls. Caller timeouts discard late results, but guards can
+# still access state; the owning service retains each thread until it has exited.
 _MODEL_SLOTS = threading.BoundedSemaphore(4)
 _PUBLICATION_LOCK = threading.Lock()
 
@@ -48,7 +48,7 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def _bounded_call(call, timeout):
+def _bounded_call(call, timeout, *, owner):
     if timeout <= 0 or not _MODEL_SLOTS.acquire(blocking=False):
         return None, "model_busy"
     done, result = threading.Event(), []
@@ -67,10 +67,10 @@ def _bounded_call(call, timeout):
             done.set()
 
     try:
-        threading.Thread(target=copy_context().run, args=(work,), daemon=True, name="impact-model").start()
-    except Exception:
+        owner._start_worker(work)
+    except BaseException:
         _MODEL_SLOTS.release()
-        return None, "model_error"
+        raise
     if not done.wait(timeout):
         return None, "model_timeout"
     if isinstance(result[0][1], PermissionError):
@@ -108,6 +108,24 @@ class ImpactService:
     def __init__(self, ctx):
         self.ctx = ctx
         self.directory = ctx.store.root / "change_assessments"
+        self._workers_lock = threading.Lock()
+        self._workers: list[threading.Thread] = []
+
+    def _start_worker(self, work):
+        # Start and register under the snapshot lock, so cleanup never observes an
+        # unstarted thread as completed. The caller remains an owned producer.
+        with self._workers_lock:
+            self._workers = [t for t in self._workers if t.is_alive()]
+            thread = threading.Thread(target=copy_context().run, args=(work,),
+                                      daemon=True, name="impact-model")
+            thread.start()
+            self._workers.append(thread)
+
+    def worker_threads(self):
+        """Snapshot actual workers, including calls whose caller already timed out."""
+        with self._workers_lock:
+            self._workers = [t for t in self._workers if t.is_alive()]
+            return tuple(self._workers)
 
     def _snapshot(self, proposal_id, *, action="read"):
         """Local bindings only; avoids static_plan's audit and historical finding fallback."""
@@ -192,7 +210,7 @@ class ImpactService:
 
         guard()
         available, error = _bounded_call(lambda: checked_call(backend.available),
-                                        min(PROBE_TIMEOUT_S, max(0, deadline - time.monotonic())))
+                                        min(PROBE_TIMEOUT_S, max(0, deadline - time.monotonic())), owner=self)
         guard()
         if error or not isinstance(available, tuple) or not available or available[0] is not True:
             status["fallback_reason"] = error or "probe_unavailable"
@@ -211,7 +229,8 @@ class ImpactService:
                 break
             status["attempts"] = attempt + 1
             response, error = _bounded_call(
-                lambda: checked_call(lambda: generate_selected(backend, identity, prompt, timeout)), timeout)
+                lambda: checked_call(lambda: generate_selected(backend, identity, prompt, timeout)), timeout,
+                owner=self)
             guard()
             if selected_identity(backend) != identity or (response is not None and not response[1]):
                 status.update(name=None, fallback_reason="model_selection_changed")

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,25 @@ import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+LIMITS = ("Simulated Linux transport, template explanations, unverified loopback development identity; "
+          "not verified-realm acceptance, official risk authorization, or target privilege proof. "
+          "Backend security fixtures remain separate.")
+
+
+def write_json(path: Path, value: dict) -> None:
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+
+def block_external_network(event: str, arguments: tuple) -> None:
+    # Process-local guard: even an accidental provider/transport call cannot leave loopback.
+    if event == "socket.connect":
+        address = arguments[1]
+        if not isinstance(address, tuple) or address[0] not in ("127.0.0.1", "::1"):
+            raise PermissionError("browser fixture blocks non-loopback connections")
+    elif event == "socket.getaddrinfo" and arguments[0] not in ("127.0.0.1", "::1", "localhost"):
+        raise PermissionError("browser fixture blocks external name resolution")
+    elif event == "socket.sendto":
+        raise PermissionError("browser fixture blocks outbound datagrams")
 
 
 def serve_fixture(output: Path, backend: str, scenario: str) -> None:
@@ -27,6 +47,7 @@ def serve_fixture(output: Path, backend: str, scenario: str) -> None:
     for name in list(os.environ):
         if name.startswith("CT_"):
             del os.environ[name]
+    sys.addaudithook(block_external_network)
     sys.path.insert(0, str(ROOT))
     import uvicorn
     from cyberthunder import demo
@@ -64,7 +85,7 @@ def serve_fixture(output: Path, backend: str, scenario: str) -> None:
     manifest = {"port": port, "backend": backend, "scenario": scenario, "scan": run.id,
                 "target": linux.id, "proposal": proposal.id, "finding": finding.id,
                 "simulated_only": True, "model_backend": "template"}
-    (output / "fixture.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    write_json(output / "fixture.json", manifest)
     # Log to the parent's file. An unread process pipe must never stall request handling.
     config = uvicorn.Config(create_app(ctx), host="127.0.0.1", port=port, log_level="warning",
                             access_log=False, proxy_headers=False)
@@ -107,52 +128,84 @@ def main() -> int:
         serve_fixture(args.serve, args.backend, args.scenario)
         return 0
     if not (ROOT / "cyberthunder/ui/dist/index.html").is_file():
-        parser.error("build the UI before running this rehearsal")
+        parser.error("the prepared UI build is missing; supply it before running this rehearsal")
     def git(*arguments: str) -> str:
         return subprocess.check_output(["git", *arguments], cwd=ROOT, text=True).strip()
 
     tested_head = git("rev-parse", "HEAD")
     if git("status", "--porcelain", "--untracked-files=no"):
         parser.error("commit tracked source and UI changes before recording a rehearsal")
+    source_files = ["scripts/browser_rehearsal.mjs", "scripts/rehearse_browser.py"]
+    build_files = git("ls-files", "cyberthunder/ui/dist").splitlines()
+    def source_hashes() -> dict:
+        return {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+                for name in source_files + build_files}
+
+    hashes = source_hashes()
     output_root = ROOT / ".build" / "browser-rehearsals"
     output_root.mkdir(parents=True, exist_ok=True)
     run_root = Path(tempfile.mkdtemp(prefix=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-"), dir=output_root))
+    receipts = run_root / "receipts"
+    receipts.mkdir()
+    private = run_root / "private"
+    private.mkdir()
     backends = ("json", "sqlite") if args.backend == "both" else (args.backend,)
     results = []
     for backend in backends:
         for scenario in ("normal", "verification_failure"):
-            output = run_root / f"{backend}-{scenario}"
+            name = f"{backend}-{scenario}"
+            output = private / name
             output.mkdir()
+            evidence = receipts / name
+            evidence.mkdir()
+            item = {"backend": backend, "scenario": scenario, "exit_code": 1,
+                    "evidence": f"{name}/result.json", "fixture_stopped": False}
+            results.append(item)
             with (output / "server.log").open("w", encoding="utf-8") as log:
-                process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--serve", str(output),
-                    "--backend", backend, "--scenario", scenario], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+                process = None
                 try:
+                    process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--serve", str(output),
+                        "--backend", backend, "--scenario", scenario], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
                     wait_ready(process, output)
-                    command = [args.node, str(ROOT / "scripts/browser_rehearsal.mjs"), str(output), args.playwright_module]
-                    if args.browser:
-                        command.append(args.browser)
-                    result = subprocess.run(command, cwd=ROOT, timeout=180, check=False)
-                    results.append({"backend": backend, "scenario": scenario, "exit_code": result.returncode,
-                                    "evidence": str(output / "result.json")})
-                    if result.returncode:
-                        break
+                    command = [args.node, str(ROOT / "scripts/browser_rehearsal.mjs"), str(output),
+                               args.playwright_module, args.browser or "", str(evidence)]
+                    result = subprocess.run(command, cwd=ROOT, timeout=300, check=False)
+                    item["exit_code"] = result.returncode
+                    browser_result = json.loads((evidence / "result.json").read_text(encoding="utf-8"))
+                    if not browser_result.get("passed"):
+                        item["exit_code"] = result.returncode or 1
+                except Exception as exc:
+                    # Keep detailed startup logs private; publish enough to locate a failed stage.
+                    item["exit_code"] = 1
+                    item["runner_failure"] = type(exc).__name__
+                    if not (evidence / "result.json").exists():
+                        write_json(evidence / "result.json", {"backend": backend, "scenario": scenario,
+                            "passed": False, "phase": "fixture_or_browser_runner", "failure": type(exc).__name__,
+                            "diagnosis": "Inspect the corresponding private server.log; browser did not produce a receipt."})
                 finally:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=5)
-        if results and results[-1]["exit_code"]:
-            break
+                    if process is not None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=5)
+                        item["fixture_stopped"] = process.poll() is not None
     end_head = git("rev-parse", "HEAD")
     source_unchanged = end_head == tested_head and not git("status", "--porcelain", "--untracked-files=no")
+    artifacts_unchanged = hashes == source_hashes()
     record = {"head": tested_head, "end_head": end_head, "source_unchanged": source_unchanged,
+              "artifacts_unchanged": artifacts_unchanged, "source_sha256": hashes,
+              "runtime": {"python": sys.version.split()[0], "node": args.node,
+                          "playwright_module": args.playwright_module, "browser": args.browser},
               "finished_at": datetime.now(timezone.utc).isoformat(), "results": results,
-              "passed": source_unchanged and len(results) == len(backends) * 2 and all(item["exit_code"] == 0 for item in results),
-              "limits": "Simulated Linux transport, template explanations, unverified loopback development identity; not real-host or live-identity acceptance."}
-    (run_root / "summary.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"passed": record["passed"], "summary": str(run_root / "summary.json")}))
+              "passed": source_unchanged and artifacts_unchanged and len(results) == len(backends) * 2
+                        and all(item["exit_code"] == 0 and item["fixture_stopped"] for item in results),
+              "limits": LIMITS}
+    write_json(receipts / "summary.json", record)
+    write_json(receipts / "SHA256SUMS.json", {path.relative_to(receipts).as_posix():
+        hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(receipts.rglob("*")) if path.is_file()})
+    print(json.dumps({"passed": record["passed"], "summary": str(receipts / "summary.json")}))
     return 0 if record["passed"] else 1
 
 

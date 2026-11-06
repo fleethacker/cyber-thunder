@@ -7,8 +7,8 @@ fix library, the approval gate and the kill switch like any other finding.
 """
 from __future__ import annotations
 
+import hashlib
 import json
-import shutil
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
@@ -119,54 +119,54 @@ class IngestService:
                     receipt_source: str = "local") -> dict:
         """Diff a new STIG release against the catalog copy (or `old`), store the delta, make the new release
         the catalog copy, and report sizes and transfer time at the current link."""
-        # All entry points share one writer lock, including uploads, pulls and CLI imports.
-        with self.store.files.lock("stig-catalog"):
-            return self._ingest_stig(path_or_bytes, filename, old=old, actor=actor, method=method,
-                                     receipt_source=receipt_source)
-
-    def _ingest_stig(self, path_or_bytes: str | Path | bytes, filename: str | None = None, *,
-                     old: str | Path | None = None, actor: str = "operator", method: str | None = None,
-                     receipt_source: str = "local") -> dict:
-        tmpdir: Path | None = None
+        from cyberthunder.ingest.content import fetch as fx, signatures as sig
+        self.ctx.killswitch.guard("ingest.stig", actor)
+        maximum = min(self.content.max_bytes, sig.MAX_FILE_BYTES)
+        if isinstance(path_or_bytes, (bytes, bytearray)) and not 0 < len(path_or_bytes) <= maximum:
+            raise sig.AuthenticityError("Invalid content import size")
+        staging = self.content.store.root / "incoming"
+        staging.mkdir(parents=True, exist_ok=True)
+        report = None
         try:
-            if isinstance(path_or_bytes, (bytes, bytearray)):
-                tmpdir = Path(tempfile.mkdtemp(prefix="ct-ingest-"))
-                name = Path(filename or "benchmark.xml").name
-                new_path = tmpdir / name
-                new_path.write_bytes(bytes(path_or_bytes))
-            else:
-                new_path = Path(path_or_bytes)
-                filename = filename or new_path.name
-            try:
-                new = dl.load_benchmark(new_path)
-            except dl.BenchmarkError:
+            with tempfile.TemporaryDirectory(prefix="stig-", dir=staging) as temporary:
+                name = filename or ("benchmark.xml" if isinstance(path_or_bytes, (bytes, bytearray)) else Path(path_or_bytes).name)
+                path = Path(temporary) / fx.disk_name(name)
+                if isinstance(path_or_bytes, (bytes, bytearray)):
+                    path.write_bytes(path_or_bytes)
+                    digest, size = hashlib.sha256(path_or_bytes).hexdigest(), len(path_or_bytes)
+                else:
+                    digest, size = sig.copy_checked(path_or_bytes, path, maximum=maximum)
+                sig.acceptance(self.ctx, actor, digest, size)
+                entry = fx.entry_from_item({"filename": name, "url": "", "kind": "manual_stig"})
+                record = self.content._accept(path, entry, source=receipt_source, actor=actor, sha256=digest,
+                                              etag=None, size=size, old=old, method=method, catalog_import=True)
+                report = dict(record["ingest"]["report"])
+                report.update(generation=record["generation"], active=record["active"], commit_status=record["commit_status"])
+                return report
+        except OSError:
+            if report is None:
                 raise
-            except Exception as e:  # noqa: BLE001 - malformed XML, bad zip
-                raise dl.BenchmarkError(f"cannot read {filename}: {e}") from None
-            old_path = Path(old) if old else dl.catalog_path(self.store, new[0])
-            prev = dl.load_benchmark(old_path) if old_path.exists() else None
-            report = dl.diff(prev, new)
-            full = new_path.read_bytes()
-            payload = compress.delta_payload(report, new[2])
-            sizes = compress.compare(full, payload, method or self._default_method())
-            state = self._link.state()
-            transfer = {"full_seconds": transfer_seconds(sizes["full_bytes"], state),
-                        "delta_seconds": transfer_seconds(sizes["compressed_bytes"], state),
-                        "link": state.to_dict()}
-            catalog = dl.apply(report, new_path, self.store)
-            extra = {"filename": filename, "sizes": sizes, "transfer": transfer, "catalog_path": str(catalog),
-                     "full_import": prev is None, "receipt_source": receipt_source}
-            self.store.write_json(dl.deltas_dir(self.store) / f"{report.id}.json", dict(report.to_dict(), **extra))
-        finally:
-            if tmpdir is not None:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-        out = dict(report.to_dict(), **extra)
-        self.audit.append("ingest.stig", actor, {
-            "delta_id": report.id, "benchmark_id": report.benchmark_id, "old_release": report.old_release,
-            "new_release": report.new_release, "counts": report.counts, "filename": filename,
-            "full_bytes": sizes["full_bytes"], "compressed_bytes": sizes["compressed_bytes"], "method": sizes["method"]},
-            subject=report.id)
-        return out
+            report["commit_status"] = "committed_with_bookkeeping_pending"
+            return report
+
+    def _prepare_stig(self, path, filename, *, previous=None, actor, method=None, receipt_source="local"):
+        """Build complete delta artifacts without changing any catalog or index."""
+        new = dl.load_benchmark(path)
+        prev = dl.load_benchmark(previous) if previous and Path(previous).exists() else None
+        if prev and prev[0] != new[0]:
+            raise IngestError("Previous benchmark identity does not match the candidate")
+        report = dl.diff(prev, new)
+        full = path.read_bytes()
+        payload = compress.delta_payload(report, new[2])
+        sizes = compress.compare(full, payload, method or self._default_method())
+        state = self._link.state()
+        from cyberthunder.ingest.content import signatures as sig
+        authenticity = sig.acceptance(self.ctx, actor, hashlib.sha256(full).hexdigest(), len(full))
+        return dict(report.to_dict(), filename=filename, sizes=sizes,
+                    transfer={"full_seconds": transfer_seconds(sizes["full_bytes"], state),
+                              "delta_seconds": transfer_seconds(sizes["compressed_bytes"], state), "link": state.to_dict()},
+                    full_import=prev is None, receipt_source=receipt_source,
+                    authenticity=dict(authenticity, sha256=hashlib.sha256(full).hexdigest(), bytes=len(full))), dl.read_benchmark_xml(path)
 
     @staticmethod
     def _default_method() -> str:
@@ -174,7 +174,7 @@ class IngestService:
         return "external" if os.environ.get("CT_COMPRESSOR") else "lzma"
 
     def get_delta(self, delta_id: str) -> dict:
-        d = self.store.read_json(dl.deltas_dir(self.store) / f"{dl.safe_name(delta_id)}.json")
+        d = next((row for row in dl.list_deltas(self.store) if row["id"] == delta_id), None)
         if d is None:
             raise KeyError(f"no delta {delta_id!r}")
         return d

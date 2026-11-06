@@ -7,21 +7,32 @@ from cyberthunder.api import util
 from cyberthunder.api.errors import MappedRoute, feature
 from cyberthunder.api.schemas import ExplainBatchBody, ExplainBody
 from cyberthunder.api.util import ActorDep, CtxDep, finding_plus, proposal_plus, to_plain
+from cyberthunder.findings.reassessment import ReassessmentView
+from cyberthunder.security.resources import check_record
 
 router = APIRouter(tags=["findings"], route_class=MappedRoute)
+
+
+def _check_history(ctx, scan_id: str) -> None:
+    run = ctx.store.load_scan_run(scan_id)
+    if run is None:
+        if getattr(ctx.settings, "auth_mode", "dev") != "dev":
+            raise PermissionError("scan is unavailable to this account")
+        raise KeyError(f"unknown scan {scan_id!r}")
+    check_record(ctx, run)
 
 
 @router.get("/findings")
 def list_findings(ctx=CtxDep, scan_id: str | None = None, host: str | None = None, status: str | None = None,
                   severity: str | None = None, source: str | None = None, asset_type: str | None = None,
                   category: str | None = None, benchmark: str | None = None, benchmark_release: str | None = None,
-                  confidence: str | None = None, review: str | None = None,
+                  confidence: str | None = None, review: str | None = None, reassessment: str | None = None,
                   sort_by: str = "default", sort_dir: str = "asc",
                   q: str | None = None, limit: int = Query(200, ge=1, le=5000), offset: int = Query(0, ge=0)) -> dict:
     return util.list_findings(ctx, scan_id=scan_id, limit=limit, offset=offset, host=host, status=status,
                               severity=severity, source=source, asset_type=asset_type, q=q, category=category,
                               benchmark=benchmark, benchmark_release=benchmark_release,
-                              confidence=confidence, review=review,
+                              confidence=confidence, review=review, reassessment=reassessment,
                               sort_by=sort_by, sort_dir=sort_dir)
 
 
@@ -44,14 +55,25 @@ def explain_many(body: ExplainBatchBody | None = None, ctx=CtxDep, actor: str = 
 
 @router.get("/findings/{finding_id}")
 def get_finding(finding_id: str, ctx=CtxDep, scan_id: str | None = None) -> dict:
-    return finding_plus(ctx, util.get_finding(ctx, finding_id, scan_id))
+    if scan_id:
+        # A named historical view has the same whole-run boundary as the list route.
+        _check_history(ctx, scan_id)
+    result = finding_plus(ctx, util.get_finding(ctx, finding_id, scan_id))
+    result["reassessment"] = ReassessmentView(ctx, scan_id=scan_id).assess(result)
+    check_record(ctx, result)
+    if scan_id:
+        _check_history(ctx, scan_id)
+    return result
 
 
 @router.post("/findings/{finding_id}/propose")
 def propose(finding_id: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
     finding = util.get_finding(ctx, finding_id)
     from cyberthunder.findings.review import ReviewService
-    if ReviewService(ctx).summary(finding)["suppressed"]:
+    review = ReviewService(ctx).summary(finding)
+    if review["remediation_held"]:
+        raise HTTPException(409, "Risk acceptance holds remediation; revoke it or wait for expiry or reopened evidence")
+    if review["suppressed"]:
         raise HTTPException(409, "This observation has an active review suppression; reopen its review before proposing a fix")
     fix = ctx.library.resolve(finding)
     if fix is None:

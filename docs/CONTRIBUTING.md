@@ -67,8 +67,10 @@ seeds and an answer-key file under `range/answer_key/<type>.json`.
 ## Backups and restore
 
 Keep a complete copy of the repository somewhere other than GitHub (an external drive, the team share, a second
-cloud). Two files cover it: a git bundle holds every branch and commit, and a zip holds the working tree for anyone
-without git. Run from the repository root; both commands are safe to repeat.
+cloud). Two files cover the committed source: a git bundle holds every branch and
+commit, and a source ZIP can be opened without Git. Check `git status --short` and
+commit intended source changes first; neither archive includes uncommitted work.
+Run from the repository root with a new dated output name for each checkpoint.
 
 ```bash
 git bundle create ../cyber-thunder-$(date +%F)-full-history.bundle --all
@@ -78,8 +80,20 @@ git bundle create ../cyber-thunder-$(date +%F)-full-history.bundle --all
 git bundle verify ../cyber-thunder-$(date +%F)-full-history.bundle
 ```
 
-On Windows, zip the folder with Explorer or PowerShell's `Compress-Archive`, leaving out `node_modules`, `.git`,
-`__pycache__` and any `state` directory. The bundle already carries the history.
+Create the ZIP from tracked committed source rather than archiving the entire
+checkout, which may also contain ignored state, credential fixtures and `.build`
+diagnostics. This command works in PowerShell and Bash:
+
+```text
+git archive --format=zip --output=../cyber-thunder-source.zip HEAD
+```
+
+Replace the output filename with a dated checkpoint name. Keep the bundle beside
+it for the other branches and full history. Runtime state and selected evidence
+need their own deliberately scoped backup; see [STATE.md](STATE.md#backups).
+Do not add private keys, client token caches or raw credential fixtures to a
+source/evidence archive. Preserve those through the deployment's credential
+custody process.
 
 To rebuild a working repository from the bundle on any machine with git:
 

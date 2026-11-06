@@ -69,7 +69,7 @@ def register_cli(subparsers) -> None:
     p.add_argument("--scan-id", default=None, help="scan run id (default: latest)")
     p.add_argument("--host", default=None, help="checklist: host to build the checklist for")
     p.add_argument("--format", choices=("html", "md", "json"), default=None,
-                   help="page format (default html); coverage defaults to md and also supports json")
+                   help="page format (default html); commander also supports json; coverage defaults to md and supports json")
     p.add_argument("--benchmark-dir", default=None, help="coverage: directory of XCCDF/SCAP XML; overrides automatic content discovery")
     p.add_argument("--out", default=None, help="write to this file instead of stdout")
     p.add_argument("--key-dir", default=None, help="score: answer key directory (default range/answer_key)")

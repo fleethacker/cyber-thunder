@@ -3,6 +3,12 @@
 `.github/workflows/regression.yml` runs on pull requests and pushes to `main`.
 Each matrix job uses Python 3.12 and Node 22 on a hosted runner:
 
+The job deadline is 90 minutes, including dependency installation and the UI
+build. The account-access candidate's local Windows gate took 57 minutes
+38 seconds for 6,540 passes and 22 expected skips. This observed local duration
+does not predict hosted runner speed; the larger budget accommodates the growing
+suite without relaxing individual test deadlines, required checks or skip policy.
+
 The full Linux account-access run exposed `select()`'s fixed descriptor-number
 limit in dependency and vulnerability subprocess readers. Both now use the
 platform selector with a nonblocking check and explicit resource closure; the
@@ -82,21 +88,74 @@ The reviewed allowances are:
 | Windows | `tests/security/test_kube_credentials.py::test_real_posix_config_permission_failure` for `[420]`, `[416]`, `[438]` | 3 | `real POSIX file permissions` |
 | Linux | `tests/security/test_oidc.py::test_windows_junction_cache_path_rejected` | 1 | `Windows directory junction fixture` |
 | Linux | `tests/security/test_access_file_trust.py::test_actual_windows_junction_parent_denied` | 1 | `requires Windows NTFS junction support` |
+| Linux | 63 exact native Windows cases listed in `WINDOWS_FILE_TRUST_TESTS` and `WINDOWS_FILE_TRUST_REVIEW_TESTS` in `scripts/ci_pytest.py` | 63 | `native Windows security descriptors and file sharing` |
 | Linux | `tests/report/test_reports.py::test_commander_reproduce_command_runs_in_cmd` | 1 | `runs the command through cmd.exe` |
 | Linux | `tests/test_approval_io.py::test_deny_survives_windows_delete_handle[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |
 | Linux | `tests/state/test_file_read_sharing.py::test_deny_response_survives_windows_inventory_sharing[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |
 | Linux | `tests/state/test_file_read_sharing.py::test_windows_scope_retry_observes_revocation[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |
 | Linux | `tests/state/test_file_read_sharing.py::test_json_run_read_survives_windows_sharing` | 1 | `requires Windows file sharing semantics` |
 | Linux | `tests/state/test_file_read_sharing.py::test_audit_checkpoint_survives_windows_sharing` | 1 | `requires Windows file sharing semantics` |
-| Linux | The 19 exact `tests/test_dev.py::DevelopmentModeTests` methods below | 19 | `UDS CLI is required for configuration and payload rendering.` |
 
-The UDS CLI is not installed by this workflow. These configuration-rendering
-tests are collected on Linux but skip without it. Other deployment tests use
-fake command shims. This is a coverage limitation, not evidence of a successful
-deployment or a fully exercised UDS integration. Installing a reviewed UDS CLI
-for these tests is a future improvement; simply widening the allowance is not.
+The Linux job acquires UDS CLI 0.39.0 with `scripts/ci_setup_uds.py` into
+`$RUNNER_TEMP/ct-ci-uds` and adds only that directory to the job PATH. The helper
+supports Linux amd64 only, uses the Python standard library, and verifies the
+reviewed SHA-256 before publishing an executable. Missing downloads, malformed
+content, hash mismatches and unsupported platforms fail setup. Existing cache
+bytes are rehashed on every invocation; a corrupt cache fails without fallback.
+`--offline` permits only an already verified cache. No system installation or
+shared PATH changes are needed. Use a task-owned directory with trusted parents.
 
-The exact UDS method allowlist is also stored as `UDS_TESTS` in the helper:
+After a successful gate, each platform records the [partial release inventory](RELEASE_INVENTORY.md)
+and its hash/source receipt alongside the test reports. It records the UI assets
+rebuilt by that job and declared or observed local dependencies; it does not
+establish installed dependency closure, image contents or vulnerability status.
+Hosted results for the integrated workflow must be retained separately from the
+focused source validation below.
+
+The pin matches the repository bootstrap version; `scripts/wsl-bootstrap.sh`
+is unchanged. Primary sources are the [official release](https://github.com/defenseunicorns/uds-cli/releases/tag/v0.39.0)
+and its [checksum manifest](https://github.com/defenseunicorns/uds-cli/releases/download/v0.39.0/checksums.txt).
+The asset `uds-cli_v0.39.0_Linux_amd64` has SHA-256
+`a40495f2c5c78507bd1b99fbaab59508f5dab71546f7cc09a902a7b07969b7a4`.
+This fixed digest is the trust anchor; runtime downloads do not choose their own
+expected checksum. Updating the pin requires reviewing the official manifest
+and rerunning the rendering tests.
+
+All 19 rendering methods below must execute on Linux: their former skip
+allowances are removed. The existing shims intercept Docker, k3d, deployment,
+and HTTP calls and forward only `uds zarf tools yq` to the actual binary.
+This proves configuration/payload rendering with shimmed orchestration, not
+production deployment, live cluster behavior or full UDS integration.
+
+Focused candidate validation on 2026-11-06 used an isolated native Linux source
+copy of `96c18233f2d8c8234e01109e04229613ac73e829` plus the recorded CI overlay,
+Python 3.12.16 and the actual verified UDS binary. All three deployment modules
+passed: 59 tests, zero skips, including exactly all 19 rendering methods.
+The 49 policy tests and final 19 setup/enforcement tests passed on both Linux
+and Windows (the initial combined run had 64 tests; the setup module was then
+expanded and rerun). Real-binary offline-cache verification also succeeded.
+The [validation receipt](ci-deployment-rendering-validation.json) records exact
+case names, source/receipt hashes, commands, native source path and evidence ZIP
+SHA-256. Linux allowances changed from 113 to 94; Windows remains 87. Every
+other node ID and reason was compared against the base and is unchanged.
+No full gate, hosted workflow, push, merge or live deployment was performed.
+The existing native Windows deployment omissions remain as documented below.
+
+Credential-resolver tests add 44 exact POSIX cases skipped on Windows and six
+native Windows cases skipped on Linux. Their node IDs, reasons and receipt
+hashes are recorded in [platform-skips.json](credential-resolver-review/platform-skips.json)
+and mirrored in `CREDENTIAL_RESOLVER_SKIPS`. Every case ran successfully on its
+native platform. The allowances do not waive actual service-logon provisioning,
+kubelet mount acceptance or remote authentication. See
+[credential resolver validation](CREDENTIAL_RESOLVERS.md#focused-validation-and-compatibility-migration).
+
+The operator utilities add four exact POSIX audit-anchor protection cases and
+one POSIX client-storage case skipped on Windows, plus one native Windows
+client-storage case skipped on Linux. [Their receipt hashes and exact reasons](operator-platform-skips.json)
+are mirrored in `NATIVE_OPERATOR_SKIPS`. Signed-checkpoint and authenticated-client
+fixtures do not establish independent off-node custody or a live enclave login.
+
+The former 19 UDS skip IDs remain as `UDS_TESTS` for enforcement tests, not allowances:
 
 ```text
 test_normal_deployment_excludes_identity_and_credentials
@@ -120,7 +179,41 @@ test_standalone_setup_rejects_other_contexts_before_creating_password
 test_standalone_setup_rejects_arguments
 ```
 
-That permits at most **32 skipped cases on Linux and 22 on Windows**, with every
+The node assessment adds 13 exact Linux-only cases on Windows and nine exact
+Windows-only cases on Linux. Their literal IDs and reasons are listed in
+`NODE_HARDENING_SKIPS` in `scripts/ci_pytest.py` and independently exercised in
+[the native review receipts](NODE_HARDENING_REVIEW.md). These are individual
+case allowances, not module omissions.
+
+The offline release-evidence helper adds one exact native-platform exception
+per runner: its FIFO test runs on Linux, and its Windows handle-lifetime test
+runs on Windows. Their node IDs and reasons are documented in the
+[independent review](RELEASE_VULNERABILITY_REVIEW.md); no broader helper skips are allowed.
+
+The selected SSH-key boundary adds 13 exact POSIX cases on Windows and 14 exact
+Windows cases on Linux. Each passed on the opposite native platform with the
+same reviewed sources; [the retained map](ssh-key-platform-skips.json) records
+literal node IDs, reasons and opposite-platform XML hashes. The independent
+[key review](SSH_KEY_REVIEW.md) added no further platform exceptions. Changed
+reasons, new parameters, wrong-platform skips and teardown skips remain refused.
+
+The scan-publication review adds one exact JSON-only omission on both runners:
+`tests/scan_workers/test_review.py::test_sqlite_writer_admission_rechecks_authority[json]`,
+with reason `SQLite writer admission is specific to the SQLite backend`. Its
+SQLite counterpart passed on native Windows and Linux; it cannot be skipped.
+The [independent review](SCAN_WORKERS_REVIEW.md) records the scope and receipts.
+Policy tests reject changed names/reasons, the SQLite case and teardown skips.
+
+The disposable-root cleanup regression adds 17 exact Windows-only cases on
+Linux, enumerated in `WINDOWS_CLEANUP_TESTS` in `scripts/ci_pytest.py`, with reason
+`native Windows read-only attributes and reparse points`. They exercise a real
+read-only Git object, registered-root containment, native hardlinks/symlinks and
+junctions, and error propagation. Every case must execute on Windows; missing
+link-creation privileges are not an allowed skip. Cleanup clears only a failed
+ordinary file unlink's read-only bit after validation, without changing DACLs.
+Its owned fixture writers must already be stopped before teardown.
+
+That permits at most **127 skipped cases on Linux and 102 on Windows**, with every
 case individually constrained. Missing Git or Bash is not an allowed skip on
 either runner. Windows runs the command-shell and file-sharing tests that
 Linux skips.
@@ -141,16 +234,19 @@ or a Windows junction creation error are deliberately not allowances. If a
 runner cannot create the required links, its capability must be provisioned
 or the failed coverage reviewed; the skip checker remains red.
 
-Windows mode bits and `st_uid` do not establish an owner SID, DACL, inherited
-permissions, or effective account rights. The file validators check file shape,
-links/reparse metadata and stability; they do not verify Windows ACLs. Before
+Windows mode bits and `st_uid` do not establish an owner SID or DACL. Protected
+runtime files now use native SID/DACL validation with pinned handle chains;
+unavailable native validation fails closed. Conservative checks can reject a
+safe but unsupported descriptor rather than guessing effective access. Before
 deployment, provision and review restrictive DACLs on the policy, kubeconfig,
 referenced credential material, and every ancestor directory. Untrusted accounts
 must not be able to write, replace/delete, take ownership, or change permissions
 on them. Restrict secret-file reads to the intended service account and trusted
 administrators; give the service only the rights its operation requires. Check
 effective inherited permissions for the actual service identity and other local
-accounts. Passing these tests is not DACL acceptance evidence. See
+accounts. The native fixtures prove those tested cases, not the actual deployed
+service account's protection. The read-only node assessment also does not enforce
+future file creation or cover encryption. See
 [account access and file trust](ACCOUNT_ACCESS.md) for the runtime boundary.
 
 `tests/conftest.py` already excludes these Windows modules before collection:

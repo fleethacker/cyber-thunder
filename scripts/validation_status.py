@@ -19,6 +19,12 @@ def generate(root: Path) -> tuple[str, str]:
             raise ValueError(f"{row['platform']}: a real run needs dated evidence")
         if evidence and not (root / evidence.split("#", 1)[0]).is_file():
             raise ValueError(f"{row['platform']}: evidence file is missing")
+        application_commit = row.get("application_commit")
+        if application_commit is not None and (not isinstance(application_commit, str)
+                or len(application_commit) != 40
+                or any(c not in "0123456789abcdef" for c in application_commit)
+                or not row.get("application_scope")):
+            raise ValueError(f"{row['platform']}: application SHA needs its exact recorded scope")
     status = "\n\n".join(r["summary"] for r in rows if r["real_run"] and r.get("summary"))
     status += ("\n\nThese are recorded real-target results, not full benchmark coverage. "
                "Windows/WinRM, Cisco device changes and other platform versions still need real testing. "
@@ -35,7 +41,9 @@ def generate(root: Path) -> tuple[str, str]:
         lines.append(f"| {row['platform']} | {'Yes' if row['real_run'] else 'No'} | {row.get('date', '-')} | "
                      f"{row.get('seeds', 'Not measured')} | {row.get('fix_flow', 'Not exercised')} | {link} |")
     lines += ["", "## Provenance and next evidence", "",
-              "The exact application commit for each run is **not recorded**. Do not substitute the current branch or a documentation commit for it.", ""]
+              "Older runs lack an exact application commit. Do not substitute the current branch or a documentation commit. Recorded application SHAs below apply only to the named acceptance scope.", ""]
+    lines += [f"- {r['platform']}: application `{r['application_commit']}`; {r['application_scope']}."
+              for r in rows if r.get("application_commit")]
     lines += [f"- {r['platform']}: write-up commit `{r['evidence_commit']}`."
               for r in rows if r.get("evidence_commit")]
     lines += ["", "For the next run, record application SHA, deployment mode, OS/build, scanner and benchmark versions/profile, "

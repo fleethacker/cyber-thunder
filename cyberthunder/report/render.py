@@ -27,7 +27,7 @@ def _env() -> Environment:
 def _md_cell(value) -> str:
     """Keep scanner evidence and reviewer text literal inside Markdown reports."""
     text = html.escape(str(value), quote=False)
-    for char in ("\\", "`", "*", "[", "]", "|"):
+    for char in ("\\", "`", "*", "_", "~", "[", "]", "|", "#", "!"):
         text = text.replace(char, "\\" + char)
     return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
 

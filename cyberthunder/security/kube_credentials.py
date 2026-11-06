@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import stat
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -110,6 +111,18 @@ class FileIdentity:
     parents: tuple = field(repr=False)
 
 
+@contextmanager
+def _open_protected(path, private):
+    if os.name == "nt":
+        from .file_trust import open_protected
+        with open_protected(path, private=private) as stream:
+            yield stream
+    else:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            yield stream
+
+
 def _read(path, role, private, maximum, owner):
     path = _native_path(path)
     parents = _parents(path, owner)
@@ -117,8 +130,7 @@ def _read(path, role, private, maximum, owner):
     _protection(before, private=private, owner=owner)
     if not 0 < before.st_size <= maximum:
         raise ValueError
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
-    with os.fdopen(os.open(path, flags), "rb") as stream:
+    with _open_protected(path, private) as stream:
         opened = os.fstat(stream.fileno())
         _protection(opened, private=private, owner=owner)
         if _stamp(before) != _stamp(opened):
@@ -128,12 +140,12 @@ def _read(path, role, private, maximum, owner):
         if (len(raw) > maximum or _stamp(opened) != _stamp(after_read)
                 or opened.st_ctime_ns != after_read.st_ctime_ns):
             raise ValueError
-    after = path.lstat()
-    if (_stamp(before) != _stamp(after) or before.st_ctime_ns != after.st_ctime_ns
-            or parents != _parents(path, owner)):
-        raise ValueError
-    identity = FileIdentity(str(path), role, hashlib.sha256(raw).hexdigest(), private, maximum,
-                            _stamp(after), after.st_ctime_ns, parents)
+        after = path.lstat()
+        if (_stamp(before) != _stamp(after) or before.st_ctime_ns != after.st_ctime_ns
+                or parents != _parents(path, owner)):
+            raise ValueError
+        identity = FileIdentity(str(path), role, hashlib.sha256(raw).hexdigest(), private, maximum,
+                                _stamp(after), after.st_ctime_ns, parents)
     return raw, identity
 
 
@@ -307,7 +319,7 @@ def _validate(binding, owner):
         auth_kind = "client_certificate"
     result = KubeconfigBinding(config.path, selected, cluster_name, user_name, server, auth_kind,
                                tuple(files), binding.provenance, owner,
-                               "posix_owner_mode" if os.name == "posix" else "windows_dacl_not_verified")
+                               "posix_owner_mode" if os.name == "posix" else "windows_dacl")
     _guard(result)
     return result
 

@@ -51,7 +51,7 @@ def node(ctx, served):
 
 
 def _strip(records):
-    drop = {"fetched_at", "fetched_by", "source", "ingest", "url", "etag", "upload_date"}
+    drop = {"fetched_at", "fetched_by", "source", "ingest", "url", "etag", "upload_date", "authenticity", "generation", "job_id"}
     return sorted(({k: v for k, v in r.items() if k not in drop} for r in records), key=lambda r: r["filename"])
 
 
@@ -99,7 +99,7 @@ def test_pull_job_end_to_end_matches_a_hand_import(node, served, tmp_path):
     delta = files[STIG]["delta"]
     assert delta and job["deltas"] == [delta] and delta["full_import"]
     ds = Path(files[SCAP]["datastream_path"])
-    assert ds.is_file() and ds.parent.name == "MS_Windows_11" and ds.read_bytes().startswith(b"<?xml")
+    assert ds.is_file() and ds.parent.parent.name == "generations" and ds.read_bytes().startswith(b"<?xml")
 
     # the same file imported by hand on a fresh node produces the same delta
     other = make_ctx(tmp_path / "hand")
@@ -166,6 +166,8 @@ def test_manifest_round_trip_equals_a_pull(node, served, tmp_path):
     assert res["refused"] == [] and res["verified_by"] == "manifest.lock.json" and len(res["imported"]) == 2
     assert len(res["deltas"]) == 1
     imported = node.ingest.held_content()["files"]
+    assert all(r["authenticity"]["status"] == "unsigned_dev" for r in imported)
+    assert all(not r["authenticity"]["operator_attested"] for r in imported)
     assert {r["source"] for r in imported} == {"imported"}
 
     # a pull on a fresh node holds the same content index

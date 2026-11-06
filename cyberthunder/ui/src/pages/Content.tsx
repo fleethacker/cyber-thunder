@@ -131,6 +131,7 @@ export default function Content() {
           <Stack gap="lg">
             <Group justify="space-between"><Text fw={700}>Downloaded and imported files ({library.held.files.length})</Text><Text size="xs" c="dimmed">{library.held.scap.length} indexed SCAP datastream(s), scanner setup not verified</Text></Group>
             <Text size="sm">These files are local, whether or not their products are selected for maintenance. Manual STIG, SRG and SCAP content are listed separately by type.</Text>
+            <Text size="sm" c="dimmed">Active in library identifies the accepted local release. Stored references remain available as history; neither label confirms which release a configured scanner uses.</Text>
             <Group><Button variant="light" onClick={() => selectTask('browse')}>Find another product</Button><Button variant="light" onClick={() => selectTask('transfers')}>Import local content</Button></Group>
             <HeldTable files={library.held.files} onProductSelect={selectProduct} />
             <Text fw={700}>Imported and bundled rule catalogs ({library.catalogs.length})</Text>

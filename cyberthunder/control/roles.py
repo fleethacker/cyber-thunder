@@ -5,11 +5,11 @@ READ = frozenset({"read", "read.all", "kill.engage"})
 ROLE_PERMISSIONS = {
     "viewer": READ,
     "analyst": READ | {"scan", "discover", "propose", "explain", "plan", "import"},
-    "approver": READ | {"approve", "deny", "cancel", "apply", "rollback", "verify", "plan", "review"},
+    "approver": READ | {"approve", "deny", "cancel", "apply", "rollback", "verify", "plan", "review", "risk.accept", "maintenance.override"},
     "admin": READ | {"admin", "policy", "kill.release"},
     "auditor": READ | {"audit", "export"},
 }
-HUMAN_ACTIONS = frozenset({"approve", "deny", "cancel", "apply", "rollback", "verify", "review", "admin", "policy", "kill.release"})
+HUMAN_ACTIONS = frozenset({"approve", "deny", "cancel", "apply", "rollback", "verify", "review", "risk.accept", "maintenance.override", "admin", "policy", "kill.release"})
 
 
 def permissions(principal) -> frozenset[str]:
@@ -28,10 +28,13 @@ WRITE_ACTIONS = {
     ("POST", "/cluster/known-good/from-finding/{finding_id}"): "admin", ("DELETE", "/cluster/known-good/exceptions/{exception_id}"): "admin",
     ("POST", "/findings/explain"): "explain", ("POST", "/findings/{finding_id}/propose"): "propose",
     ("POST", "/findings/{finding_id}/explain"): "explain", ("PUT", "/findings/{finding_id}/review"): "review",
+    ("PUT", "/findings/{finding_id}/risk-acceptance"): "risk.accept",
+    ("POST", "/findings/{finding_id}/risk-acceptance/revoke"): "risk.accept",
     ("PUT", "/discovery/scopes"): "admin", ("POST", "/discovery/scopes/preview"): "read",
     ("GET", "/discovery/scopes/recipes"): "read", ("PUT", "/discovery/scopes/recipes"): "admin",
     ("POST", "/discovery/scopes/recipes/preview"): "read",
     ("PUT", "/discovery/scopes/ranges"): "admin", ("POST", "/discovery/sweep"): "discover",
+    ("POST", "/discovery/vsphere/{target_id}/collect"): "discover",
     ("POST", "/discovery/assets/{asset_id}/accept"): "admin", ("POST", "/discovery/assets/{asset_id}/ignore"): "admin",
     ("POST", "/ingest/scanner"): "import", ("PUT", "/ingest/link"): "admin", ("POST", "/ingest/link/probe"): "admin",
     ("POST", "/ingest/stig"): "import", ("POST", "/ingest/stig/{delta_id}/rescan"): "scan",
@@ -62,6 +65,7 @@ READ_ROUTES = frozenset({
     "/change-assessments/{assessment_id}", "/cluster/known-good", "/cluster/risk", "/demo", "/discovery",
     "/discovery/applicable", "/discovery/assets", "/discovery/assets/{asset_id}", "/discovery/findings",
     "/discovery/runs", "/discovery/runs/{run_id}", "/discovery/scopes/recipes", "/findings",
+    "/discovery/vsphere/{target_id}/runs", "/discovery/vsphere/{target_id}/runs/{run_id}",
     "/findings/{finding_id}", "/findings/{finding_id}/review", "/ingest/content", "/ingest/history",
     "/ingest/library", "/ingest/link", "/ingest/updates", "/ingest/updates/jobs/{job_id}", "/kill",
     "/outbox", "/policy", "/proposals", "/proposals/{pid}", "/proposals/{pid}/diff",

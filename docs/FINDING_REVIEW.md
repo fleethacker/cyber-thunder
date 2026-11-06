@@ -1,8 +1,13 @@
 # Finding review
 
 Reviews record a named operator's decision separately from the scanner's original observation. They never
-change scanner status, severity, evidence, confidence, or remediation approval. Identity is self-asserted:
-`identity_verified` is always `false`. This is not authentication or a role/authorization redesign.
+change scanner status, severity, evidence, confidence, or remediation approval. Verified mode records the
+authenticated human principal and checks current target authority. Local development records a clearly
+unverified, self-asserted identity. Recorded identity evidence never supplies current authorization.
+
+Operator risk acceptance is a separate authorized decision with a remediation hold, described in
+[RISK_ACCEPTANCE.md](RISK_ACCEPTANCE.md). Its accept/revoke operations share this ledger and lifecycle
+locks. Ordinary review saves cannot create risk decisions or replace an active risk acceptance.
 
 `ReviewService(ctx)` exposes `summary(finding, *, now=None)`, `history(finding)`, and
 `save(finding, *, actor, disposition, reason, supporting_evidence='', expires_at=None,
@@ -28,7 +33,10 @@ Summary fields:
 | `current` | Most recently saved event, even if it no longer applies; otherwise `null` |
 | `history_count` | All saved events, including reversals |
 | `reopened_reason` | Explanation for mismatched or expired evidence; otherwise `null` |
-| `identity_verified` | Always `false` |
+| `identity_verified` | Whether the recorded decision was bound to a verified human principal |
+| `remediation_held` | Active operator risk acceptance; distinct from false-positive suppression |
+| `risk_acceptance_status` | `none`, `active`, `expired`, `reopened`, or `revoked` |
+| `risk_acceptance` | Last risk decision visible to this observation's owner, or `null` |
 
 History views add `history`, in append order. Each event has `id`, `revision`, `disposition`, `reason`,
 `supporting_evidence`, `expires_at`, `reviewed_at`, `reviewed_by`, `identity_verified`, `scope`, and
@@ -61,8 +69,10 @@ review history against that scan's observation, without writing. This is a histo
 present time, not a reconstruction of which review existed when that scan ran.
 
 `PUT /api/v1/findings/{finding_id}/review` accepts `disposition`, `reason`, optional `supporting_evidence`,
-optional `expires_at`, `expected_revision`, and `evidence_fingerprint`. It requires `X-Actor` through
-`ActorDep`, repeats `require_human` in the service, and enforces the kill switch. `scan_id` on PUT is rejected.
+optional `expires_at`, `expected_revision`, and `evidence_fingerprint`. Verified mode binds
+`ActorDep` to the authenticated principal and requires `review` authority for the
+finding's target. The service repeats human/current-authority checks and enforces
+the kill switch. `X-Actor` is only development attribution. `scan_id` on PUT is rejected.
 The service rereads current persisted findings, including partial-scan overlays; historical fallback is
 never used for saving. Missing current finding returns 404. Stale revision or changed fingerprint returns
 409; reload both before another decision. Invalid input returns 400; an engaged kill switch returns 423.

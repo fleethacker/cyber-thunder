@@ -4,11 +4,15 @@ export const CONFIDENCE_LABELS: Record<ConfidenceGrade, string> = { high: 'High'
 export const REVIEW_LABELS: Record<ReviewDisposition, string> = {
   unreviewed: 'Unreviewed', confirmed: 'Confirmed', false_positive: 'False positive',
   not_applicable: 'Not applicable', needs_investigation: 'Needs investigation',
+  risk_accepted: 'Risk accepted', risk_revoked: 'Risk acceptance revoked',
 };
+export const REVIEW_FILTER_LABELS: Record<string, string> = { ...REVIEW_LABELS,
+  risk_expired: 'Risk acceptance expired', risk_reopened: 'Risk acceptance reopened' };
 
 export const isSuppressed = (review?: FindingReview | null) => !!(review?.active && review.suppressed);
+export const isRemediationHeld = (review?: FindingReview | null) => !!(review?.active && review.remediation_held);
 export const reviewDisposition = (review?: FindingReview | null): ReviewDisposition => review?.active ? review.disposition : 'unreviewed';
-export const needsExpiry = (disposition: ReviewDisposition) => disposition === 'false_positive' || disposition === 'not_applicable';
+export const needsExpiry = (disposition: ReviewDisposition) => ['false_positive', 'not_applicable', 'risk_accepted'].includes(disposition);
 
 export interface ReviewDraft { disposition: ReviewDisposition; reason: string; supportingEvidence: string; expiresAt: string }
 
@@ -24,9 +28,13 @@ export function reviewDraft(review?: FindingReview | null): ReviewDraft {
 
 export function reviewInput(draft: ReviewDraft, review: FindingReview, now = Date.now()): FindingReviewInput {
   if (!draft.reason.trim()) throw new Error('Add a reason for this review, including a return to Unreviewed.');
-  const expiry = draft.expiresAt ? new Date(draft.expiresAt).getTime() : null;
-  if (needsExpiry(draft.disposition) && expiry === null) throw new Error('Set a future expiry for this dismissal.');
+  const expiry = draft.expiresAt && draft.disposition !== 'risk_revoked' ? new Date(draft.expiresAt).getTime() : null;
+  if (needsExpiry(draft.disposition) && expiry === null) throw new Error('Set a future expiry for this decision.');
   if (expiry !== null && (!Number.isFinite(expiry) || expiry <= now)) throw new Error('Expiry must be a valid future date and time.');
+  if (draft.disposition === 'risk_accepted') {
+    if (!draft.supportingEvidence.trim()) throw new Error('Supporting evidence is required to accept risk.');
+    if (expiry !== null && expiry > now + 30 * 86400000) throw new Error('Risk acceptance expiry must be within 30 days.');
+  }
   if (!review.evidence_fingerprint || !Number.isInteger(review.revision) || review.revision < 0) throw new Error('Refresh the current evidence before saving a review.');
   return {
     disposition: draft.disposition, reason: draft.reason.trim(), supporting_evidence: draft.supportingEvidence.trim(),

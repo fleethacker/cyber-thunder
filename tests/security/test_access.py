@@ -171,6 +171,10 @@ def test_atomic_replacement_observed_and_mid_decision_replacement_denied(tmp_pat
     with monkeypatch.context() as m:
         m.setattr(access, "_parse", replace_during_parse)
         assert not policy.allows(Principal(), "scan", target())
+    if os.name == "nt":
+        # The native reader prevents replacement while its handle is held.
+        assert replacement.exists() and policy.allows(Principal(), "scan", target())
+        os.replace(replacement, path)
     assert not policy.allows(Principal(), "scan", target())
     write(replacement)
     os.replace(replacement, path)
@@ -201,7 +205,11 @@ def test_unreadable_policy_is_a_sanitized_denial(tmp_path, monkeypatch):
     def denied(*args, **kwargs):
         raise PermissionError("private filesystem detail")
 
-    monkeypatch.setattr(access.os, "open", denied)
+    if os.name == "nt":
+        from cyberthunder.security import file_trust
+        monkeypatch.setattr(file_trust._Native, "open", denied)
+    else:
+        monkeypatch.setattr(access.os, "open", denied)
     with pytest.raises(AccessDenied) as error:
         policy.require(Principal(), "scan", target())
     assert "private" not in str(error.value)

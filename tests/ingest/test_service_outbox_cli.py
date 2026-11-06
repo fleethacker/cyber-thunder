@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -13,14 +14,15 @@ def test_ingest_stig_full_then_delta(ctx, bench_pair):
     old, new = bench_pair
     first = ctx.ingest.ingest_stig(old, actor="it2.smith")
     assert first["full_import"] and first["old_release"] is None and first["counts"]["added"] == 4
-    cat = ctx.store.ingest_dir / "catalog" / "xccdf_org.ssgproject.content_benchmark_RHEL-9.xml"
+    cat = Path(first["catalog_path"])
     assert cat.read_bytes() == old.read_bytes()
 
     rep = ctx.ingest.ingest_stig(new.read_bytes(), "new-xccdf.xml", actor="it2.smith")
     assert not rep["full_import"]
     assert rep["old_release"] == "0.1.76" and rep["new_release"] == "0.1.77"
     assert rep["counts"]["added"] == 1 and rep["counts"]["changed"] == 2 and rep["counts"]["removed"] == 1
-    assert cat.read_bytes() == new.read_bytes()
+    assert Path(rep["catalog_path"]).read_bytes() == new.read_bytes()
+    assert cat.read_bytes() == old.read_bytes()
     s, t = rep["sizes"], rep["transfer"]
     assert s["ratio"] > 1 and s["compressed_bytes"] < s["full_bytes"]
     assert t["link"]["kbps"] is None
@@ -134,6 +136,7 @@ def test_cli_smoke(state_dir, bench_pair, capsys, monkeypatch):
     assert _cli(state_dir, "ingest", "stig", str(new), "--old", str(old)) == 0
     out = capsys.readouterr().out
     assert "added 1, changed 2, removed 1" in out and "transfer time unknown" in out
+    assert "authenticity: unsigned_dev" in out
     assert _cli(state_dir, "ingest", "history") == 0
     assert json.loads(capsys.readouterr().out)["deltas"]
 

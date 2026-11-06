@@ -78,22 +78,26 @@ def sudo_wrap(command: str) -> str:
 
 
 def make_transport(target: "Target", settings: "Settings | None" = None, *,
-                   guard=None, on_security_event=None) -> Transport:
+                   guard=None, on_security_event=None, credential_use=None) -> Transport:
     """Build a transport, forwarding settings and per-instance SSH/WinRM callbacks.
 
     Other kinds retain their adapter construction; application authorization
     wrappers remain responsible for guarding those transports.
     """
     kind = target.transport
+    if credential_use is not None and kind not in {"ssh", "winrm"}:
+        raise TransportError("this transport cannot consume a credential lease")
     if kind == "local":
         from .local import LocalTransport
         return LocalTransport()
     if kind == "ssh":
         from .ssh import SSHTransport
-        return SSHTransport.from_target(target, settings, guard=guard, on_security_event=on_security_event)
+        return SSHTransport.from_target(target, settings, guard=guard, on_security_event=on_security_event,
+                                        credential_use=credential_use)
     if kind == "winrm":
         from .winrm import WinRMTransport
-        return WinRMTransport.from_target(target, settings, guard=guard, on_security_event=on_security_event)
+        return WinRMTransport.from_target(target, settings, guard=guard, on_security_event=on_security_event,
+                                          credential_use=credential_use)
     if kind == "fixture":
         from .fixture import FixtureTransport
         return FixtureTransport(target.options["fixture_dir"])

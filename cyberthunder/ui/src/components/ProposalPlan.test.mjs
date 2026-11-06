@@ -39,7 +39,7 @@ function mount({ component = 'ProposalPlan', props: initialProps = {}, actor = '
   };
   const api = { plan: (id) => new Promise((resolve, reject) => requests.push({ id, resolve, reject })) };
   const components = evaluate(source, {
-    react: hooks, '@mantine/core': ui, '../api/client': { api, ApiError, errorText },
+    './ProposalMaintenance': ui, react: hooks, '@mantine/core': ui, '../api/client': { api, ApiError, errorText },
     '../lib/format': { fmtZonedTime: (value) => value, label: (value) => value },
     '../state/AppState': { useAppState: () => app }, './ActorChip': { actorProblem }, './common': ui,
   });

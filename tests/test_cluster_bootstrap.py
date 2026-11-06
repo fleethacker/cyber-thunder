@@ -27,8 +27,19 @@ def packaged_settings(state_dir, monkeypatch):
     deployment = next(d for d in documents if d["kind"] == "Deployment")
     container = deployment["spec"]["template"]["spec"]["containers"][0]
     for variable in container["env"]:
-        monkeypatch.setenv(variable["name"], variable["value"])
+        if "value" in variable:
+            monkeypatch.setenv(variable["name"], variable["value"])
+        else:
+            # Kubernetes resolves these references. Never inherit a real secret
+            # into this offline bootstrap fixture.
+            assert "secretKeyRef" in variable["valueFrom"]
+            monkeypatch.delenv(variable["name"], raising=False)
+    # Exercise cluster registration in a loopback range, with no identity
+    # provider. test_package_identity separately enforces the fleet manifest's
+    # required identity configuration and Secret references.
     return Settings.from_env(state_dir=state_dir, explain_precompute=False,
+                             auth_mode="dev", security_mode="range", host="127.0.0.1",
+                             oidc_client_secret_ref=None,
                              scan_interval_s=0, content_check_interval_s=0)
 
 

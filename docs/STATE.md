@@ -46,18 +46,30 @@ file and rename. It is the layout the tool has always had: a state directory can
 over a slow link with plain tools.
 
 `CT_STATE_BACKEND=sqlite` keeps every document as a row in `state.db` in the state directory, in WAL mode with a
-busy timeout. One writer at a time and readers that never wait is what lets two API workers and the CLI share
-one state directory without losing each other's updates; a write that meets another writer waits instead of
-failing. Files stay files, so `audit verify`, the proposals file lock and the inventory merge work as before.
+bounded busy timeout. WAL normally lets readers proceed alongside a single writer, but contention can still
+delay or fail operations. A competing writer waits up to the busy timeout and can fail if it expires.
+Files stay files, so `audit verify`, the proposals file lock and the inventory merge work as before.
+
+Persisted inventory authorization reads retry only when a post-parse file identity check detects a changed
+snapshot, such as an atomic replacement by another inventory writer. There are at most eight fresh,
+fully validated reads, with 10 ms between attempts and no wait after the last attempt. No old or cached
+scope is substituted. Missing, unreadable, or malformed inventory fails immediately; continuously changing
+inventory fails closed when the attempt limit is reached. These reads take no additional inventory lock,
+including when registration already holds the writer lock. The attempt limit does not impose a wall-clock
+deadline on filesystem access or parsing.
 
 Both backends pass the same test suite: the `state_dir` fixture in `tests/conftest.py` runs every state test
 once per backend in one pytest run, which is what `scripts/gate.sh` executes (`CT_STATE_BACKENDS=json` narrows
 a local run to one backend). `tests/state/test_concurrency.py` starts two API processes and the CLI against one
 state directory, has them add targets, scan, propose and decide at the same time, and checks that nothing is
-lost and the audit chain verifies, once per backend. Measured on the development laptop (Windows 11): a
-concurrent phase of 17 s (json) and 20 s (sqlite) in which 27 targets were added (24 over HTTP by two workers,
+lost and the audit chain verifies, once per backend. This storage proof uses development authentication;
+verified browser sessions still require one process and one replica, as described in
+[PACKAGE_IDENTITY.md](PACKAGE_IDENTITY.md). It does not establish shared browser sessions across workers.
+The historical development-laptop measurement recorded on 2026-11-05 (Windows 11) had a concurrent phase
+of 17 s (json) and 20 s (sqlite) in which 27 targets were added (24 over HTTP by two workers,
 3 by the CLI), 53 proposals were decided and 3 scans ran, ending with 80 proposals, all of it present
-afterwards in every process's view, and 177 audit records in a verified chain. `tests/state/test_roundtrip.py`
+afterwards in every process's view, and 177 audit records in a verified chain. These are historical timings,
+not a claim about current rerun duration. `tests/state/test_roundtrip.py`
 moves the 39 documents of a simulated-range state each way and leaves its 23 files untouched.
 
 Every process that shares a state directory must run with the same `CT_STATE_BACKEND`. The sqlite backend logs a
@@ -94,6 +106,57 @@ on a target that already holds the same documents changes nothing; a target with
 refused unless `--force` is given, which overwrites the copies and keeps what only the target holds.
 `--to json` goes the other way. After migrating, set `CT_STATE_BACKEND` for every process that uses the
 directory: the API server, the CLI, and the container environment.
+
+## Finding publication lock protocol
+
+Finding review, remediation and scan publication use 256 fixed filesystem lock
+stripes under `finding_reviews/lifecycle-v2/`. A finding maps to the integer value
+of SHA-256 of its UTF-8 ID modulo 256. Every process uses the same mapping for
+single-finding operations and batch publication. A batch acquires each affected
+stripe once, in ascending order, and retains them through publication. Thus it
+holds at most 256 lifecycle lock descriptors plus one review-coordination lock,
+independent of finding count; database, audit and other runtime descriptors are
+additional. No OS descriptor limit is raised.
+
+Colliding identities conservatively exclude each other. Reviews and remediation
+can return a retryable conflict even for different findings on the same stripe.
+Publication retries within its existing deadline, releasing all locks before
+re-reading current observations and reviews. Same-thread reentry still fails
+immediately, including a collision with a different identity. Locks contain no
+cached authorization, review or observation decisions.
+
+Review takes a stripe, then review coordination, then its backend transaction.
+Publication takes coordination, then its deduplicated stripes, then a backend
+transaction if review invalidations require one. All filesystem acquisitions
+are nonblocking: contention unwinds before retrying, so these opposite orders
+do not wait on each other. Remediation holds its stripe across the final account,
+review and policy checks and execution, and releases it before verification or
+rescan publication. Account checks remain inside their existing critical sections.
+
+**Upgrade requires a coordinated stop and restart.** The previous per-finding
+lock protocol and v2 stripes do not exclude each other during remediation. Stop
+admitting work, drain all in-flight review/remediation/scan operations, and stop
+every API, CLI and worker process sharing the state directory before upgrading
+any of them. Do not perform a rolling or mixed-version upgrade; apply the same
+procedure for downgrade or a future mapping/count change. Old lock files may
+remain on disk and need no deletion. Do not delete active lock files.
+
+This bounds lock descriptors; it does not make staged findings, run metadata,
+review invalidations and audit records one atomic transaction. A failure can
+leave a findings document staged without its run being published, or pending
+audit/partial invalidation records. Existing read precedence and fail-closed
+review rules still apply. Retain such evidence when retrying or investigating.
+
+## Application shutdown
+
+`AppContext.close(timeout=5)` stops registered producers, drains their workers and
+releases database handles after they finish. It returns `False` if the shared
+deadline expires; the owner must retain the context and retry after work finishes.
+The API closes contexts it creates; a context supplied by an embedding caller
+remains that caller's responsibility. Stop admitting requests and join external
+synchronous users before cleanup. See [STATE_LIFECYCLE](STATE_LIFECYCLE.md) for
+ownership, retries and supported limits. Closing handles is not a backup or a
+permanent prohibition on later store use.
 
 ## Backups
 

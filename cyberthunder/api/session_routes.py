@@ -1,10 +1,27 @@
 """Root browser-login routes with their own session and CSRF boundary."""
 
+import json
+
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from cyberthunder.security.oidc import AuthenticationError
 from cyberthunder.security.sessions import LOGIN_COOKIE, SESSION_COOKIE, SessionConfig, SessionService
+
+
+def _reauth_body(data):
+    def unique(pairs):
+        result = {}
+        for name, value in pairs:
+            if name in result:
+                raise AuthenticationError()
+            result[name] = value
+        return result
+    value = json.loads(data.decode("utf-8"), object_pairs_hook=unique)
+    if not isinstance(value, dict) or set(value) - {"return_to"}:
+        raise AuthenticationError()
+    return value.get("return_to", "/")
 
 
 def _private(response):
@@ -108,8 +125,8 @@ def install_sessions(app, ctx, access_validator):
             # authorization codes. Ingress logs must also redact callback queries.
             request.scope["query_string"] = b""
             query = raw_query.decode("ascii")
-            cookie = service.complete_login(query, request.headers)
-            response = _private(RedirectResponse(service.origin + "/", status_code=303))
+            cookie, return_to = service.finish_login(query, request.headers)
+            response = _private(RedirectResponse(service.origin + return_to, status_code=303))
             _cookie(response, SESSION_COOKIE, cookie, config.absolute_timeout_s)
             _clear(response, LOGIN_COOKIE)
             return response
@@ -117,6 +134,27 @@ def install_sessions(app, ctx, access_validator):
             response = _error()
             _clear(response, LOGIN_COOKIE)
             return response
+
+    @app.post("/auth/reauthenticate", include_in_schema=False)
+    async def reauthenticate(request: Request):
+        if service is None:
+            return _error(404)
+        try:
+            if request.scope.get("query_string"):
+                raise AuthenticationError()
+            await run_in_threadpool(service.csrf_check, "POST", request.headers)
+            data = bytearray()
+            async for chunk in request.stream():
+                if len(data) + len(chunk) > 8192:
+                    raise AuthenticationError()
+                data.extend(chunk)
+            url, cookie = await run_in_threadpool(service.start_login, request.headers,
+                step_up=True, return_to=_reauth_body(bytes(data)))
+            response = _private(JSONResponse({"authorization_url": url}))
+            _cookie(response, LOGIN_COOKIE, cookie, config.login_timeout_s)
+            return response
+        except Exception:
+            return _error()
 
     @app.post("/auth/logout", include_in_schema=False)
     def logout(request: Request):

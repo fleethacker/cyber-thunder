@@ -37,29 +37,36 @@ upgrading. The existing periodic inventory scanner selects only in-scope targets
 1. Review the target in Inventory (`GET /api/v1/targets`). Confirm the ID,
    `asset_type: kubernetes`, `transport: kubeconfig`, and the intended isolated
    range. Simulated targets cannot use this active cluster path.
-2. Set `options.kubeconfig` to the intended file and `options.context` to its
+2. For development, set `options.kubeconfig` to the intended file and `options.context` to its
    explicit named context. `options.kubectl` may select the executable; it defaults
    to `kubectl`. Missing or blank connection values are refused. There is no
    fallback to the process's default kubeconfig or current context.
+   Verified operation instead selects the authenticated account's protected
+   kubeconfig/context binding for that action; inventory defaults do not supply
+   a shared administrative account. See [account access](ACCOUNT_ACCESS.md).
 3. Authorize using the existing scope control, or
    `PUT /api/v1/targets/{target_id}` with `{"in_scope": true}` and the operator's
-   `X-Actor` header. This records the existing `scope.change` event.
-4. Send `POST /api/v1/cluster/baseline` with `X-Actor` and optionally
+   verified identity and administrative grants. This records `scope.change`.
+4. Send authenticated `POST /api/v1/cluster/baseline` with optionally
    `{"target_id": "test-cluster"}`. The active survey uses
-   `GET /api/v1/cluster/survey?target_id=test-cluster` and also requires `X-Actor`.
+   `GET /api/v1/cluster/survey?target_id=test-cluster` and also requires current
+   `discover` authority and the corresponding account connection binding.
+   Baseline collection uses `scan` authority and its scan credential binding.
    Omitting `target_id` selects `CT_BOOTSTRAP_CLUSTER_TARGET_ID`; the selected
    target must already exist and be authorized.
 
-A typed actor is an audit attribution label, **not authenticated identity**.
-The existing actor validator rejects unnamed and reserved machine/policy actors
-on both active operations. This change does not provide identity verification or
-credential isolation.
+In loopback development mode only, `X-Actor` supplies a typed, unverified
+attribution label. Verified mode uses signed OIDC/mesh identity or its browser
+session and role/resource grants; `X-Actor` cannot replace that principal.
+Actor-name checks reject unnamed and reserved machine/policy labels; verified
+role and resource permissions determine which operations an account may perform.
 
 ## Execution and audit
 
 Service callers must pass `actor` explicitly to `survey()` or `scan()`; each
 accepts an optional `target_id`. Every kubectl call uses the kubeconfig, context
-and executable resolved from that inventory target. Bootstrap connection settings
+and executable resolved for that target and, in verified mode, the acting account's
+explicit binding. Bootstrap connection settings
 are only candidate defaults, never an alternate execution connection.
 
 The service pins that connection for the run and rechecks the current inventory
@@ -104,11 +111,13 @@ its existing timeout before the stop takes effect; this is not process
 preemption. Completed raw tool reports can remain in the run directory after an
 interruption, but an interrupted collection does not replace the cached baseline.
 Inventory checks and external calls are not one atomic transaction. Operators
-must protect the referenced kubeconfig and executable: their paths and context
-are pinned, their file contents are not snapshotted or authenticated by this path.
+must protect the referenced kubeconfig and executable. Verified account-bound
+kubeconfigs also undergo protected-file and content rechecks; these checks do
+not attest the target cluster's actual RBAC or service identity.
 
-No new setting or dependency is required. Clients of the active survey must now
-send `X-Actor`; direct service callers must supply `actor`. Clients selecting a
+Direct service callers must supply the acting identity and remain subject to
+current-principal checks. HTTP clients use configured verified authentication;
+`X-Actor` applies only in development. Clients selecting a
 non-default target can use the new optional `target_id`. Custom packages must
 register the correct context through inventory because bootstrap currently uses
 the packaged `in-cluster` context.

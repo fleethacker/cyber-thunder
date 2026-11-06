@@ -1,0 +1,218 @@
+[
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[416]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[388]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[400]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[386]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[leaf]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[parent]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[fifo]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[writable-parent]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[replace]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[mutate]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[chmod]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[parent-swap]",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "windows",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_posix_foreign_owner_denied",
+    "reason": "requires native POSIX ownership, modes and descriptor traversal",
+    "passes_on": "linux",
+    "evidence": "linux-fixed.xml",
+    "evidence_sha256": "0bb3ef69fce34fdac29c4f1181351889bf62bbdaac28587f666d0aef5623abf1"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[GR]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[GW]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[SD]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[WD]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[WO]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[parent-write]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[delete-child]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[junction]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[unavailable-api]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[untrusted-owner]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[replace]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[mutate]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[parent-swap]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  },
+  {
+    "skip_on": "linux",
+    "nodeid": "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[dacl]",
+    "reason": "requires native Windows SID/DACL and file sharing",
+    "passes_on": "windows",
+    "evidence": "windows-fixed.xml",
+    "evidence_sha256": "c92774ff31b3991788b9d512c96938b7c29cc1d906c2c5848023dc4fc00391ee"
+  }
+]

@@ -59,12 +59,27 @@ every other role. Human-only actions are removed from workload permissions. Role
 matching policy grants below. Standing approval cannot be enabled in verified mode until verifiable
 policy signing is implemented.
 
+Temporary [risk acceptance](RISK_ACCEPTANCE.md) is a distinct human approver action,
+`risk.accept`. Accepting or revoking it requires fresh authentication and an exact
+subject grant listing both the target and environment. Group grants, wildcards,
+node administration and ordinary `review` authority do not supply this permission.
+An accepted risk remains a scanner failure and holds remediation; it never approves
+a change or combines permissions from a person's other account.
+
+New persisted principal evidence keeps session correlation as an issuer/account-scoped
+`session_fingerprint` (SHA-256), with `session_id` set to null. Raw issuer session identifiers
+stay in the authenticated in-memory principal; the fingerprint never grants access or renews
+a session. Existing audit and historical decision records remain unchanged, including legacy
+session metadata, so apply the node's existing access and retention controls to those records.
+
 ## Protect and assign access.json
 
 Provision `<CT_STATE_DIR>/auth/access.json` through server administration, not a browser upload.
 The file and every parent directory must be protected against untrusted writes, replacement and ACL
-changes. POSIX ownership/write permissions are checked; symlinks and Windows reparse points are
-rejected. The loader does not check Windows effective DACLs: provision and validate that protection
+changes. POSIX ownership/write permissions and native Windows owner/DACL permissions are checked;
+symlinks and Windows reparse points are rejected. Windows checks conservatively reject untrusted
+mutation grants and pin file/ancestor handles; see [WINDOWS_FILE_TRUST](WINDOWS_FILE_TRUST.md).
+Service-account provisioning and operational acceptance must still validate that protection
 on the host. Missing, malformed or nonmatching policy fails closed.
 
 Example for a human with the `analyst` role, one SSH target `host-a` in environment `range`:
@@ -148,7 +163,7 @@ exercise signed approval, logout invalidation of copied request context and pass
 transport tests exercise denied scopes, account substitution and policy changes. These establish
 fixture behavior, not acceptance against a live organization identity service.
 
-Live Keycloak configuration/claim mapping, Windows DACL protection, AD/CAC/PKI integration and target
+Live Keycloak configuration/claim mapping, Windows service-account ACL acceptance, AD/CAC/PKI integration and target
 account provisioning remain deployment work. Gateway reachability/TLS and real provider logout or
 revocation have not been validated by the fixture tests. See [token validation](OIDC_VALIDATION.md),
 [browser protocol details](BROWSER_IDENTITY.md) and [transport security](TRANSPORT_SECURITY.md).

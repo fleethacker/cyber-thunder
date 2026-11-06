@@ -41,6 +41,8 @@ const hooksFor = (...responses) => {
   return { useAsync: () => asyncState(responses[i++]), useInterval() {}, useLocalPref: (_key, value) => React.useState(value) };
 };
 const cards = source('./ProposalCard.tsx', {
+  './ProposalMaintenance': { MaintenanceNotice: empty, MaintenanceOverrideButton: empty },
+  './ApprovalProgress': source('./ApprovalProgress.tsx'),
   '../lib/proposalHistory': helpers, '../lib/findingAssurance': assurance,
   './ApplyTimeline': { ApplyTimeline: empty }, './CitationChips': { CitationChips: empty },
   './ProposalDiff': { DiffButton: () => h(Mantine.Button, {}, 'Diff') },
@@ -155,6 +157,7 @@ test('FindingDrawer keeps evidence and review history readable while explain, pr
     './FindingAssurance': { ReviewBadge: empty },
   });
   const drawer = source('./FindingDrawer.tsx', { '../lib/hooks': hooksFor(finding, []),
+    './FindingReassessment': source('./FindingReassessment.tsx'),
     '../lib/findingAssurance': assurance, '../lib/findingRow': { findingResultLabel: () => 'Failed' },
     './CitationChips': { CitationChips: empty }, './FixPanel': { RiskTagsForFix: empty },
     './ProposalDiff': { DiffButton: empty }, './FindingAssurance': { ConfidenceBadge: empty }, './FindingActions': readAccess,

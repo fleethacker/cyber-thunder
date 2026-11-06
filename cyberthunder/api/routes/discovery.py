@@ -1,8 +1,9 @@
 """Discovery API: scopes, sweeps, candidate assets, accept/ignore, findings and applicability.
 
-Mutating routes need a named human actor (X-Actor); accept is the only way a discovered asset enters
-the inventory. Errors map to: kill switch 423, bad input or machine actor at the edge 400, unknown id 404, refused actor
-in the service 403.
+Configuration/acceptance routes require a human actor. Target-specific vSphere collection also
+permits an authenticated analyst workload with explicit account access. Accept is the only way a
+global discovered asset enters inventory; source snapshots never accept assets. Errors map to kill
+switch 423, bad input 400, unknown id 404, authorization refusal 403 and source publication failure 503.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from cyberthunder.api.util import require_actor
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.discovery.service import DiscoveryService, require_human, service_for
 from cyberthunder.discovery.recipes import ScopeRevisionConflict
+from cyberthunder.discovery.vsphere_runs import VsphereRuns
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
 T = TypeVar("T")
@@ -174,6 +176,40 @@ def post_sweep(body: SweepIn, request: Request, actor: str = Depends(require_act
 @router.get("/runs")
 def get_runs(request: Request):
     return [r.to_dict() for r in _svc(request).runs()]
+
+
+def _vsphere_call(fn: Callable[[], T], *, collecting=False) -> T:
+    # These bounded source routes must not echo storage, inventory or parser errors
+    # through the generic discovery mapper. Only fixed local codes cross this API.
+    try:
+        return fn()
+    except KillSwitchEngaged:
+        raise HTTPException(423, "vsphere:collection_stopped") from None
+    except PermissionError as exc:
+        code = "vsphere:collection_not_authorized" if collecting else "vsphere:history_not_authorized"
+        if collecting and str(exc) in {"vsphere:saved_scope_unavailable", "vsphere:no_saved_scope"}:
+            code = str(exc)
+        raise HTTPException(403, code) from None
+    except KeyError:
+        raise HTTPException(404, "unknown vSphere source or run") from None
+    except Exception:
+        code = "vsphere:publication_failed" if collecting else "vsphere:history_unavailable"
+        raise HTTPException(503, code) from None
+
+
+@router.post("/vsphere/{target_id}/collect")
+def collect_vsphere(target_id: str, request: Request, actor: str = Depends(require_actor)):
+    return _vsphere_call(lambda: VsphereRuns(request.app.state.ctx).collect(target_id, actor), collecting=True)
+
+
+@router.get("/vsphere/{target_id}/runs")
+def vsphere_runs(target_id: str, request: Request, limit: int = Query(default=20, ge=1, le=100)):
+    return _vsphere_call(lambda: VsphereRuns(request.app.state.ctx).runs(target_id, limit=limit))
+
+
+@router.get("/vsphere/{target_id}/runs/{run_id}")
+def vsphere_run(target_id: str, run_id: str, request: Request):
+    return _vsphere_call(lambda: VsphereRuns(request.app.state.ctx).get(target_id, run_id))
 
 
 @router.get("/runs/{run_id}")

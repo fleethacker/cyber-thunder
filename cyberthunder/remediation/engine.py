@@ -46,6 +46,7 @@ import os
 import re
 import threading
 import uuid
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Iterable
@@ -60,6 +61,7 @@ from cyberthunder.findings.lifecycle import ReviewConflict
 from cyberthunder.findings.current import policy_block_reason
 from cyberthunder.inventory.targets import ScopeViolation
 from cyberthunder.remediation import snapshot
+from cyberthunder.remediation.maintenance import MaintenanceService, MaintenanceBlocked
 from cyberthunder.remediation import rollback_guard
 from cyberthunder.remediation.library import FixEntry
 from cyberthunder.remediation.models import ApplyResult, BeforeState, HealthResult, RollbackResult, VerifyResult
@@ -84,6 +86,10 @@ class EngineError(RuntimeError):
 
 class ReviewSuppressed(EngineError):
     """An active review excludes this observation from remediation."""
+
+
+class RemediationHeld(EngineError):
+    """An active operator risk acceptance holds remediation without suppressing risk."""
 
 
 class PolicyEvidenceBlocked(EngineError):
@@ -160,6 +166,8 @@ class RemediationEngine:
     def __init__(self, ctx: "AppContext"):
         self.ctx = ctx
         self._findings: dict[str, Finding] = {}     # findings proposed in this process, by id
+        from cyberthunder.control.separation import source_for
+        self.ctx.gate.separation_source = lambda proposal: source_for(self.ctx, proposal)
 
     # -- lookups -----------------------------------------------------------------------
     def _finding(self, finding_id: str) -> Finding | None:
@@ -241,16 +249,19 @@ class RemediationEngine:
                 f"the cited requirement ({cite}); the proposed library fix needs human approval before it runs.")
 
     # -- proposals ---------------------------------------------------------------------
-    def _review_suppressed(self, finding: Finding, actor: str, action: str) -> bool:
+    def _review_blocked(self, finding: Finding, actor: str, action: str) -> bool:
         from cyberthunder.findings.review import ReviewService
         current = self.ctx.store.get_finding(finding.id) or finding
         review = ReviewService(self.ctx).summary(current)
-        if not review["suppressed"]:
+        if not (review["suppressed"] or review["remediation_held"]):
             return False
         self.ctx.audit.append("finding.review_blocked", actor,
                               {"action": action, "finding_id": finding.id,
-                               "disposition": review["disposition"], "revision": review["revision"]},
+                               "disposition": review["disposition"], "revision": review["revision"],
+                               "remediation_held": review["remediation_held"]},
                               subject=finding.id, outcome="blocked")
+        if action == "apply" and review["remediation_held"]:
+            raise RemediationHeld("Risk acceptance holds remediation; revoke it or wait for expiry or reopened evidence")
         return True
 
     def _guard_policy_evidence(self, proposal: Proposal, finding: Finding, actor: str) -> None:
@@ -264,12 +275,20 @@ class RemediationEngine:
             raise PolicyEvidenceBlocked(reason + "; cancel this proposal and request individual approval")
 
     def propose(self, finding: Finding, *, actor: str = "agent", fix: FixEntry | None = None) -> Proposal | None:
+        from cyberthunder.findings.review import ReviewService
+        with ReviewService(self.ctx).remediation_guard(finding):
+            return self._propose(finding, actor=actor, fix=fix)
+
+    def _propose(self, finding: Finding, *, actor: str, fix: FixEntry | None) -> Proposal | None:
         from cyberthunder.security.resources import check_record
+        from cyberthunder.control.identity import is_machine
+        authorize(self.ctx, "propose", actor=None if is_machine(actor) else actor, target=finding.host)
         check_record(self.ctx, finding, "propose")
-        if self._review_suppressed(finding, actor, "propose"):
+        if self._review_blocked(finding, actor, "propose"):
             return None
         existing = self.proposal_for_finding(finding.id)
         if existing is not None and existing.state.value not in TERMINAL:
+            check_record(self.ctx, existing, "propose")
             return existing
         entry = fix or self._resolve(finding)
         if entry is None:
@@ -412,8 +431,10 @@ class RemediationEngine:
 
     @rollback_guard.serialized
     @operation("apply")
-    def execute(self, proposal_id: str, *, actor: str, simulate_verify_fail: bool = False) -> Proposal:
+    def execute(self, proposal_id: str, *, actor: str, simulate_verify_fail: bool = False,
+                maintenance_override: dict | None = None) -> Proposal:
         from cyberthunder.control.assessment import AssessmentBlocked, guard_approved_assessment
+        maintenance_override = deepcopy(maintenance_override)
         gate = self.ctx.gate
         p = gate.get(proposal_id)
         authorize(self.ctx, "apply", actor=actor, target=p.host)
@@ -424,10 +445,13 @@ class RemediationEngine:
         finding = self._finding(p.finding_id)
         if finding is None:
             raise EngineError(f"finding {p.finding_id} not found in any scan")
-        if self._review_suppressed(finding, actor, "apply"):
+        if self._review_blocked(finding, actor, "apply"):
             raise ReviewSuppressed("The current finding has an active review suppression; reopen its review before applying")
         self._guard_policy_evidence(p, finding, actor)
-        fix = self._fix_for(p, finding)
+        fix = deepcopy(self._fix_for(p, finding))
+        maintenance = MaintenanceService(self.ctx)
+        admission = maintenance.guard(p, actor=actor, override=maintenance_override,
+                                      expected=maintenance.expected_request(p.id))
         adapter = self._adapter(target)
         snap = self.ctx.store.snapshot_dir(p.id)
 
@@ -441,6 +465,8 @@ class RemediationEngine:
             rollback_guard.bind_execution(self.ctx, p, target, fix)
             if rollback_guard.identity(self._target(p, "execute", actor)) != bound_identity:
                 raise rollback_guard.RollbackBlocked("target connection identity changed before connection")
+            maintenance.guard(gate.get(p.id), actor=actor, override=maintenance_override,
+                              expected=admission, boundary="connection", record=False)
             transport = self.ctx.transport_for(target)
             step = "before_state"
             before = adapter.capture_before_state(target, transport, fix, finding, snap)
@@ -450,18 +476,34 @@ class RemediationEngine:
                                                  "copied": len(copied), "dir": str(snap)})
             from cyberthunder.findings.review import ReviewService
             with ReviewService(self.ctx).remediation_guard(finding):
-                if self._review_suppressed(finding, actor, "apply"):
+                maintenance.guard(gate.get(p.id), actor=actor, override=maintenance_override,
+                                  expected=admission, boundary="execution")
+                if self._review_blocked(finding, actor, "apply"):
                     raise ReviewSuppressed("A review suppressed the finding before apply; no fix was executed")
                 self._guard_policy_evidence(p, finding, actor)
                 guard_approved_assessment(self.ctx, p)
                 current_target = self._target(p, "execute", actor)
                 if rollback_guard.identity(current_target) != bound_identity:
                     raise rollback_guard.RollbackBlocked("target connection identity changed during before-state capture")
-                if fix.kind == "runbook":
-                    return self._issue_runbook(p, target, fix)
+                gate.validate_apply(p.id, actor)
                 self.ctx.killswitch.guard(f"remediation.apply:{p.id}", actor)
                 if rollback_guard.identity(self._target(p, "execute", actor)) != bound_identity:
                     raise rollback_guard.RollbackBlocked("target connection identity changed before apply")
+                decision = maintenance.guard(gate.get(p.id), actor=actor, override=maintenance_override,
+                                             expected=admission, boundary="execution", record=False)
+                # Maintenance validation reads protected files. Recheck execution authority
+                # and the actual frozen payload after those reads, then sample time last.
+                gate.validate_apply(p.id, actor)
+                guard_approved_assessment(self.ctx, gate.get(p.id))
+                if rollback_guard.identity(self._target(p, "execute", actor)) != bound_identity:
+                    raise rollback_guard.RollbackBlocked("target connection identity changed at apply boundary")
+                current_fix = self._fix_for(gate.get(p.id), finding)
+                if fix_digest(fix) != fix_digest(current_fix):
+                    raise EngineError("fix changed during before-state capture; request a new proposal")
+                self.ctx.killswitch.guard(f"remediation.apply:{p.id}", actor)
+                maintenance.confirm_time(decision, actor=actor, override=maintenance_override)
+                if fix.kind == "runbook":
+                    return self._issue_runbook(p, target, fix)
                 step = "apply"
                 ar = adapter.apply(target, transport, fix, finding, before)
             snapshot.save_result(snap, "apply", ar)
@@ -500,18 +542,20 @@ class RemediationEngine:
                                             f"{_short(vr.evidence, 200)}")
             self._auto_rollback(p, target, adapter, transport, fix, before, why)
             return gate.get(p.id)
-        except (ReviewSuppressed, PolicyEvidenceBlocked, ReviewConflict, AssessmentBlocked,
-                ScopeViolation, rollback_guard.RollbackBlocked):
+        except (MaintenanceBlocked, ReviewSuppressed, RemediationHeld, PolicyEvidenceBlocked, ReviewConflict, AssessmentBlocked,
+                ScopeViolation, rollback_guard.RollbackBlocked) as exc:
             # Before-state capture is read-only. Do not run a rollback when apply never ran.
             if gate.get(p.id).state is ProposalState.APPLYING:
-                gate.failed(p.id, actor, note="stopped before apply by finding evidence or review")
+                gate.failed(p.id, actor, note=f"stopped before apply: {_short(str(exc))}")
             raise
         except KillSwitchEngaged as e:
             # the guard has already audited the block; stop here and do not touch the host again
             if gate.get(p.id).state in (ProposalState.APPLYING, ProposalState.APPLIED):
                 gate.failed(p.id, "agent", note=f"stopped by kill switch: {e}")
             raise
-        except (IllegalTransition, PermissionError):
+        except (IllegalTransition, PermissionError) as exc:
+            if step not in {"apply", "verify"} and gate.get(p.id).state is ProposalState.APPLYING:
+                gate.failed(p.id, "agent", note=f"stopped before apply: {_short(str(exc))}")
             raise
         except Exception as e:  # noqa: BLE001
             log.exception("execute %s failed", p.id)
@@ -524,7 +568,7 @@ class RemediationEngine:
                                                                   details={"exception": type(e).__name__}))
             if gate.get(p.id).state in (ProposalState.APPLYING, ProposalState.APPLIED):
                 gate.failed(p.id, "agent", note=f"error during {'verify' if applied else 'apply'}: {_short(str(e))}")
-            if before is not None and transport is not None and fix.kind != "runbook":
+            if step in {"apply", "verify"} and before is not None and transport is not None and fix.kind != "runbook":
                 self._auto_rollback(p, target, adapter, transport, fix, before, f"error: {_short(str(e), 120)}")
             else:
                 self._audit_step(p, "error", {"error": _short(str(e)),
@@ -633,6 +677,10 @@ class RemediationEngine:
             gate.rolled_back(proposal_id, actor)             # records the rejection and raises IllegalTransition
         target = self._target(p, "rollback", actor)
         snap = self.ctx.store.snapshot_dir(p.id)
+        if (p.state is ProposalState.FAILED
+                and not any(entry.get("state") == "applied" for entry in p.history)
+                and not isinstance(snapshot.load_result(snap, "apply"), dict)):
+            raise rollback_guard.RollbackBlocked("No apply attempt is recorded; capture-only failures cannot be rolled back.")
         before = snapshot.load_before_state(snap)
         if before is None:
             raise EngineError(f"no before-state captured for {p.id}; roll back by hand from the runbook")

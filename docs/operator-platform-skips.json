@@ -1,0 +1,27 @@
+{
+  "anchor_review": "464e5754d2bf8d2ba5ca339174430913c54640df",
+  "client_implementation": "b3cfa361e57046106cbc733587fc4b65c381f077",
+  "skips": {
+    "win32": {
+      "tests/audit/test_anchor_review.py::test_native_posix_file_protection[fifo]": "requires native POSIX mode and inode protection",
+      "tests/audit/test_anchor_review.py::test_native_posix_file_protection[key_symlink]": "requires native POSIX mode and inode protection",
+      "tests/audit/test_anchor_review.py::test_native_posix_file_protection[lock_symlink]": "requires native POSIX mode and inode protection",
+      "tests/audit/test_anchor_review.py::test_native_posix_file_protection[unsafe_parent]": "requires native POSIX mode and inode protection",
+      "tests/client/test_storage_config.py::test_linux_symlink_and_unsafe_parent": "native Linux symlink and mode checks"
+    },
+    "linux": {
+      "tests/client/test_storage_config.py::test_windows_inherited_public_read_never_receives_token_bytes": "native Windows inherited DACL privacy"
+    }
+  },
+  "receipt_sha256": {
+    "audit-anchor-review/audit-anchor-review-handoff.md": "c88a9a46e8b287c14d6332e74a7bfdedfae2d9de12214847f03e6636fe4403fc",
+    "audit-anchor-review/audit-anchor-review-receipt.json": "87c6571de5154c6c1df2b16c9e05050149bff2a1e92f4c119259bcc64b8d49e4",
+    "audit-anchor-review/audit-anchor-focused-windows.xml": "60a3bddb468744f77977a5ac7cee16736c6621e88ef0541618a47087769e79f8",
+    "audit-anchor-review/audit-anchor-focused-linux.xml": "14648f959cdb13bc04ef134b3bfece07a8ed947acbe213f0df492ecc3511c9bd",
+    "audit-anchor-review/audit-anchor-lock-consumers-windows.xml": "25e16a815dd6318c2d8c1e2cadeef5b9154f75759140c05ba5f0edc461eee847",
+    "audit-anchor-review/audit-anchor-lock-consumers-linux.xml": "2fabc9aeadc3fe2b568b8be5cdff23a78ab13501b195ea80ee8958da0ae0d5a1",
+    "verified-cli/verified-cli-receipt.json": "b1c1bf47b7b10c941776e6df8fdab3164093f55fbf29436f84c096220da21801",
+    "verified-cli/verified-cli-windows.xml": "421f74f477af02fc89df81747766466a0cfeeee6f632b0f50597ffa4190bb0a0",
+    "verified-cli/verified-cli-linux/focused.xml": "c3085e289a8fcd0d40c7b270ee4385bdb659b52cc38ee59f22298d35780d8014"
+  }
+}

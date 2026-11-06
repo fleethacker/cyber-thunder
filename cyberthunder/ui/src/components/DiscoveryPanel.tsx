@@ -16,7 +16,7 @@ import {
 } from '../api/types';
 import { fmtAgo } from '../lib/format';
 import { useAsync, useInterval } from '../lib/hooks';
-import { ConfirmReasonModal } from './ConfirmReasonModal';
+import { PermissionButton, PermissionConfirm, usePermissions } from './PermissionGate';
 import { ErrorBox, Loading, Mono, SeverityBadge } from './common';
 import { useSetupAccess } from './setupAccess';
 import { ScopeEditor } from './ScopeEditor';
@@ -42,6 +42,7 @@ function changeText(a: DiscoveredAsset): string {
 
 // -- accept ------------------------------------------------------------------------------------------
 export function AcceptModal({ asset, onClose, onAccepted }: { asset: DiscoveredAsset | null; onClose: () => void; onAccepted: () => void }) {
+  const permission = usePermissions();
   const [name, setName] = useState('');
   const [type, setType] = useState<string | null>(null);
   const [transport, setTransport] = useState<string | null>(null);
@@ -68,7 +69,7 @@ export function AcceptModal({ asset, onClose, onAccepted }: { asset: DiscoveredA
   if (!asset) return null;
   const ready = !!type && !!transport && !!scope && !!reason.trim() && !!name.trim();
   const accept = async () => {
-    if (!ready || blocked || inFlight.current) return;
+    if (!permission.can('admin') || !ready || blocked || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setError(null);
@@ -118,7 +119,7 @@ export function AcceptModal({ asset, onClose, onAccepted }: { asset: DiscoveredA
         {error && <Alert color="red">{error}</Alert>}
         <Group justify="flex-end">
           <Button variant="default" disabled={busy} onClick={() => { if (!inFlight.current) onClose(); }}>Cancel</Button>
-          <Button disabled={!ready || !!blocked || busy} loading={busy} onClick={() => void accept()}>Accept</Button>
+          <PermissionButton action="admin" disabled={!ready || !!blocked || busy} loading={busy} onClick={() => void accept()}>Accept</PermissionButton>
         </Group>
       </Stack>
     </Modal>
@@ -154,9 +155,9 @@ function AssetRow({ a, onAccept, onIgnore }: { a: DiscoveredAsset; onAccept: () 
         <Table.Td><Group gap={4}>{chips.map((c) => <Badge key={c} variant="outline" color="gray" tt="none" size="sm">{c}</Badge>)}</Group></Table.Td>
         <Table.Td>
           <Group gap={4} wrap="nowrap">
-            {a.status === 'new' && <Button size="compact-sm" onClick={onAccept}>Accept</Button>}
+            {a.status === 'new' && <PermissionButton action="admin" size="compact-sm" onClick={onAccept}>Accept</PermissionButton>}
             {(a.status === 'new' || a.status === 'missing') && (
-              <Button size="compact-sm" variant="light" color="gray" onClick={onIgnore}>Ignore</Button>
+              <PermissionButton action="admin" size="compact-sm" variant="light" color="gray" onClick={onIgnore}>Ignore</PermissionButton>
             )}
           </Group>
         </Table.Td>
@@ -195,6 +196,7 @@ function RunSummary({ run }: { run: DiscoveryRun }) {
 }
 
 export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: () => void }) {
+  const permission = usePermissions();
   const blocked = useSetupAccess();
   const sweepFlight = useRef(false);
   const ignoreFlight = useRef(false);
@@ -235,7 +237,7 @@ export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: ()
   }, 1000, running);
 
   const sweep = async () => {
-    if (blocked || running || sweepFlight.current) return;
+    if (!permission.can('discover') || blocked || running || sweepFlight.current) return;
     sweepFlight.current = true; setStarting(true);
     setSweepError(null);
     try {
@@ -248,7 +250,7 @@ export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: ()
   };
 
   const ignore = async (reason: string) => {
-    if (!ignoreFor || !reason.trim() || blocked || ignoreFlight.current) return;
+    if (!permission.can('admin') || !ignoreFor || !reason.trim() || blocked || ignoreFlight.current) return;
     ignoreFlight.current = true;
     setIgnoreErr(null);
     try {
@@ -287,8 +289,8 @@ export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: ()
               <Badge variant="outline" tt="none" ff="monospace">{s.cidr}{s.allow_public ? ' (public)' : ''}</Badge>
             </Tooltip>
           ))}
-          <Button size="compact-sm" variant="subtle" disabled={!overview.data || !!overview.error || overview.loading}
-            onClick={() => { if (overview.data && !overview.error && !overview.loading) setScopesOpen(true); }}>Edit search ranges</Button>
+          <PermissionButton action="admin" size="compact-sm" variant="subtle" disabled={!overview.data || !!overview.error || overview.loading}
+            onClick={() => { if (permission.can('admin') && overview.data && !overview.error && !overview.loading) setScopesOpen(true); }}>Edit search ranges</PermissionButton>
         </Group>
 
         <Group gap="sm" align="flex-end">
@@ -298,7 +300,7 @@ export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: ()
             <MultiSelect label="Search ranges to sweep" data={scopes.map((s) => s.cidr)} value={subset} onChange={setSubset}
               placeholder="all saved" clearable w={260} />
           )}
-          <Button leftSection={<IconRadar size={16} />} disabled={!!blocked || running || starting} loading={running || starting} onClick={() => void sweep()}>Run sweep</Button>
+          <PermissionButton action="discover" leftSection={<IconRadar size={16} />} disabled={!!blocked || running || starting} loading={running || starting} onClick={() => void sweep()}>Run sweep</PermissionButton>
         </Group>
         {sweepError && <Alert color="red" title="Sweep refused">{sweepError}</Alert>}
         {shownRun && <RunSummary run={shownRun} />}
@@ -330,8 +332,8 @@ export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: ()
                     </Table.Thead>
                     <Table.Tbody>
                       {assets.data.map((a) => (
-                        <AssetRow key={a.id} a={a} onAccept={() => setAcceptFor(a)}
-                          onIgnore={() => { setIgnoreErr(null); setIgnoreFor(a); }} />
+                        <AssetRow key={a.id} a={a} onAccept={() => { if (permission.can('admin')) setAcceptFor(a); }}
+                          onIgnore={() => { if (permission.can('admin')) { setIgnoreErr(null); setIgnoreFor(a); } }} />
                       ))}
                     </Table.Tbody>
                   </Table>
@@ -373,7 +375,7 @@ export function DiscoveryPanel({ onInventoryChanged }: { onInventoryChanged?: ()
       <ScopeEditor opened={scopesOpen} current={scopes} onClose={() => setScopesOpen(false)} onSaved={() => void overview.reload()} />
       <AcceptModal asset={acceptFor} onClose={() => setAcceptFor(null)}
         onAccepted={() => { refreshAll(); onInventoryChanged?.(); }} />
-      <ConfirmReasonModal
+      <PermissionConfirm action="admin"
         opened={!!ignoreFor}
         title={`Ignore ${ignoreFor?.address ?? ignoreFor?.id ?? ''}`}
         body={<Text size="sm">Ignored devices stay ignored on later sweeps and drop out of discovery findings.</Text>}

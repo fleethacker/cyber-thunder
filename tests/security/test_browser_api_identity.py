@@ -1,6 +1,8 @@
 """Real signed browser sessions at the application API boundary."""
 from contextvars import copy_context
+from dataclasses import replace
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,8 +11,10 @@ from cyberthunder.api.app import create_app
 from cyberthunder.config import Settings
 from cyberthunder.context import AppContext
 from cyberthunder.control.access import AccessPolicy
-from cyberthunder.control.principal import current_principal, require_current
+from cyberthunder.control.principal import Principal, current_principal, principal_scope, require_current
+from cyberthunder.findings.schema import Finding
 from cyberthunder.inventory.targets import Target
+from cyberthunder.remediation.library import FixEntry
 from cyberthunder.security.oidc import OIDCValidator
 from tests.security.test_sessions import crypto, provider, configured, ORIGIN, ISSUER, advance
 
@@ -22,21 +26,33 @@ def browser_api(state_dir, configured, provider, monkeypatch):
                               llm_backend="template", auto_propose=False, explain_precompute=False))
     ctx.inventory.add(Target("alpha", "Alpha", "linux", transport="simulated", simulated=True))
     ctx.inventory.save()
-    item = ctx.gate.propose(actor="fixture", finding_id="finding", host="alpha", title="Change setting",
-                            fix_ref="fixture:setting", fix_preview="reviewed setting", rollback_plan="restore",
-                            risk="isolated fixture")
+    finding = Finding(host="alpha", source="fixture", rule_id="fixture-rule", title="Change setting",
+                      severity="medium", status="open", asset_type="linux")
+    ctx.store.save_scan_run({"id": "browser-fixture", "targets": ["alpha"], "status": "done"})
+    ctx.store.save_findings("browser-fixture", [finding])
+    ctx.library.add(FixEntry("fixture:setting", "Change setting", "linux", [finding.rule_id],
+                             payload="reviewed setting"))
     ctx.settings.auth_mode = "oidc"
-    ctx.session_config = config
+    ctx.settings.step_up_acr_values = ("urn:ct:test:strong",)
+    ctx.session_config = replace(config, step_up_acr_values=ctx.settings.step_up_acr_values)
     path = state_dir / "auth" / "access.json"
     path.parent.mkdir(mode=0o700)
     path.write_text(json.dumps({"version": 1, "entries": [{"issuer": ISSUER, "subject": "operator-123",
         "node_actions": [], "grants": [{"target_ids": ["alpha"],
-        "actions": ["read", "approve", "discover"]}]}]}))
+        "actions": ["read", "approve", "discover"]}]},
+        {"issuer": ISSUER, "subject": "fixture-proposer", "node_actions": [],
+         "grants": [{"target_ids": ["alpha"], "actions": ["read", "propose"]}]}]}))
     path.chmod(0o600)
     ctx.access = AccessPolicy(path)
     ctx.gate.authorizer = ctx.authorize
+    ctx.gate.separation_policy = ctx.access.approval_identity_source
     ctx.killswitch.authorizer = ctx.authorize
+    proposer = Principal(ISSUER, "fixture-proposer", "Fixture proposer", kind="human", roles=("analyst",),
+                         expires_at=time.time() + 300)
+    with principal_scope(proposer):
+        item = ctx.engine.propose(ctx.store.get_finding(finding.id), actor=proposer.actor)
     provider.access_changes.update(ct_kind="human", ct_roles=["analyst", "approver"])
+    provider.id_changes.update(auth_time=int(time.time()), acr="urn:ct:test:strong", amr=["fixture"])
     monkeypatch.setattr("cyberthunder.api.auth.make_validator", lambda *_: OIDCValidator(access))
     app = create_app(ctx)
     with TestClient(app, base_url=ORIGIN) as client:

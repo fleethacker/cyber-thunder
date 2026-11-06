@@ -44,7 +44,8 @@ def test_response_contract_roundtrip_and_reversal(review_api):
     initial = client.get(path)
     assert initial.status_code == 200
     assert set(initial.json()) == {"disposition", "active", "suppressed", "revision", "evidence_fingerprint",
-                                   "current", "history_count", "reopened_reason", "identity_verified", "history"}
+                                   "current", "history_count", "reopened_reason", "identity_verified", "history",
+                                   "remediation_held", "risk_acceptance_status", "risk_acceptance"}
     assert initial.json()["current"] is None
     original = ctx.store.load_findings("scan-1")[0].to_dict()
     saved = client.put(path, json=payload(client, path), headers=ACTOR)

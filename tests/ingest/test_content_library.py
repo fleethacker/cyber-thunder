@@ -113,8 +113,18 @@ def test_legacy_import_is_visible_with_origin(content, bench_pair):
 
 
 def test_product_status_is_independent_of_subscriptions(content):
+    import hashlib
+    from cyberthunder.ingest.content.fetch import entry_from_item
+    directory = content.store.root / "fixture-inputs"
+    directory.mkdir(parents=True, exist_ok=True)
     for name, kind in ((STIG, "manual_stig"), (SCAP, "scap_benchmark")):
-        content.store.put({"filename": name, "product_key": "RHEL_9", "kind": kind, "version": [2, 10]})
+        # Keep the catalog fixture's version claim consistent with its synthetic bytes.
+        from tests.ingest.test_content_uploads import benchmark, datastream
+        data = benchmark(bid="RHEL_9_STIG", release="10") if kind == "manual_stig" else datastream(bid="RHEL_9_STIG", release="10")
+        path = directory / name.replace(".zip", ".xml")
+        path.write_bytes(data)
+        entry = entry_from_item({"filename": path.name, "url": "", "kind": kind, "product_key": "RHEL_9", "version": [2, 10]})
+        content._accept(path, entry, source="imported", actor="ITC Rivera", sha256=hashlib.sha256(data).hexdigest(), size=len(data), etag=None)
     products = {r["product_key"]: r for r in content.library()["products"]}
     assert products["RHEL_9"]["status"] == "current"
     assert products["RHEL_9"]["selected"] is False

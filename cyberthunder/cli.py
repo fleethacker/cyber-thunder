@@ -28,6 +28,7 @@ CLI_MODULES = (
     "cyberthunder.remediation.cli",
     "cyberthunder.explain.cli",
     "cyberthunder.ingest.cli",
+    "cyberthunder.ingest.scap_cli",
     "cyberthunder.scap.cli",
     "cyberthunder.report.cli",
     "cyberthunder.api.cli",
@@ -35,6 +36,8 @@ CLI_MODULES = (
     "cyberthunder.discovery.cli",
     "cyberthunder.state.cli",
     "cyberthunder.vulnerability_cli",
+    "cyberthunder.security.node_hardening_cli",
+    "cyberthunder.client.cli",
 )
 
 
@@ -186,7 +189,37 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    a = build_parser().parse_args(argv)
+    parser = build_parser()
+    from cyberthunder.client.errors import ClientError
+    from cyberthunder.client.cli import argument_error, cmd_client
+    raw = sys.argv[1:] if argv is None else argv
+    original_error = parser.error
+    # A malformed global option can fail before argparse selects the remote
+    # subparser. Sanitize that error as well; handler selection and guards below
+    # still depend exclusively on the parsed command.
+    if any(arg in {"auth", "api"} for arg in raw):
+        parser.error = argument_error
+    try:
+        a, extra = parser.parse_known_args(raw)
+    except ClientError as error:
+        print(json.dumps(error.public()))
+        return error.outcome
+    finally:
+        parser.error = original_error
+    if a.fn is cmd_client:
+        if extra:
+            print(json.dumps({"error": "invalid_client_arguments", "source": "client"}))
+            return 2
+        if any(arg.startswith("--") and "--actor".startswith(arg.split("=", 1)[0]) for arg in raw):
+            print(json.dumps({"error": "typed_actor_not_supported", "source": "client"}))
+            return 2
+        return cmd_client(a)
+    if extra:
+        parser.error("unrecognized arguments: " + " ".join(extra))
+    from cyberthunder.security.node_hardening_cli import cmd_node_hardening
+    if a.fn is cmd_node_hardening:
+        # Local OS metadata only: no identity settings, AppContext or state writes.
+        return a.fn(a)
     settings = Settings.from_env(state_dir=a.state_dir)
     if settings.auth_mode != "dev" or settings.security_mode == "fleet":
         # Local emergency stop remains available when the identity service is unreachable.

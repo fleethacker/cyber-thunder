@@ -35,7 +35,7 @@ def test_background_sweep_copies_request_context_for_authorization_and_execution
 
     monkeypatch.setattr(ctx.audit, "append", audit)
 
-    def collect(run, scopes, actor):
+    def collect(run, scopes, actor, *, vsphere_access=None):
         entered.set()
         assert release.wait(10)
         svc._authorize_discovery(actor)

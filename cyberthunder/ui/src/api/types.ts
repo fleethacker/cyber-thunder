@@ -21,7 +21,7 @@ export interface FindingConfidence {
   observed_at: string | null;
   evidence: Record<string, unknown>;
 }
-export type ReviewDisposition = 'unreviewed' | 'confirmed' | 'false_positive' | 'not_applicable' | 'needs_investigation';
+export type ReviewDisposition = 'unreviewed' | 'confirmed' | 'false_positive' | 'not_applicable' | 'needs_investigation' | 'risk_accepted' | 'risk_revoked';
 // Public attribution fields only. Never render a full principal or session object.
 export interface RecordedPrincipalEvidence {
   iss: string;
@@ -49,6 +49,9 @@ export interface FindingReview {
   disposition: ReviewDisposition;
   active: boolean;
   suppressed: boolean;
+  remediation_held?: boolean;
+  risk_acceptance_status?: 'none' | 'active' | 'expired' | 'reopened' | 'revoked';
+  risk_acceptance?: FindingReviewEvent | null;
   revision: number;
   evidence_fingerprint: string;
   current: FindingReviewEvent | null;
@@ -65,6 +68,8 @@ export interface FindingReviewInput {
   expected_revision: number;
   evidence_fingerprint: string;
 }
+export type RiskRevocationInput = Pick<FindingReviewInput, 'reason' | 'expected_revision' | 'evidence_fingerprint'>;
+export type RiskAcceptanceInput = RiskRevocationInput & { supporting_evidence: string; expires_at: string };
 
 export interface Explanation {
   finding_id: string;
@@ -107,8 +112,25 @@ export interface FixEntry {
   risk_tags: string[];
 }
 
+export interface MaintenanceOverride {
+  binding: string;
+  expires_at: string;
+  reason: string;
+}
+
+export interface MaintenanceStatus {
+  status: 'unconfigured' | 'not_applicable' | 'invalid' | 'open' | 'held';
+  allowed: boolean;
+  reason: string;
+  checked_at: string | null;
+  current_window: { start: string; end: string } | null;
+  next_eligible_at: string | null;
+  override: Omit<MaintenanceOverride, 'reason'> | null;
+}
+
 /** POST /proposals/{id}/plan: library metadata only; no target connection or execution. */
 export interface ProposalPlan {
+  maintenance?: MaintenanceStatus;
   version: 1;
   mode: 'static';
   generated_at: string;
@@ -147,9 +169,22 @@ export interface Finding {
   asset_type: string | null;
   fix_ref: string | null;
   scan_id: string | null;
+  catalog_rule_metadata?: unknown;
+}
+
+/** Read-only history decoration; never an observation, confidence grade or review decision. */
+export interface FindingReassessment {
+  version: 1;
+  status: 'not_reassessed' | 'no_known_gap' | 'unknown';
+  reason: string;
+  explanation: string;
+  observation: { observed_at: string | null; source: string | null; scan_id: string | null };
+  latest_attempt: { scan_id: string; started_at: string; finished_at: string | null; target_status: string | null } | null;
+  view: 'current' | 'scan';
 }
 
 export interface FindingPlus extends Finding {
+  reassessment?: FindingReassessment | null;
   scanner_status?: FindingStatus;
   confidence?: FindingConfidence | null;
   review?: FindingReview | null;
@@ -187,9 +222,9 @@ export interface FindingsPage {
 }
 
 export type FindingCategory = 'stig' | 'cve' | 'hunt' | 'other';
-export type FindingFacet = 'host' | 'asset_type' | 'source' | 'status' | 'severity' | 'category' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review';
+export type FindingFacet = 'host' | 'asset_type' | 'source' | 'status' | 'severity' | 'category' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review' | 'reassessment';
 export interface FindingFacetOption { value: string; label: string; count: number }
-export type FindingSort = 'default' | 'severity' | 'host' | 'asset_type' | 'category' | 'title' | 'rule_id' | 'rule_version' | 'source' | 'collected_at' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review';
+export type FindingSort = 'default' | 'severity' | 'host' | 'asset_type' | 'category' | 'title' | 'rule_id' | 'rule_version' | 'source' | 'collected_at' | 'observed_at' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review';
 export type SortDirection = 'asc' | 'desc';
 export type FindingsQuery = Partial<Record<FindingFacet | 'scan_id' | 'q', string>> & {
   sort_by?: FindingSort; sort_dir?: SortDirection; limit?: number; offset?: number;
@@ -212,6 +247,29 @@ export interface HistoryEntry {
 
 export interface TargetBrief { id: string; name: string; asset_type: string | null; simulated: boolean; known?: boolean }
 
+export interface ApprovalAssessment {
+  status: 'reviewed' | 'not_assessed'; id: string | null; note: string;
+  risk_level?: string; has_unknowns?: boolean; model_used?: boolean; valid_until?: string;
+  evidence_sha256?: string; fix_sha256?: string; target_binding_sha256?: string;
+}
+export interface ProposalApproval {
+  id: string; actor: string; principal: RecordedPrincipalEvidence; approved_at: string; note: string | null;
+  requirements_sha256: string; payload_sha256: string; assessment: ApprovalAssessment; assessment_sha256: string;
+  person_association?: PersonAssociation;
+}
+export interface PersonIdentityBasis {
+  mode: 'person'; policy_version: 2; version: 1; namespace: string; revision: number; policy_sha256: string;
+}
+export interface PersonAssociation {
+  issuer: string; subject: string; person_id: string; source: PersonIdentityBasis;
+}
+export interface ApprovalRequirements {
+  version: number; ruleset: string; mode: 'verified' | 'unverified_dev'; required_approvals: number;
+  payload_sha256: string; source: { severity: Severity; finding_id: string; finding_sha256: string; fix_sha256: string };
+  identity_basis?: PersonIdentityBasis;
+  proposer_association?: PersonAssociation;
+}
+
 export interface Proposal {
   id: string;
   finding_id: string;
@@ -230,8 +288,12 @@ export interface Proposal {
   decision_note: string | null;
   before_state_ref: string | null;
   history: HistoryEntry[];
-  assessment?: { status: 'reviewed' | 'not_assessed'; id: string | null; note: string;
-    risk_level?: string; has_unknowns?: boolean; model_used?: boolean; valid_until?: string } | null;
+  assessment?: ApprovalAssessment | null;
+  proposed_by?: string | null;
+  proposed_principal?: RecordedPrincipalEvidence | null;
+  required_approvals?: number | null;
+  approval_requirements?: ApprovalRequirements | null;
+  approvals?: ProposalApproval[];
 }
 
 export interface ImpactEvidence {
@@ -257,6 +319,7 @@ export interface ImpactReceipt {
 }
 
 export interface ProposalPlus extends Proposal {
+  maintenance?: MaintenanceStatus;
   fix: FixEntry | null;
   finding: FindingPlus | null;
   policy: PolicyDecision | null;
@@ -301,13 +364,15 @@ export interface ProposalDiff {
   files: DiffFile[];
 }
 
-export type BulkItem = { id: string; state: ProposalState } | { id: string; error: string };
+export type BulkItem = { id: string; state: ProposalState } | { id: string; error: string; status?: number;
+  code?: string; step_up?: { reason: string; max_age: number; acr_values: string[] } };
 export interface BulkResult { results: BulkItem[] }
 
 export interface Target {
   id: string;
   name: string;
   environment?: string;
+  authorization_id?: string;
   asset_type: AssetType;
   transport: string;
   address: string | null;
@@ -583,6 +648,28 @@ export interface DiscoveryOverview {
   counts: Partial<Record<DiscoveryStatus, number>>;
 }
 
+export interface VsphereRunSummary {
+  version: 1;
+  id: string;
+  source: 'vsphere';
+  target_id: string;
+  authorization_scope: { version: 1; target_id: string; environment: string; authorization_id: string };
+  requested_by: string;
+  requested_principal: null | {
+    kind: 'human' | 'workload' | 'dev'; iss: string; sub: string; name: string;
+    roles: string[]; via: 'oidc' | 'mesh' | 'dev'; verified: boolean;
+  };
+  started_at: string;
+  finished_at: string | null;
+  status: 'running' | 'finished' | 'failed' | 'stopped';
+  collection_started: boolean;
+  complete: boolean;
+  observation_count: number;
+  error: string | null;
+}
+
+export interface VsphereRun extends VsphereRunSummary { observations: DiscoveredAsset[] }
+
 export interface OpenPort { port: number; proto: string; service: string; product: string; version: string; banner: string }
 
 export interface DiscoveryChange { kind: string; detail?: string; [k: string]: unknown }
@@ -700,7 +787,32 @@ export interface PullJob {
   finished_at: string | null;
 }
 
+export interface ContentAuthenticity {
+  status: string;
+  operator_attested?: boolean;
+  disa_signature?: boolean;
+  signer?: string;
+  key_sha256?: string;
+  scope?: string;
+  override_by?: string;
+  override_reason?: string;
+}
+
+export interface PublicationIntent {
+  mode: 'legacy_baseline' | 'downgrade'; expected_generation: string; review_sha256: string;
+  candidate_sha256: string; request_id: string; reason: string;
+}
+export interface PublicationReview {
+  code: 'content_publication_review'; mode: PublicationIntent['mode']; expected_generation: string;
+  review_sha256: string; candidate_sha256: string; candidate_bytes: number;
+  candidate: { id: string; kind: string; scheme: string; release: number[] | null }[];
+  current: { id: string; release: number[] | null; sha256: string | null; floor: number[] | null }[];
+}
+
 export interface HeldFile {
+  generation?: string;
+  active?: boolean;
+  commit_status?: string;
   filename: string;
   product_key: string | null;
   kind: ContentKind;
@@ -712,6 +824,7 @@ export interface HeldFile {
   fetched_at: string | null;
   fetched_by: string | null;
   source: 'pulled' | 'imported' | 'uploaded' | 'bundled';
+  authenticity?: ContentAuthenticity;
   benchmark_id?: string | null;
   benchmark_release?: string | null;
   ingest: {
@@ -723,6 +836,7 @@ export interface HeldFile {
 }
 
 export interface HeldContent {
+  generation?: string;
   files: HeldFile[];
   products: { product_key: string; files: HeldFile[] }[];
   scap: { product_key: string | null; filename: string; datastream_path: string }[];
@@ -731,7 +845,11 @@ export interface HeldContent {
 }
 
 export interface ContentManifest {
+  download_text?: string;
+  authenticity?: ContentAuthenticity;
   generated_at: string;
+  generated_by?: string;
+  index_source?: string;
   node: string | null;
   items: { filename: string; url: string; product_key: string | null; kind: string; version: number[] | null; expected_bytes?: number; expected_etag?: string }[];
   path: string;
@@ -739,6 +857,9 @@ export interface ContentManifest {
 }
 
 export interface ImportDirResult {
+  commit_status?: 'committed' | 'committed_with_bookkeeping_pending';
+  status?: 'partial';
+  authenticity?: ContentAuthenticity;
   imported: HeldFile[];
   refused: { filename: string; reason: string }[];
   skipped: { filename: string; reason: string }[];
@@ -775,6 +896,7 @@ export interface LibraryProduct {
 }
 
 export interface LibraryCatalog {
+  active?: boolean;
   benchmark_id: string;
   title: string;
   release: string;

@@ -119,7 +119,8 @@ def test_static_contract_and_only_one_redacted_audit(ctx, monkeypatch, approved,
     forbid_side_effects(monkeypatch, ctx)
     plan = ctx.engine.plan(p.id, actor=f" {ACTOR} ")
     assert set(plan) == {"version", "mode", "generated_at", "proposal_id", "proposal_state", "target",
-                         "fix", "fix_sha256", "approved_fix_sha256", "checks", "limitations"}
+                         "fix", "fix_sha256", "approved_fix_sha256", "checks", "limitations", "maintenance"}
+    assert plan["maintenance"]["status"] == "unconfigured" and plan["maintenance"]["allowed"]
     assert plan["version"] == 1 and plan["mode"] == "static"
     assert datetime.fromisoformat(plan["generated_at"]).utcoffset() == timedelta(0)
     assert plan["proposal_id"] == p.id and plan["proposal_state"] == ("approved" if approved else "proposed")
@@ -127,14 +128,14 @@ def test_static_contract_and_only_one_redacted_audit(ctx, monkeypatch, approved,
     assert plan["fix"] == fix.to_dict()
     assert plan["fix_sha256"] == plan["approved_fix_sha256"] == fix_digest(fix)
     assert statuses(plan) == {"scope": "pass", "approval": "pass" if approved else "blocked",
-                              "fix_binding": "pass", "current_finding": "pass", "suppression": "pass",
-                              "policy_evidence": "unknown"}
+                              "fix_binding": "pass", "current_finding": "pass", "suppression": "pass", "remediation_held": "pass",
+                              "policy_evidence": "unknown", "maintenance": "pass"}
     assert all(set(c) == {"code", "status", "detail"} and c["detail"] for c in plan["checks"])
     text = json.dumps(plan)
     for secret in ("192.0.2.37", "private-user", "private-key", "private-option", "credential_ref", '"options"'):
         assert secret not in text
     limitations = " ".join(plan["limitations"])
-    for phrase in ("Static metadata", "access", "applicability", "lockout safety", "NOT an exhaustive", "Maintenance windows"):
+    for phrase in ("Static metadata", "access", "applicability", "lockout safety", "NOT an exhaustive", "Maintenance eligibility"):
         assert phrase in limitations
     records = list(ctx.audit.records())[seq:]
     assert len(records) == 1

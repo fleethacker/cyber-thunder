@@ -1,0 +1,152 @@
+{
+  "reviewed_base": "2c9d755903446ee2ef6edcccf34f9bf94b7e84ff",
+  "source_manifest_sha256": "399b3d859a064f1a4ad91eda148a29cebea0719bc448674d44f15eeed7a0d3b0",
+  "manifest_file_count": 613,
+  "source_files": {
+    "cyberthunder/cli.py": "c7a338047e54c2b5fcbce14348ab08412817ffc6c1b13c011f9fb41c45affccc",
+    "cyberthunder/security/file_trust.py": "ecfbee6aae028aa2e933f2e2d4bb4936842981acad0515b777543e4fed535842",
+    "cyberthunder/security/node_hardening.py": "0df8ab6ba23525b840ac530f7d0a7ce9d494ac3ed5840eddfa474bb90060bf46",
+    "cyberthunder/security/node_hardening_cli.py": "73bc6573eccb280dcbf07e7e777f8ddf412d06efa280b21b5313ba26ba083a36",
+    "tests/conftest.py": "98486d66f558b682179b4a826a0858b7d80c089e9e2db82102829f120fdae8a0",
+    "tests/security/test_node_hardening.py": "ec4eb719f2c3de6865f44e0c009a11b90612745e4ea5ac1c1f1eef95696d8e5c",
+    "tests/security/test_node_hardening_review.py": "5e41409fea6278a7af09b2cdee89d972ed529442c8793b7cc5f71fd82226b1d9",
+    "tests/windows_acl.py": "0f9e64348479b6cc1dd88960157d27a37dfb8e10ce0e0d25cad188e3def59685"
+  },
+  "platform": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+  "python": "3.14.4",
+  "pytest_args": [
+    "-o",
+    "addopts=",
+    "-q",
+    "-ra",
+    "tests/security/test_node_hardening.py",
+    "tests/security/test_node_hardening_review.py",
+    "tests/security/test_windows_file_trust.py",
+    "tests/security/test_windows_file_trust_review.py",
+    "tests/security/test_identity_boundary.py::test_local_cli_cannot_bypass_verified_mode"
+  ],
+  "full_run_counts": {
+    "passed": 59,
+    "failed": 0,
+    "skipped": 72
+  },
+  "elapsed_seconds": 3.094,
+  "assessment_counts": {
+    "passed": 58,
+    "failed": 0,
+    "skipped": 9
+  },
+  "assessment_collected_ids": [
+    "tests/security/test_node_hardening.py::test_existing_backend_assessed_without_content_or_database_access[json]",
+    "tests/security/test_node_hardening.py::test_existing_backend_assessed_without_content_or_database_access[sqlite]",
+    "tests/security/test_node_hardening.py::test_missing_root_does_not_create_any_state",
+    "tests/security/test_node_hardening.py::test_ambiguous_or_unbounded_root_is_not_normalized_into_a_pass[relative/state]",
+    "tests/security/test_node_hardening.py::test_ambiguous_or_unbounded_root_is_not_normalized_into_a_pass[../state]",
+    "tests/security/test_node_hardening.py::test_ambiguous_or_unbounded_root_is_not_normalized_into_a_pass[/]",
+    "tests/security/test_node_hardening.py::test_ambiguous_or_unbounded_root_is_not_normalized_into_a_pass[/tmp/../secret]",
+    "tests/security/test_node_hardening.py::test_ambiguous_or_unbounded_root_is_not_normalized_into_a_pass[path4]",
+    "tests/security/test_node_hardening.py::test_bounded_tree_reports_incomplete",
+    "tests/security/test_node_hardening.py::test_depth_and_time_bounds_are_not_success",
+    "tests/security/test_node_hardening.py::test_hardlinks_are_not_followed_as_private_state",
+    "tests/security/test_node_hardening.py::test_sidecars_audit_and_keys_with_foreign_reads_prevent_whole_state_pass[state.db-wal-sqlite_wal]",
+    "tests/security/test_node_hardening.py::test_sidecars_audit_and_keys_with_foreign_reads_prevent_whole_state_pass[state.db-shm-sqlite_shared_memory]",
+    "tests/security/test_node_hardening.py::test_sidecars_audit_and_keys_with_foreign_reads_prevent_whole_state_pass[audit.jsonl-audit]",
+    "tests/security/test_node_hardening.py::test_sidecars_audit_and_keys_with_foreign_reads_prevent_whole_state_pass[keys/credential-keys_and_auth]",
+    "tests/security/test_node_hardening.py::test_live_sqlite_wal_metadata_assessed_without_connecting[json]",
+    "tests/security/test_node_hardening.py::test_live_sqlite_wal_metadata_assessed_without_connecting[sqlite]",
+    "tests/security/test_node_hardening.py::test_cli_is_metadata_only_even_when_identity_configuration_is_unavailable[dev]",
+    "tests/security/test_node_hardening.py::test_cli_is_metadata_only_even_when_identity_configuration_is_unavailable[oidc]",
+    "tests/security/test_node_hardening.py::test_cli_is_metadata_only_even_when_identity_configuration_is_unavailable[mesh]",
+    "tests/security/test_node_hardening.py::test_cli_failure_exit_and_no_force_or_repairs",
+    "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[symlink]",
+    "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[fifo]",
+    "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[foreign_mode]",
+    "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[parent_mode]",
+    "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[owner]",
+    "tests/security/test_node_hardening.py::test_linux_acl_unknown_and_midwalk_change_are_not_silently_passed",
+    "tests/security/test_node_hardening.py::test_linux_parent_symlink_and_unavailable_permission_metadata",
+    "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;;GR;;;S-1-1-0)]",
+    "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;OICIIO;GR;;;S-1-1-0)]",
+    "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;;GW;;;S-1-1-0)]",
+    "tests/security/test_node_hardening.py::test_windows_protected_file_does_not_certify_the_state_directory",
+    "tests/security/test_node_hardening.py::test_windows_shared_validator_failure_and_junction_are_unknown_or_unsafe",
+    "tests/security/test_node_hardening_review.py::test_final_native_metadata_overrun_is_incomplete",
+    "tests/security/test_node_hardening_review.py::test_cli_relative_state_uses_cwd_without_resolving_links[default]",
+    "tests/security/test_node_hardening_review.py::test_cli_relative_state_uses_cwd_without_resolving_links[argument]",
+    "tests/security/test_node_hardening_review.py::test_cli_relative_state_uses_cwd_without_resolving_links[environment]",
+    "tests/security/test_node_hardening_review.py::test_cli_does_not_erase_parent_components_or_empty_paths[state/../state]",
+    "tests/security/test_node_hardening_review.py::test_cli_does_not_erase_parent_components_or_empty_paths[../state]",
+    "tests/security/test_node_hardening_review.py::test_cli_does_not_erase_parent_components_or_empty_paths[]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command0-oidc-range]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command0-mesh-range]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command0-dev-fleet]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command1-oidc-range]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command1-mesh-range]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command1-dev-fleet]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command2-oidc-range]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command2-mesh-range]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command2-dev-fleet]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command3-oidc-range]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command3-mesh-range]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command3-dev-fleet]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command4-oidc-range]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command4-mesh-range]",
+    "tests/security/test_node_hardening_review.py::test_assessment_exception_does_not_authorize_other_cli_commands[command4-dev-fleet]",
+    "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[depth]",
+    "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[entries]",
+    "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[swap]",
+    "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[rename]",
+    "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[metadata]",
+    "tests/security/test_node_hardening_review.py::test_linux_different_device_is_not_enumerated",
+    "tests/security/test_node_hardening_review.py::test_windows_unknown_inherit_only_rights_are_not_protected",
+    "tests/security/test_node_hardening_review.py::test_windows_midwalk_acl_change_is_not_protected_and_closes_handles",
+    "tests/security/test_node_hardening_review.py::test_cli_metadata_error_does_not_export_secret_paths_or_contents[False]",
+    "tests/security/test_node_hardening_review.py::test_cli_metadata_error_does_not_export_secret_paths_or_contents[True]",
+    "tests/security/test_node_hardening_review.py::test_windows_cli_does_not_expand_ambiguous_drive_paths[C:state]",
+    "tests/security/test_node_hardening_review.py::test_windows_cli_does_not_expand_ambiguous_drive_paths[\\\\state]"
+  ],
+  "assessment_skips": [
+    {
+      "nodeid": "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;;GR;;;S-1-1-0)]",
+      "reason": "native Windows DACL/handle checks"
+    },
+    {
+      "nodeid": "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;OICIIO;GR;;;S-1-1-0)]",
+      "reason": "native Windows DACL/handle checks"
+    },
+    {
+      "nodeid": "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;;GW;;;S-1-1-0)]",
+      "reason": "native Windows DACL/handle checks"
+    },
+    {
+      "nodeid": "tests/security/test_node_hardening.py::test_windows_protected_file_does_not_certify_the_state_directory",
+      "reason": "native Windows selected-file versus state protection"
+    },
+    {
+      "nodeid": "tests/security/test_node_hardening.py::test_windows_shared_validator_failure_and_junction_are_unknown_or_unsafe",
+      "reason": "native Windows DACL/handle checks"
+    },
+    {
+      "nodeid": "tests/security/test_node_hardening_review.py::test_windows_unknown_inherit_only_rights_are_not_protected",
+      "reason": "native Windows inherited DACL masks"
+    },
+    {
+      "nodeid": "tests/security/test_node_hardening_review.py::test_windows_midwalk_acl_change_is_not_protected_and_closes_handles",
+      "reason": "native Windows SID, held handles and DACL revocation"
+    },
+    {
+      "nodeid": "tests/security/test_node_hardening_review.py::test_windows_cli_does_not_expand_ambiguous_drive_paths[C:state]",
+      "reason": "native Windows drive-relative path syntax"
+    },
+    {
+      "nodeid": "tests/security/test_node_hardening_review.py::test_windows_cli_does_not_expand_ambiguous_drive_paths[\\\\state]",
+      "reason": "native Windows drive-relative path syntax"
+    }
+  ],
+  "limits": [
+    "Fixture-only acceptance; no deployment authorization or live service testing.",
+    "Cooperative time budget cannot interrupt blocked native calls.",
+    "Cross-filesystem case injects the device ID; native descriptors and enumeration are real.",
+    "Linux source copy and fixtures use native Linux filesystems, not the Windows mount."
+  ]
+}

@@ -21,7 +21,7 @@ LIMITATIONS = (
     "Static metadata only; this preview does not authorize execution or prove safety.",
     "Current host contents, access, applicability and lockout safety have not been tested.",
     "before_state files are declared capture paths, NOT an exhaustive list of touched files.",
-    "Maintenance windows are not enforced by this change.",
+    "Maintenance eligibility is checked again at execution; this preview does not reserve a window.",
     "Checks describe stored state at preview time; execution must enforce its own current guards.",
 )
 
@@ -100,10 +100,14 @@ def static_plan(engine: RemediationEngine, proposal_id: str, *, actor: str) -> d
               if current.is_open else "Current stored finding is not open.")
     if usable:
         review = ReviewService(ctx).summary(current)
+        check("remediation_held", "blocked" if review["remediation_held"] else "pass",
+              "Operator risk acceptance holds remediation; the scanner risk remains open." if review["remediation_held"] else
+              "No active operator risk acceptance holds remediation.")
         check("suppression", "blocked" if review["suppressed"] else "pass",
               "Current finding has an active review suppression." if review["suppressed"] else
               "Current finding has no active review suppression.")
     else:
+        check("remediation_held", "unknown", "Risk acceptance cannot be assessed without a matching current finding.")
         check("suppression", "unknown", "Active suppression cannot be assessed without a matching current finding.")
 
     if (proposal.decided_by or "").startswith("policy:"):
@@ -116,6 +120,9 @@ def static_plan(engine: RemediationEngine, proposal_id: str, *, actor: str) -> d
     else:
         check("policy_evidence", "unknown", "Not assessed: this proposal has no standing-policy approval.")
 
+    from cyberthunder.remediation.maintenance import MaintenanceService
+    maintenance = MaintenanceService(ctx).summary(proposal)
+    check("maintenance", "pass" if maintenance["allowed"] else "blocked", maintenance["reason"])
     result = {
         "version": 1, "mode": "static", "generated_at": utcnow(),
         "proposal_id": proposal.id, "proposal_state": proposal.state.value,
@@ -124,7 +131,7 @@ def static_plan(engine: RemediationEngine, proposal_id: str, *, actor: str) -> d
                    "simulated": target.simulated if target else None,
                    "in_scope": target.in_scope if target else None},
         "fix": entry.to_dict(), "fix_sha256": digest, "approved_fix_sha256": approved_digest,
-        "checks": checks, "limitations": list(LIMITATIONS),
+        "checks": checks, "limitations": list(LIMITATIONS), "maintenance": maintenance,
     }
     ctx.audit.append("remediation.plan", actor,
                      {"proposal_id": proposal.id, "finding_id": proposal.finding_id,

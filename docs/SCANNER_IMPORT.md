@@ -1,5 +1,10 @@
 # Nessus / ACAS findings import (SCAN-06)
 
+For existing container OS OpenSCAP XCCDF results, use the separate
+[SCAP result importer](SCAP_RESULTS.md). It requires explicit target, evaluation
+and container provenance and preserves incomplete outcomes. Neither importer
+establishes platform applicability or executes a scanner.
+
 Import an offline `NessusClientData_v2` `.nessus` export as a persisted scan run and normalized findings.
 The existing `parse` command remains a JSON export utility. Inventory host import is also unchanged.
 This workflow does not contact a scanner or target, collect data, propose fixes, approve changes, or apply
@@ -25,10 +30,16 @@ The `workstation` and `server` targets must already exist. Passive imports are a
 out of scope, but their scope flags, credentials, options and other inventory fields remain unchanged.
 Importing observations never authorizes access or changes. The target inventory determines `asset_type`.
 
-A named human actor is required. Blank, machine, reserved policy identities and the generic `operator`
-fallback are refused. CLI identity follows the existing global `--actor` / environment convention;
-specify `--actor` explicitly when importing. HTTP requires `X-Actor`. These are declared identities using
-the existing prototype identity checks; they are not cryptographic authentication.
+An authorized actor is required. In verified mode, HTTPS API requests use the
+authenticated principal and require both node `import` and `import` grants for
+every mapped target; `X-Actor` cannot replace that identity. Grants and original
+target generations are rechecked before publication. Import is not a human-only
+decision action: a deliberately granted workload principal may import, but this
+does not authorize it to approve or apply changes. See [account access](ACCOUNT_ACCESS.md).
+Blank, reserved machine/policy actor labels and the generic `operator` fallback
+are refused. The local CLI and `X-Actor` examples below are explicitly for
+loopback development/replay with scratch state; they are unverified attribution.
+Use authenticated API upload in verified mode; a typed local actor cannot bypass it.
 
 ## CLI
 
@@ -56,7 +67,8 @@ curl.exe -X POST http://127.0.0.1:8000/api/v1/ingest/scanner -H "X-Actor: IT2 Ri
 ```
 
 Both a new import and an identical repeat return HTTP 200 with the same receipt shape as the CLI.
-Invalid input is 400; the generic actor fallback is 403; an engaged kill switch is 423; a request exceeding
+Invalid input is 400; failed verified authentication is 401 and refused permission is 403;
+the generic development actor fallback is 403; an engaged kill switch is 423; a request exceeding
 the upload envelope is 413; storage unavailability is 503. The existing actor dependency returns 400 for
 missing or reserved actor headers. JSON server-path requests and unknown or duplicate multipart fields
 are rejected. Uploads never cause arbitrary server-path reads or persist an original upload in state.

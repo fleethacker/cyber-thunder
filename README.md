@@ -21,9 +21,13 @@ break, and how to undo it. The kill switch and the audit-chain badge are on ever
 ![Decision queue](docs/images/decisions.jpg)
 
 Discovery proposes what it found on the enclave; a named person accepts a device into scope, with a reason, or ignores it.
-Verified modes use signed identity, application roles and a protected access policy for each target and
-operation, with explicit target account selection. Local development mode records a typed, unverified name.
-UDS gateway SSO still requires explicit application identity configuration; see [authorization](docs/AUTHORIZATION.md).
+Verified modes intersect signed identity and role permissions with exact account/group, target,
+environment and action grants. Each connection selects its permitted target account; inventory credentials
+are not a fallback. Node administration is separate from target administration, and `admin` does not inherit
+scan or approval rights. [Account examples](docs/ACCOUNT_ACCESS.md#practical-policy-example) show one user
+scanning A, another approving/applying B, and an administrator with no target grant.
+Local development uses typed, unverified names. UDS gateway SSO still requires explicit application
+identity configuration; see [authorization](docs/AUTHORIZATION.md).
 
 ![Assets and discovery](docs/images/assets-discovery.jpg)
 
@@ -32,6 +36,9 @@ Every action, including refusals and blocks, lands in the hash-chained audit tra
 ![Audit trail](docs/images/audit.jpg)
 
 Reports keep searchable history of commander one-pagers, POA&Ms, checklists and target reports, alongside the detection score against the range answer keys.
+Saved evidence and exports retain their original target/environment/generation ownership. Current
+inventory visibility does not grant access to another owner's historical report, and unknown legacy
+ownership is unavailable in verified mode. See [saved provenance](docs/IDENTITY_PROVENANCE.md).
 
 ![Reports](docs/images/reports.jpg)
 
@@ -46,12 +53,18 @@ The same range run detected 6/6 Podman seeds and 10/10 k3s seeds (28/28 across a
 
 The WSL2 UDS demo cluster was scanned over kubectl: 127 findings and no adapter errors.
 
+An isolated export of the public nginx-bad image produced 393 notapplicable OpenSCAP results and three RPM database diagnostics. JSON/SQLite import, reports and restart persistence preserved those observations plus a coverage warning. Effective image STIG checks and platform applicability remain unresolved; no live workload was changed.
+
 These are recorded real-target results, not full benchmark coverage. Windows/WinRM, Cisco device changes and other platform versions still need real testing. See the [validation matrix](docs/VALIDATION.md) for evidence and missing run metadata, and [coverage](docs/COVERAGE.md) for check/fix counts.
 <!-- validation-status:end -->
 
 Signed-token and HTTPS test-provider checks cover browser/API approval, logout and idle expiry, with
-separate access-policy and credential-boundary tests. Live Keycloak, Windows DACL and AD/CAC/PKI
-deployment acceptance remains open; see [identity configuration and limits](docs/AUTHORIZATION.md).
+separate access-policy and credential-boundary tests. These are fixture results, not live UDS realm,
+organizational Keycloak, AD/CAC/PKI or deployment acceptance. Native Windows owner/DACL checks now guard
+policy, selected Kubernetes credentials and the OIDC cache; service-account, domain, SMB and ReFS
+deployment acceptance remains open. See [Windows file trust](docs/WINDOWS_FILE_TRUST.md),
+[identity limits](docs/AUTHORIZATION.md) and
+[package preflight and acceptance](docs/PACKAGE_IDENTITY.md).
 
 | Module | Path | Status |
 |---|---|---|
@@ -84,11 +97,26 @@ Install runtime and test dependencies (online):
 python -m pip install -r requirements-dev.txt
 ```
 
-Or offline, from the wheels in `vendor/`:
+For **64-bit Windows with CPython 3.12**, install offline from the runtime and
+test wheels in `vendor/`. `vendor/SHA256SUMS` records their exact bytes:
 
 ```bash
 python -m pip install --no-index --find-links vendor -r requirements-dev.txt
 ```
+
+The bundled native wheels do not cover Linux, other architectures or other
+Python versions. On a connected machine matching the intended native platform,
+prepare its wheel folder, then transfer that folder with the source checkout:
+
+```bash
+python -m pip download --only-binary=:all: -r requirements-dev.txt -d wheelhouse
+```
+
+On the disconnected machine, use `--find-links wheelhouse` in the offline install
+command. Prepare runtime-only installations with `requirements.txt` instead.
+Container deployments carry their Linux dependencies in the built image; native
+wheels do not replace that image. Scanner databases, benchmarks and model files
+must also be provisioned for the intended offline workflow.
 
 Run the tests:
 
@@ -97,7 +125,8 @@ python -m pytest -q
 ```
 
 The following native rehearsal uses `CT_AUTH_MODE=dev` on loopback with an explicitly unverified typed
-identity. Use a scratch state directory so it never touches real state:
+identity. Development mode bypasses verified role/account isolation; forwarding its port does not add
+authentication. Use a scratch state directory so it never touches real state:
 
 ```bash
 export CT_STATE_DIR="$(mktemp -d)"
@@ -162,9 +191,11 @@ python -m cyberthunder serve
 In this development UI, set your unverified test name in Settings, open **Decisions**, press **Approve** to review the assessment or record an explicit bypass reason, then confirm the decision and choose **Apply**. The card
 shows the step timeline: scope check, before-state captured, applied, verified.
 
-For verified use, configure [identity and access](docs/AUTHORIZATION.md) and choose **Sign in** on the
-HTTPS UI. Browser sessions are held in one server process; restart requires login. Verified CLI use is
-currently limited to `serve` and emergency `kill engage` until CLI login is implemented.
+For verified use, configure [identity/browser access](docs/AUTHORIZATION.md), the protected
+[account policy](docs/ACCOUNT_ACCESS.md), and [fresh authentication](docs/STEP_UP.md), then choose
+**Sign in** on the HTTPS UI. Signing in alone does not permit a target operation. Browser sessions use
+one worker/process; restart requires login. [CLI device login](docs/CLI_AUTH.md) and the explicit
+`api` commands use the same verified API and permissions. A typed local actor cannot replace login.
 
 Open **STIG Library** for Downloaded, Maintained, Updates, Browse all and Import/transfer views, with versions and separate live-check/download/import times.
 Subscriptions default to inventory matches; choose manual product/type checkboxes and **Save selections**
@@ -210,23 +241,54 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | pipeline, contracts, guardrails, how to add an adapter |
 | [docs/VALIDATION.md](docs/VALIDATION.md) | real-platform evidence, untested versions and missing run metadata |
 | [docs/AUTHORIZATION.md](docs/AUTHORIZATION.md) | authentication modes, browser login, roles, target policy and explicit credentials |
+| [docs/ACCOUNT_ACCESS.md](docs/ACCOUNT_ACCESS.md) | exact policy schema, per-account examples, target credentials and original artifact ownership |
+| [docs/PERSON_ASSOCIATION.md](docs/PERSON_ASSOCIATION.md) | explicit normal/admin account associations for approval counting without combining privileges |
+| [docs/PERSON_ACCOUNT_LIVE.md](docs/PERSON_ACCOUNT_LIVE.md) | real local identity-provider checks of separate accounts, person quorums and revocation, with acceptance limits |
+| [docs/CREDENTIAL_RESOLVERS.md](docs/CREDENTIAL_RESOLVERS.md) | protected password sources, account-bound leases, rotation and native deployment acceptance |
+| [docs/SSH_KEY_CREDENTIALS.md](docs/SSH_KEY_CREDENTIALS.md) | protected static SSH key files, exact key parsing, explicit authentication and remaining certificate/broker work |
+| [docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md](docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md) | separate application and target accounts, protected runtime storage and remaining package provisioning |
+| [docs/CLI_AUTH.md](docs/CLI_AUTH.md) | human device login, protected client tokens and authenticated API commands |
+| [docs/AUDIT_ANCHORS.md](docs/AUDIT_ANCHORS.md) | explicit signed checkpoints and local anchor verification; independent retention remains separate |
+| [docs/WINDOWS_FILE_TRUST.md](docs/WINDOWS_FILE_TRUST.md) | native owner/DACL checks, protected-path provisioning and deployment limits |
+| [docs/STEP_UP.md](docs/STEP_UP.md) | fresh authentication requirements for privileged actions |
+| [docs/SEPARATION_OF_DUTIES.md](docs/SEPARATION_OF_DUTIES.md) | independent human approvals and CAT I quorum |
+| [docs/IDENTITY_PROVENANCE.md](docs/IDENTITY_PROVENANCE.md) | verified/legacy review attribution and saved report access |
+| [docs/PACKAGE_IDENTITY.md](docs/PACKAGE_IDENTITY.md) | native/container identity inputs, package preflight, one-worker sessions and acceptance limits |
+| [docs/CONTAINER_BUILD.md](docs/CONTAINER_BUILD.md) | portable container build, verified tool installation and unprivileged offline smoke limits |
+| [docs/CONTAINER_VULNERABILITY_REVIEW.md](docs/CONTAINER_VULNERABILITY_REVIEW.md) | pinned image/tool updates, measured full-image findings and unresolved applicability/security work |
 | [docs/COVERAGE.md](docs/COVERAGE.md) | implemented checks, benchmark denominators, executable fixes and runbooks |
 | [docs/CONFIDENCE.md](docs/CONFIDENCE.md) | evidence-strength grades, provenance, freshness and limits |
 | [docs/FINDING_REVIEW.md](docs/FINDING_REVIEW.md) | reasoned reviews, false positives, expiry, history and remediation guards |
+| [docs/FINDING_REASSESSMENT.md](docs/FINDING_REASSESSMENT.md) | retained observations, later incomplete scan attempts and account-scoped history without inventing freshness |
+| [docs/RISK_ACCEPTANCE.md](docs/RISK_ACCEPTANCE.md) | temporary account-authorized risk decisions, remediation holds and unchanged scanner failures |
 | [docs/REPORT_ASSURANCE.md](docs/REPORT_ASSURANCE.md) | raw scanner results and review decisions in commander and POA&M reports |
 | [docs/REMEDIATION_PLAN.md](docs/REMEDIATION_PLAN.md) | static change previews, declared capture paths, verification and rollback instructions |
+| [docs/MAINTENANCE_WINDOWS.md](docs/MAINTENANCE_WINDOWS.md) | protected apply windows, separately authorized one-time exceptions and recovery after expiry |
 | [docs/CHANGE_HISTORY.md](docs/CHANGE_HISTORY.md) | persistent change history, finding status after rollback, restore guards and coverage limits |
+| [docs/CHANGE_TIMELINE.md](docs/CHANGE_TIMELINE.md) | recorded apply, verification and recovery milestones without inventing progress from failed or incomplete records |
 | [docs/KUBERNETES_FIX_SAFETY.md](docs/KUBERNETES_FIX_SAFETY.md) | investigation-first Kubernetes guidance, retired deletion actions and recovery limits |
+| [docs/KUBERNETES_NAMESPACE_SCOPE.md](docs/KUBERNETES_NAMESPACE_SCOPE.md) | explicit namespace collection, unavailable cluster evidence and read-only limits |
+| [docs/CLUSTER_NAMESPACE_IMAGES.md](docs/CLUSTER_NAMESPACE_IMAGES.md) | namespace-limited workload image discovery, exact account access and incomplete survey results |
+| [docs/SCAN_WORKERS.md](docs/SCAN_WORKERS.md) | bounded parallel collection, account isolation, retained observations and cooperative timeout limits |
+| [docs/SCAN_WORKERS_REVIEW.md](docs/SCAN_WORKERS_REVIEW.md) | publication authority, partial-evidence preservation and remaining recovery limits |
 | [docs/HOST_SCOPE.md](docs/HOST_SCOPE.md) | container-host setup, explicit host access and reviewed IP/range scope |
+| [docs/WSL_KEEPALIVE.md](docs/WSL_KEEPALIVE.md) | optional per-user startup task for the Windows test environment, status and removal |
 | [docs/SCAN_CONTENT.md](docs/SCAN_CONTENT.md) | missing content, scanner configuration, applicability and incomplete scan coverage |
 | [docs/LINK.md](docs/LINK.md) | observed request conditions, offline control and explicit demonstration mode |
 | [docs/SCAP.md](docs/SCAP.md) | running the DISA SCAP benchmarks ourselves: supported OVAL subset, collection plan, limits |
+| [docs/SCAP_RESULTS.md](docs/SCAP_RESULTS.md) | persisted container OS XCCDF imports, explicit target mapping and incomplete coverage |
+| [docs/CONTENT_PUBLICATION.md](docs/CONTENT_PUBLICATION.md) | complete content generations, release floors, explicit downgrade review and interrupted imports |
+| [docs/CATALOG_RULE_METADATA.md](docs/CATALOG_RULE_METADATA.md) | native check results and separately recorded active STIG references; reference metadata adds no assessed coverage |
+| [docs/CATALOG_REFERENCE_UI.md](docs/CATALOG_REFERENCE_UI.md) | finding detail labels for evaluated releases, downloaded references and their provenance |
 | [docs/CONTENT.md](docs/CONTENT.md) | STIG Library, saved subscriptions, versions and sync times, uploads/downloads and offline transfers |
 | [docs/VULNERABILITY_DATA.md](docs/VULNERABILITY_DATA.md) | public CVE database updates, freshness, offline transfer and cluster findings |
 | [docs/ADAPTING.md](docs/ADAPTING.md) | taking it to a new environment: inventory, credentials, benchmarks, adapters, checklist |
 | [docs/CHANGE_IMPACT.md](docs/CHANGE_IMPACT.md) | dependency evidence, model assessment, unknowns and review before applying a fix |
 | [docs/API.md](docs/API.md) | HTTP API v1 |
 | [docs/STATE.md](docs/STATE.md) | the state directory: documents (json files or SQLite) and files, `state migrate` and `state info`, WAL on a local volume only, backups |
+| [docs/STATE_RETENTION.md](docs/STATE_RETENTION.md) | conservative scan archive planning and private verified exports; source deletion remains unimplemented |
+| [docs/RELEASE_INVENTORY.md](docs/RELEASE_INVENTORY.md) | partial offline component inventory, CI artifacts and unverified dependency/image coverage |
+| [docs/RELEASE_VULNERABILITY_EVIDENCE.md](docs/RELEASE_VULNERABILITY_EVIDENCE.md) | bounded offline dependency scans, retained scanner/database hashes and explicit coverage limits |
 | [docs/UI.md](docs/UI.md) | screens and behaviour |
 | [docs/FINDINGS.md](docs/FINDINGS.md) | finding categories, filters, search, sorting and saved views |
 | [docs/DEMO.md](docs/DEMO.md) | 10-minute demo runbook |
@@ -245,19 +307,30 @@ Automated regression configuration and its explicit platform limitations are des
 | What may it do | Scan, read configs and logs, propose fixes, apply approved fixes from the vetted library, pull public STIG content from two allow-listed DoD hosts when the link is up | `RemediationEngine.execute` runs `FixEntry` payloads only |
 | What may it never do | Run shell text from a model, change anything unapproved, touch hosts outside scope, delete logs or audit | `explain/` returns validated JSON text; `Inventory.assert_in_scope()`; audit is append-only |
 | Who may approve and execute fixes | Verified human identity, permitted role and matching target/action grant; development names remain unverified | `ApprovalGate`, principal checks and access policy; approval and execution are separate |
+| Does admin grant target access | No; node administration, target administration and scan/approval roles/grants are separate | `AppContext.authorize`, role mapping and protected `access.json` |
+| Who may read/export saved evidence | Current grants for each original contributor and matching saved ownership; reports also require node export | resource scope checks, filtered services/history and outbox guards |
 | How is it logged | Every scan, finding, proposal, approval, denial, apply, verify, rollback, kill, scope and policy change | hash-chained audit log; head hash shown in the UI and on every report |
 | How is it stopped | Kill switch (file, `CT_KILL`, or `KILL` sentinel) blocks every apply, rollback and content pull | `KillSwitch.guard()` |
 | Can it be undone | Library fixes declare rollback capabilities; before-state is captured first and failed verify attempts recovery. History restores check later changes and supported Linux file drift; recovery still depends on the adapter and access | [Change history and rollback](docs/CHANGE_HISTORY.md) |
 
 ## Cluster deployment
 
-Cyber Thunder can run natively with the Python CLI/web server above, or as the same
-application in a container. Both deployment paths retain approval, audit and rollback. Native development
-binds only to loopback; network containers require verified identity configuration with TLS or a configured
-mesh boundary. UDS gateway login does not automatically wire application JWT validation or browser sessions.
-Live identity/PKI and deployment acceptance remain open; follow [authorization](docs/AUTHORIZATION.md).
-See the [application container guide](deploy/kubernetes/README.md) and
-[Zarf package](packages/cyberthunder/README.md) for container and UDS configuration.
+Run the native Python server with `python -m cyberthunder serve`, or build the application container
+using the supported [container guide](deploy/kubernetes/README.md). Both use the guarded serve entrypoint
+and the same account, approval, audit and rollback controls. Do not replace it with a direct Uvicorn
+command or increase workers for browser sessions.
+
+Source Kubernetes/UDS manifests require explicit verified identity configuration, protected access
+policy and an identity/policy preflight; they retain one worker/process and one replica. Native OIDC
+uses application TLS, while the mesh profile relies on operator-enforced authenticated ingress and
+browser HTTPS in addition to application token validation. Missing configuration fails closed.
+An explicit loopback-only development container is not a shared service; publishing its port does not
+add identity or make that listener bind the container interface.
+
+Use [PACKAGE_IDENTITY.md](docs/PACKAGE_IDENTITY.md), the [container guide](deploy/kubernetes/README.md)
+and [Zarf package guide](packages/cyberthunder/README.md) for exact inputs, mounts and build limitations.
+UDS login, a Ready pod, checked-in image archives and prior cluster scans do not establish live realm
+or release acceptance. Rebuild reviewed source and complete the separate deployment checks.
 
 SQLite stores scan/findings/discovery documents and library preferences/sync metadata. Persist and back up
 the **entire state directory**, including raw scanner files, inventory, audit, rollback snapshots and content;

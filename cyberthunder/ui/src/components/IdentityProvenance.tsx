@@ -18,18 +18,19 @@ function PrincipalDetails({ issuer, subject, roles, actor }: { issuer: string; s
 }
 
 /** Server-recorded attribution, not a fresh authentication or permission check. */
-export function RecordedIdentity({ actor, evidence, verified, label }: {
+export function RecordedIdentity({ actor, evidence, verified, label, event = 'decision', humanOnly = true }: {
   actor: string | null | undefined; evidence?: RecordedPrincipalEvidence | null; verified?: boolean; label: string;
+  event?: 'decision' | 'proposal creation'; humanOnly?: boolean;
 }) {
   const principal = object(evidence);
   const name = text(principal.name), issuer = text(principal.iss), subject = text(principal.sub);
   const source = sourceName(principal.via);
   const policy = actor?.startsWith('policy:');
-  const complete = !policy && !!text(actor) && principal.kind === 'human' && principal.verified === true
+  const complete = !policy && !!text(actor) && (principal.kind === 'human' || (!humanOnly && principal.kind === 'workload')) && principal.verified === true
     && verified !== false && !!source && !!name && !!issuer && !!subject;
   return <Stack gap={2}>
     <Text size="xs">{label} {complete ? name : actor || 'Actor not recorded'}</Text>
-    <Text size="xs" c={complete ? 'teal' : 'dimmed'}>{complete ? `Verified at decision (${source})`
+    <Text size="xs" c={complete ? 'teal' : 'dimmed'}>{complete ? `Verified at ${event} (${source})`
       : policy ? 'Standing policy decision; signer verification is not established by this record.'
         : verified === true || principal.verified === true ? 'Identity verification unavailable: recorded evidence is incomplete or inconsistent.'
           : 'Local / unverified identity; no verified account evidence was recorded.'}</Text>

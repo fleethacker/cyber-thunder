@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns="urn:vim25">
+  <soap:Body><RetrieveServiceContentResponse><returnval>
+    <rootFolder type="Folder">group-d1</rootFolder>
+    <propertyCollector type="PropertyCollector">propertyCollector</propertyCollector>
+    <viewManager type="ViewManager">ViewManager</viewManager>
+    <sessionManager type="SessionManager">SessionManager</sessionManager>
+    <about><apiType>VirtualCenter</apiType><apiVersion>8.0.3.0</apiVersion>
+      <instanceUuid>c2ff7f98-0dc8-44a6-9b42-5589dce01000</instanceUuid></about>
+  </returnval></RetrieveServiceContentResponse></soap:Body>
+</soap:Envelope>

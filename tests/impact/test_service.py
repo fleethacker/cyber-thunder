@@ -465,7 +465,7 @@ def test_model_budget_uses_settings_and_shared_total_deadline(rig, monkeypatch, 
     budgets = []
     monkeypatch.setattr(module.time, "monotonic", lambda: virtual[0])
 
-    def bounded(call, timeout):
+    def bounded(call, timeout, *, owner):
         budgets.append(timeout)
         return call(), None
 

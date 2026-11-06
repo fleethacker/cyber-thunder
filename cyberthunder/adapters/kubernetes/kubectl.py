@@ -221,18 +221,33 @@ class KubectlTransport(LocalTransport):
     Only commands whose first word is 'kubectl' are accepted. No shell is involved."""
     kind = "kubeconfig"
 
-    def __init__(self, kubeconfig: str | Path, context: str | None = None, kubectl: str = "kubectl"):
+    def __init__(self, kubeconfig: str | Path, context: str | None = None, kubectl: str = "kubectl",
+                 *, namespaces: list[str] | None = None):
         super().__init__()
         self.kubeconfig = str(kubeconfig)
         self.context = context
         self.kubectl = kubectl
         self.account_binding = None
         self.account_guard = None
+        from .scope import namespace_scope
+        self._namespace_scope = namespace_scope({"namespaces": namespaces}) if namespaces is not None else None
+        self.namespace_guard = None
+
+    @property
+    def namespace_scope(self):
+        return self._namespace_scope
 
     def build_argv(self, command: str) -> tuple[list[str], str | None]:
+        if self.namespace_guard is not None:
+            self.namespace_guard()
         argv, stdin = parse_command(command)
         if not argv or argv[0] != "kubectl":
             raise TransportError("kubeconfig transport only runs kubectl commands")
+        if self.namespace_scope is not None:
+            from .scope import guard_command
+            if "\n" in command or "\r" in command:
+                raise PermissionError("namespace transport refuses multiline commands")
+            guard_command(argv, stdin, self.namespace_scope)
         if self.account_binding is not None:
             from cyberthunder.security.kube_credentials import guard_kubeconfig, validate_kubectl_args
             self.account_guard()
@@ -245,6 +260,8 @@ class KubectlTransport(LocalTransport):
         return full + argv[1:], stdin
 
     def run(self, command: str, *, timeout: int = 120, sudo: bool = False) -> CommandResult:
+        if self.namespace_scope is not None and sudo:
+            raise PermissionError("namespace collection does not permit privilege elevation")
         try:
             argv, stdin = self.build_argv(command)
         except (ValueError, TransportError) as e:
@@ -255,6 +272,8 @@ class KubectlTransport(LocalTransport):
             from cyberthunder.security.kube_credentials import kube_subprocess_env
             self.account_guard()
             options["env"] = kube_subprocess_env()
+        if self.namespace_guard is not None:
+            self.namespace_guard()
         try:
             p = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout,
                                encoding="utf-8", errors="replace", **options)
@@ -266,6 +285,8 @@ class KubectlTransport(LocalTransport):
         finally:
             if self.account_guard is not None:
                 self.account_guard()
+            if self.namespace_guard is not None:
+                self.namespace_guard()
 
     def read_file(self, path: str) -> bytes:
         raise TransportError("kubeconfig transport has no file access; use kubectl")

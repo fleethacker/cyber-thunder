@@ -1,4 +1,4 @@
-# Runtime extras. The core (schema, parsers, audit, kill switch, approvals) is stdlib-only.
+# Application runtime dependencies. Offline wheel support is documented in README.md.
 fastapi>=0.110
 uvicorn[standard]>=0.29
 jinja2>=3.1

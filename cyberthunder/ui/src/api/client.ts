@@ -1,16 +1,16 @@
 // Typed fetch wrapper for /api/v1. Verified sessions carry an opaque cookie and CSRF protection.
 // Errors come back as ApiError with the server's {detail} verbatim.
 import type {
-  AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, ContentManifest, DeltaReport,
+  PublicationIntent, AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, ContentManifest, DeltaReport,
   DemoStatus, DiscoveredAsset, DiscoveredTarget, DiscoveryAccept, Finding, DiscoveryMode, DiscoveryOverview, DiscoveryRun, DiscoveryScope,
   DiscoveryStatus, Explanation, FindingPlus, FindingsPage, FindingsQuery, HeldContent, ImportDirResult, IngestHistory, KillStatus, LinkState,
   Outbox, PolicyDecision, ProposalDiff, ProposalPlan, ProposalPlus, PullJob, ReceivedCve, ReceivedStig, ScanRequest, ScanRun, Score, Status, SyncResult, Target,
   ReportHistory, SavedReportContent, TargetOutcome, TargetReport, UpdateCheck,
   ContentUploadResult, LibraryPreferences, LibraryPreferencesInput, StigLibrary, FindingReviewHistory, FindingReviewInput, ImpactReceipt,
   VulnerabilityJob, VulnerabilitySettings, VulnerabilitySettingsInput, VulnerabilityStatus,
-  HostRegistration, RuntimeContext, TargetReadiness, ScopeRangeInput, ScopeRangePreview, SavedScopeRanges,
+  HostRegistration, RuntimeContext, TargetReadiness, ScopeRangeInput, ScopeRangePreview, SavedScopeRanges, VsphereRun, VsphereRunSummary,
 } from './types';
-import { sessionIdentity, sessionHeaders, sessionExpired, authorityRevision } from './identity';
+import { sessionIdentity, sessionHeaders, sessionExpired, authorityRevision, parseStepUpChallenge, stepUpRequired, type StepUpChallenge } from './identity';
 
 export const API_BASE = '/api/v1';
 const ACTOR_KEY = 'ct.actor';
@@ -38,10 +38,12 @@ export function setActor(name: string): void {
 export class ApiError extends Error {
   status: number;
   detail: string;
-  constructor(status: number, detail: string) {
+  stepUp?: StepUpChallenge;
+  constructor(status: number, detail: string, stepUp?: StepUpChallenge) {
     super(detail);
     this.status = status;
     this.detail = detail;
+    this.stepUp = stepUp;
   }
 }
 
@@ -68,10 +70,12 @@ function requireAuthority(revision: number): void {
 
 async function parseError(res: Response, revision: number): Promise<ApiError> {
   let detail = `${res.status} ${res.statusText}`;
+  let challenge: StepUpChallenge | undefined;
   try {
     const text = await res.text();
     try {
       const body = JSON.parse(text) as { detail?: unknown };
+      if (res.status === 401) challenge = parseStepUpChallenge(body);
       if (typeof body.detail === 'string') detail = body.detail;
       else if (body.detail !== undefined) detail = JSON.stringify(body.detail);
       else if (text) detail = text;
@@ -82,8 +86,11 @@ async function parseError(res: Response, revision: number): Promise<ApiError> {
     /* keep status text */
   }
   requireAuthority(revision);
-  if (res.status === 401) sessionExpired();
-  return new ApiError(res.status, detail);
+  if (res.status === 401) {
+    if (challenge) stepUpRequired(challenge);
+    else sessionExpired();
+  }
+  return new ApiError(res.status, detail, challenge);
 }
 
 export async function request<T>(method: string, path: string, opts: { query?: Query; body?: unknown; form?: FormData } = {}): Promise<T> {
@@ -174,6 +181,9 @@ export const api = {
     post<DiscoveryRun>('/discovery/sweep', scopes && scopes.length ? { mode, scopes } : { mode }),
   discoveryRuns: () => get<DiscoveryRun[]>('/discovery/runs'),
   discoveryRun: (id: string) => get<DiscoveryRun & { assets: DiscoveredAsset[] }>(`/discovery/runs/${enc(id)}`),
+  vsphereCollect: (id: string) => post<VsphereRun>(`/discovery/vsphere/${enc(id)}/collect`),
+  vsphereRuns: (id: string) => get<VsphereRunSummary[]>(`/discovery/vsphere/${enc(id)}/runs`, { limit: 20 }),
+  vsphereRun: (id: string, run: string) => get<VsphereRun>(`/discovery/vsphere/${enc(id)}/runs/${enc(run)}`),
   discoveredAssets: (status?: DiscoveryStatus) => get<DiscoveredAsset[]>('/discovery/assets', { status }),
   discoveredAsset: (id: string) => get<DiscoveredAsset>(`/discovery/assets/${enc(id)}`),
   acceptAsset: (id: string, body: DiscoveryAccept) => post<Target>(`/discovery/assets/${enc(id)}/accept`, body),
@@ -188,6 +198,8 @@ export const api = {
   finding: (id: string) => get<FindingPlus>(`/findings/${enc(id)}`),
   findingReview: (id: string, scan_id?: string) => get<FindingReviewHistory>(`/findings/${enc(id)}/review`, { scan_id }),
   saveFindingReview: (id: string, body: FindingReviewInput) => put<FindingReviewHistory>(`/findings/${enc(id)}/review`, body),
+  acceptFindingRisk: (id: string, body: import('./types').RiskAcceptanceInput) => put<FindingReviewHistory>(`/findings/${enc(id)}/risk-acceptance`, body),
+  revokeFindingRisk: (id: string, body: import('./types').RiskRevocationInput) => post<FindingReviewHistory>(`/findings/${enc(id)}/risk-acceptance/revoke`, body),
   propose: (id: string) => post<ProposalPlus>(`/findings/${enc(id)}/propose`),
   explain: (id: string, force = false) => post<Explanation>(`/findings/${enc(id)}/explain`, { force }),
   explainAll: (ids?: string[]) => post<{ queued: number }>('/findings/explain', ids ? { ids } : {}),
@@ -206,10 +218,20 @@ export const api = {
   cancel: (id: string, note?: string) => post<ProposalPlus>(`/proposals/${enc(id)}/cancel`, { note }),
   apply: (id: string, simulate_verify_fail?: boolean) =>
     post<{ proposal_id: string; state: string }>(`/proposals/${enc(id)}/apply`, simulate_verify_fail ? { simulate_verify_fail } : {}),
+  applyWithMaintenanceOverride: (id: string, maintenance_override: import('./types').MaintenanceOverride) =>
+    post<{ proposal_id: string; state: string }>(`/proposals/${enc(id)}/apply`, { maintenance_override }),
   rollback: (id: string) => post<unknown>(`/proposals/${enc(id)}/rollback`),
   diff: (id: string) => get<ProposalDiff>(`/proposals/${enc(id)}/diff`),
   verify: (id: string) => post<ProposalPlus>(`/proposals/${enc(id)}/verify`),
-  bulk: (action: 'approve' | 'deny', ids: string[], note?: string) => post<BulkResult>('/proposals/bulk', { action, ids, note }),
+  bulk: async (action: 'approve' | 'deny', ids: string[], note?: string) => {
+    const result = await post<BulkResult>('/proposals/bulk', { action, ids, note });
+    for (const item of result.results) {
+      if (!('error' in item) || item.status !== 401) continue;
+      const challenge = parseStepUpChallenge({ error: item.code, step_up: item.step_up });
+      if (challenge) { stepUpRequired(challenge); break; }
+    }
+    return result; // Earlier decisions remain visible; the caller must never replay the batch.
+  },
 
   audit: (q?: Query) => get<AuditPage>('/audit', q),
   auditVerify: () => get<AuditVerify>('/audit/verify'),
@@ -244,13 +266,15 @@ export const api = {
   content: () => get<HeldContent>('/ingest/content'),
   stigLibrary: () => get<StigLibrary>('/ingest/library'),
   saveLibraryPreferences: (body: LibraryPreferencesInput) => put<LibraryPreferences>('/ingest/library/preferences', body),
-  uploadContent: (file: File) => {
+  uploadContent: (file: File, overrideReason?: string, publicationIntent?: PublicationIntent) => {
     const form = new FormData();
     form.append('file', file);
+    if (overrideReason !== undefined) form.append('override_reason', overrideReason);
+    if (publicationIntent !== undefined) form.append('publication_intent', JSON.stringify(publicationIntent));
     return request<ContentUploadResult>('POST', '/ingest/content/upload', { form });
   },
   writeManifest: () => post<ContentManifest>('/ingest/manifest'),
-  importDir: (path: string) => post<ImportDirResult>('/ingest/import-dir', { path }),
+  importDir: (path: string, overrideReason?: string, publicationIntent?: PublicationIntent) => post<ImportDirResult>('/ingest/import-dir', { path, override_reason: overrideReason, publication_intent: publicationIntent }),
   outbox: () => get<Outbox>('/outbox'),
   sync: () => post<SyncResult>('/outbox/sync'),
 

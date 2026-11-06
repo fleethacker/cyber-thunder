@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { evaluate } from '../lib/moduleTestSupport.mjs';
+import { permissionFixture } from './permissionTestSupport.mjs';
 
 const compile = (path) => new URL(path, import.meta.url);
 const panelSource = compile('./FindingReviewPanel.tsx');
@@ -15,6 +16,8 @@ const sameDeps = (a, b) => !!a && !!b && a.length === b.length && a.every((v, i)
 // Shallow component harness: runs the real component's hooks, effects and event handlers.
 // Widgets/context are stubbed; requests and state stay in memory, with no browser or network.
 function mount(server) {
+  const permissions = permissionFixture();
+  let authority = 1;
   const cells = [];
   let index = 0, dirty = true, tree, pendingEffects = [];
   const hooks = {
@@ -57,10 +60,24 @@ function mount(server) {
         active: body.disposition !== 'unreviewed', suppressed: ['false_positive', 'not_applicable'].includes(body.disposition) };
       return structuredClone(history);
     },
+    acceptFindingRisk: async (id, body) => {
+      puts.push({ id, body, operation: 'accept' });
+      history = { ...history, revision: history.revision + 1, active: true, suppressed: false,
+        disposition: 'risk_accepted', remediation_held: true, risk_acceptance_status: 'active',
+        current: { ...body, id: 'risk', disposition: 'risk_accepted', reviewed_at: '2026-11-06T12:00:00Z', reviewed_by: 'IT1 Reviewer' } };
+      return structuredClone(history);
+    },
+    revokeFindingRisk: async (id, body) => {
+      puts.push({ id, body, operation: 'revoke' });
+      history = { ...history, revision: history.revision + 1, active: false, disposition: 'unreviewed',
+        remediation_held: false, risk_acceptance_status: 'revoked', current: { ...body, disposition: 'risk_revoked' } };
+      return structuredClone(history);
+    },
   };
   const { FindingReviewPanel } = evaluate(panelSource, {
     react: hooks, '@mantine/core': ui, '@mantine/notifications': { notifications: { show: (notice) => notices.push(notice) } },
     '../api/client': { api, ApiError, errorText }, '../lib/findingAssurance': helpers,
+    '../api/identity': { authorityRevision: () => authority }, './PermissionGate': permissions.imports,
     '../lib/format': { fmtTime: (value) => value }, '../state/AppState': { useAppState: () => ({ actor: 'IT1 Reviewer', status: { kill: { engaged: false } } }) },
     './ActorChip': { actorProblem: () => null }, './common': ui, './FindingAssurance': ui,
   });
@@ -99,6 +116,7 @@ function mount(server) {
   };
   return {
     settle, control, button, puts, notices,
+    permissions: permissions.state, changeAuthority() { authority++; },
     change,
     async click(label) { const node = button(label); assert.ok(!node.props.disabled); node.props.onClick(); await settle(); },
     async reopen() { props.opened = false; dirty = true; await settle(); props.opened = true; dirty = true; await settle(); },
@@ -227,3 +245,86 @@ test('review reopening also requires acknowledgement when revision and fingerpri
     assert.deepEqual(panel.draft(), dismissal);
   } finally { panel.unmount(); }
 });
+
+test('acceptance and reasoned reversal use their own endpoints and cannot submit a generic review while held', async () => {
+  const panel = mount(baseline);
+  try {
+    await panel.settle();
+    await panel.change('Review decision', 'risk_accepted');
+    await panel.change('Reason', 'Maintenance constraint');
+    await panel.change('Supporting evidence', 'Owner schedule');
+    await panel.change('Expiry (required)', new Date(Date.now() + 86400000).toISOString().slice(0, 16));
+    await panel.submit();
+    assert.equal(panel.puts.length, 1);
+    assert.equal(panel.puts[0].operation, 'accept');
+    assert.equal(panel.button('Accept risk').props.disabled, true);
+    await panel.change('Review decision', 'confirmed');
+    await panel.submit();
+    assert.equal(panel.puts.length, 1);
+    await panel.click('Prepare risk revocation');
+    assert.equal(panel.button('Revoke risk acceptance').props.disabled, true);
+    await panel.change('Reason', 'Window is available');
+    await panel.submit();
+    assert.equal(panel.puts[1].operation, 'revoke');
+    assert.deepEqual(Object.keys(panel.puts[1].body).sort(), ['evidence_fingerprint', 'expected_revision', 'reason']);
+    assert.deepEqual(panel.draft(), { disposition: 'unreviewed', reason: '', supportingEvidence: '', expiresAt: '' },
+      'A completed revocation must leave a new, empty review draft');
+    await panel.submit();
+    assert.equal(panel.puts.length, 2, 'Submitting again cannot repeat the revocation or silently create a review');
+  } finally { panel.unmount(); }
+});
+
+test('ordinary review permission alone and lost authority cannot submit a risk decision', async () => {
+  const panel = mount(baseline);
+  try {
+    await panel.settle();
+    await panel.change('Review decision', 'risk_accepted');
+    await panel.change('Reason', 'Reviewed');
+    await panel.change('Supporting evidence', 'Owner schedule');
+    await panel.change('Expiry (required)', new Date(Date.now() + 86400000).toISOString().slice(0, 16));
+    panel.permissions.actions = ['review'];
+    await panel.submit();
+    assert.equal(panel.puts.length, 0);
+    panel.permissions.actions = ['risk.accept'];
+    panel.changeAuthority();
+    await panel.submit();
+    assert.equal(panel.puts.length, 0);
+    await panel.click(refresh);
+    assert.equal(panel.button('Accept risk').props.disabled, true);
+    await panel.acknowledge();
+    await panel.submit();
+    assert.equal(panel.puts.length, 1);
+  } finally { panel.unmount(); }
+});
+
+for (const decision of ['risk_accepted', 'confirmed']) {
+  test(`${decision}: an account change between refresh and acknowledgement requires another refresh`, async () => {
+    const panel = mount(baseline);
+    try {
+      await panel.settle();
+      await panel.change('Review decision', decision);
+      await panel.change('Reason', 'Maintenance constraint');
+      await panel.change('Supporting evidence', 'Owner schedule');
+      if (decision === 'risk_accepted') {
+        await panel.change('Expiry (required)', new Date(Date.now() + 86400000).toISOString().slice(0, 16));
+      }
+      panel.changeAuthority();
+      await panel.click(refresh);
+      const acknowledge = panel.control('I have reviewed the current evidence and review history').props.onChange;
+      panel.changeAuthority();
+      acknowledge({ currentTarget: { checked: true } });
+      await panel.settle();
+      await panel.submit();
+      assert.equal(panel.puts.length, 0, 'Evidence loaded under a former account cannot authorize this submission');
+      await panel.click(refresh);
+      // An old checkbox callback must not acknowledge a newer account's refresh either.
+      acknowledge({ currentTarget: { checked: true } });
+      await panel.settle();
+      await panel.submit();
+      assert.equal(panel.puts.length, 0, 'Retained acknowledgement must stay bound to its original account');
+      await panel.acknowledge();
+      await panel.submit();
+      assert.equal(panel.puts.length, 1);
+    } finally { panel.unmount(); }
+  });
+}

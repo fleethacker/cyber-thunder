@@ -99,10 +99,15 @@ def test_range_requires_explicit_exception_and_never_claims_verified(ssh_keys, s
 @pytest.mark.parametrize("credential", ["password", "key", "interactive_agent"])
 def test_no_implicit_keys_and_agent_only_explicit_interactive(monkeypatch, tmp_path, ssh_keys, credential):
     calls = []
-    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda _self, *args, **kw: calls.append(kw))
+    def connect(_self, *args, **kw):
+        strategy = kw.get("auth_strategy")
+        calls.append({**kw, "key_public": strategy.pkey.asbytes() if strategy is not None else None})
+
+    monkeypatch.setattr(paramiko.SSHClient, "connect", connect)
     monkeypatch.setattr(paramiko.SSHClient, "load_system_host_keys", lambda *args: pytest.fail("implicit host trust"))
     key = tmp_path / "explicit_key"
-    key.write_text("fixture; connect is replaced")
+    ssh_keys[1].write_private_key_file(str(key))
+    key.chmod(0o600)
     kwargs = {"password": "p"} if credential == "password" else (
         {"key_filename": str(key)} if credential == "key" else {"interactive": True, "allow_agent": True})
     with SSHTransport("localhost", security_mode="fleet", host_key_sha256=key_fingerprint(ssh_keys[0]), **kwargs) as tr:
@@ -111,7 +116,8 @@ def test_no_implicit_keys_and_agent_only_explicit_interactive(monkeypatch, tmp_p
     assert calls[0]["allow_agent"] is (credential == "interactive_agent")
     assert calls[0]["auth_timeout"] == calls[0]["banner_timeout"] == calls[0]["channel_timeout"] == 20
     if credential == "key":
-        assert calls[0]["key_filename"] == str(key)
+        assert calls[0]["key_filename"] is None
+        assert calls[0]["key_public"] == ssh_keys[1].asbytes()
 
 
 def test_no_credential_fails_before_network(monkeypatch):
@@ -177,19 +183,18 @@ def test_guard_failure_after_handshake_closes_client_without_translation(monkeyp
     class Revoked(RuntimeError):
         pass
 
-    calls, closed = [], []
+    connected, closed = [], []
 
     def guard():
-        calls.append(True)
-        if len(calls) == 4:
+        if connected:
             raise Revoked("killed after handshake")
 
-    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda *args, **kwargs: None)
+    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda *args, **kwargs: connected.append(True))
     monkeypatch.setattr(paramiko.SSHClient, "close", lambda *args: closed.append(True))
     tr = SSHTransport("localhost", password="p", allow_insecure_range=True, guard=guard)
     with pytest.raises(Revoked):
         tr.connect_client()
-    assert closed == [True]
+    assert connected == [True] and closed == [True]
 
 
 def test_exception_text_and_traceback_do_not_expose_credentials(monkeypatch):
@@ -216,7 +221,7 @@ def test_event_sink_failure_aborts_before_authentication(ssh_keys, ssh_peer):
         assert peer.auth == []
 
 
-def test_settings_defaults_and_no_target_mode_override(ssh_keys, monkeypatch):
+def test_settings_defaults_and_no_target_mode_override(ssh_keys, monkeypatch, tmp_path):
     monkeypatch.setenv("CT_CRED_LOOPBACK", "p")
     target = Target("t", "t", "linux", address="localhost", credential_ref="LOOPBACK",
                     options={"security_mode": "range"})
@@ -224,6 +229,11 @@ def test_settings_defaults_and_no_target_mode_override(ssh_keys, monkeypatch):
     with pytest.raises(TrustError):
         SSHTransport.from_target(target, SimpleNamespace(security_mode="fleet"))
     target.options["host_key_sha256"] = key_fingerprint(ssh_keys[0])
+    with pytest.raises(TrustError) as error:
+        SSHTransport.from_target(target, SimpleNamespace(security_mode="fleet"))
+    assert error.value.code == "transport:credential_resolver_required"
+    target.credential_ref = None
+    target.options["key_file"] = str(tmp_path / "fixture-key")
     assert SSHTransport.from_target(target, SimpleNamespace(security_mode="fleet")).security_mode == "fleet"
 
 

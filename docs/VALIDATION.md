@@ -1,12 +1,12 @@
 # Platform validation
 
-Evidence reviewed 2026-11-05. Generated from `validation.json` by `scripts/validation_status.py`.
+Evidence reviewed 2026-11-06. Generated from `validation.json` by `scripts/validation_status.py`.
 
 - Recorded means the repository contains a dated account of a real run. It does not mean this matrix reran that experiment or verified a production deployment.
-- Exact tested commits and some component versions were not captured in the run notes. The evidence commits below identify the write-up, not the binary that ran. Future runs must record both.
+- The older range notes did not capture exact tested application commits and some component versions. A write-up commit is not the binary that ran. Later entries identify a tested application commit and its bounded acceptance scope where recorded.
 - A seed detection score measures the deliberately planted items, not whole-benchmark compliance. See COVERAGE.md for implemented checks and local content mappings.
 - No platform has a complete recorded false-positive review (VAL-02). A successful Linux rollback is evidence for that one fix, not every fix or platform.
-- Native and container deployments remain supported directions. The target matrix below describes what was scanned; it does not imply every deployment-to-target combination has been tested. The UDS package and SSO configuration are merged, while per-user application authorization and target credentials remain open.
+- Native and container deployments remain supported directions. The matrix describes recorded experiments; it does not imply every deployment-to-target combination has been tested. Verified per-account application controls and credential selection are implemented, while intended enclave identity mappings and target-side per-person access acceptance remain open.
 
 | Platform / version | Real run recorded | Date | Seeded detections | Fix flow | Evidence |
 |---|---|---|---|---|---|
@@ -14,6 +14,7 @@ Evidence reviewed 2026-11-05. Generated from `validation.json` by `scripts/valid
 | Podman on Rocky Linux 9 (engine version not recorded) | Yes | 2026-11-04 | 6/6 | Not exercised | [Run notes](../range/README.md#results-first-real-host-run-2026-11-04) |
 | k3s on Rocky Linux 9 (k3s version not recorded) | Yes | 2026-11-04 | 10/10 | Not exercised | [Run notes](../range/README.md#results-first-real-host-run-2026-11-04) |
 | k3d / UDS Core demo cluster on WSL2 | Yes | 2026-11-05 02:21Z | Not scored; 127 findings, no adapter errors | Not exercised | [Run notes](../docs/DEPLOYMENT.md#scanning-the-cluster-from-windows) |
+| Exported UBI 9 nginx-124 image; OpenSCAP 1.3.7 | Yes | 2026-11-06 | Not scored; 393 notapplicable; three RPM database diagnostics | JSON/SQLite import, reports and restart only; no remediation | [Run notes](../docs/CONTAINER_SCAP_LIVE.md) |
 | Windows 11 | No | - | Not measured | Not exercised | [Range instructions](../range/windows/README.md) |
 | Windows Server 2019 | No | - | Not measured | Not exercised | No real-run evidence |
 | Windows Server 2022 | No | - | Not measured | Not exercised | No real-run evidence |
@@ -34,8 +35,9 @@ Evidence reviewed 2026-11-05. Generated from `validation.json` by `scripts/valid
 
 ## Provenance and next evidence
 
-The exact application commit for each run is **not recorded**. Do not substitute the current branch or a documentation commit for it.
+Older runs lack an exact application commit. Do not substitute the current branch or a documentation commit. Recorded application SHAs below apply only to the named acceptance scope.
 
+- Exported UBI 9 nginx-124 image; OpenSCAP 1.3.7: application `0261297db3d1ae1fdbbe7e9595bff8881d9945fd`; Result import, reports, exact-repeat handling and fresh-process persistence.
 - Rocky Linux 9: write-up commit `6ce5a22; scoring correction 3557f9a`.
 - Podman on Rocky Linux 9 (engine version not recorded): write-up commit `6ce5a22; scoring correction 3557f9a`.
 - k3s on Rocky Linux 9 (k3s version not recorded): write-up commit `6ce5a22; scoring correction 3557f9a`.

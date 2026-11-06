@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cyberthunder-identity-preflight
+  namespace: cyberthunder
+data:
+  validate.py: |
+    """Read-only package checks. Never create, copy, chmod or trust policy inputs."""
+    import os
+    import sys
+    from cyberthunder.api.auth import make_session_config, validate_bind
+    from cyberthunder.config import Settings
+    from cyberthunder.control.access import AccessPolicy
+    from cyberthunder.security.oidc import OIDCConfig
+    from cyberthunder.security._oidc_cache import read_cache
+
+    def validate():
+        required = (
+            "CT_AUTH_MODE", "CT_OIDC_ISSUER", "CT_OIDC_AUDIENCE", "CT_OIDC_JWKS_URL",
+            "CT_OIDC_AUTHORIZED_PARTY", "CT_OIDC_CLIENT_ID", "CT_OIDC_ROLES_CLAIM", "CT_OIDC_CLIENT_SECRET_REF",
+            "CT_OIDC_AUTHORIZATION_ENDPOINT", "CT_OIDC_TOKEN_ENDPOINT", "CT_OIDC_REDIRECT_URI",
+        )
+        missing = [name for name in required if not os.environ.get(name, "").strip()]
+        if missing:
+            raise ValueError("missing identity settings: " + ", ".join(missing))
+        settings = Settings.from_env()
+        if settings.auth_mode not in {"oidc", "mesh"} or settings.security_mode != "fleet":
+            raise ValueError("packaged deployment requires verified authentication and fleet security")
+        validate_bind(settings, settings.host)
+        if settings.oidc_audience == settings.oidc_client_id:
+            raise ValueError("API audience and browser client must differ")
+        auth = settings.state_dir.absolute() / "auth"
+        OIDCConfig(settings.oidc_issuer, settings.oidc_audience, settings.oidc_jwks_url,
+                   auth / "jwks.json", authorized_party=settings.oidc_authorized_party)
+        make_session_config(settings, settings.state_dir)
+        try:
+            entries, _ = AccessPolicy(auth / "access.json")._load()
+            if not any(e.issuer == settings.oidc_issuer and (e.node_actions or e.grants) for e in entries):
+                raise ValueError("no configured account")
+            read_cache(auth / "jwks.json")
+            read_cache(auth / "id-jwks.json")
+        except Exception:
+            raise ValueError("provision a protected regular auth/access.json for this issuer and an owned auth directory; see docs/PACKAGE_IDENTITY.md") from None
+
+    if __name__ == "__main__":
+        try:
+            validate()
+        except Exception as error:
+            print("Package identity preflight failed: " + str(error), file=sys.stderr)
+            sys.exit(1)
+        print("Package identity configuration and policy validated; live provider acceptance remains required.")

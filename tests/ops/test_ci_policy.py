@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from scripts.ci_pytest import (
-    MODEL_REASON, SHARING_REASON, UDS_REASON, UDS_TESTS, WINDOWS_IGNORED,
+    MODEL_REASON, SHARING_REASON, UDS_REASON, UDS_TESTS, WINDOWS_IGNORED, WINDOWS_CLEANUP_TESTS,
     RegressionPolicy, expected_skips,
 )
 
@@ -200,8 +200,21 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 32 and len(windows) == 22
-    assert sum(reason == UDS_REASON for reason in linux.values()) == len(UDS_TESTS) == 19
+    assert len(linux) == 127 and len(windows) == 102
+    native_acl = {node: reason for node, reason in linux.items()
+                  if node.startswith("tests/security/test_windows_file_trust.py::")}
+    assert len(native_acl) == 46
+    assert set(native_acl.values()) == {"native Windows security descriptors and file sharing"}
+    assert not any(node.startswith("tests/security/test_windows_file_trust.py::") for node in windows)
+    native_review = {node: reason for node, reason in linux.items()
+                     if node.startswith("tests/security/test_windows_file_trust_review.py::")}
+    assert len(native_review) == 17
+    assert all(node.count("::") == 1 for node in native_acl | native_review)
+    assert "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[parent-2]" in native_acl
+    assert set(native_review.values()) == {"native Windows security descriptors and file sharing"}
+    assert not any(node.startswith("tests/security/test_windows_file_trust_review.py::") for node in windows)
+    assert len(UDS_TESTS) == 19
+    assert UDS_REASON not in linux.values()
     assert sum(reason == SHARING_REASON for reason in linux.values()) == 8
     policy = RegressionPolicy(ROOT, "linux")
     node = next(iter(linux))
@@ -212,6 +225,22 @@ def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     assert [skip["allowed"] for skip in policy.skips] == [True, False]
     with pytest.raises(ValueError, match="Unsupported CI platform"):
         expected_skips("unknown")
+
+
+@pytest.mark.parametrize("platform,node,reason", [
+    ("win32", "tests/test_release_vulnerability_evidence.py::EvidenceTests::test_fifo_is_rejected_without_open", "POSIX special file"),
+    ("linux", "tests/test_release_vulnerability_evidence.py::ProcessTests::test_retained_traceback_cannot_retain_open_process_handle", "Windows native handle lifetime"),
+])
+def test_release_evidence_skips_require_the_exact_native_case(platform, node, reason):
+    other = "linux" if platform == "win32" else "win32"
+    for host, case, detail, accepted in (
+        (platform, node, reason, True), (other, node, reason, False),
+        (platform, node + "_new", reason, False), (platform, node, reason + " changed", False),
+    ):
+        policy = RegressionPolicy(ROOT, host)
+        policy.pytest_runtest_logreport(SimpleNamespace(nodeid=case, when="call", outcome="skipped", skipped=True,
+            longrepr=("file.py", 1, "Skipped: " + detail)))
+        assert policy.skips[0]["allowed"] is accepted
 
 
 @pytest.mark.parametrize("platform,node,reason", [
@@ -275,6 +304,70 @@ def test_missing_real_filesystem_capability_is_not_a_platform_allowance(node, re
         assert any("Unexpected skip" in error for error in policy.errors)
 
 
+@pytest.mark.parametrize("platform,receipt_name,count", [("linux", "linux", 9), ("win32", "windows", 13)])
+def test_node_assessment_allowances_match_native_review_and_refuse_other_cases(platform, receipt_name, count):
+    receipt = json.loads((ROOT / f"docs/node-hardening-review/{receipt_name}.json").read_text())
+    expected = {row["nodeid"]: row["reason"] for row in receipt["assessment_skips"]}
+    actual = {node: reason for node, reason in expected_skips(platform).items()
+              if node.startswith(("tests/security/test_node_hardening.py::",
+                                  "tests/security/test_node_hardening_review.py::"))}
+    assert actual == expected and len(actual) == count
+    other = "linux" if platform == "win32" else "win32"
+    for node, reason in actual.items():
+        for host, candidate, explanation, phase, accepted in (
+            (platform, node, reason, "setup", True),
+            (other, node, reason, "setup", False),
+            (platform, node + "[new]", reason, "setup", False),
+            (platform, node, reason + " changed", "setup", False),
+            (platform, node, reason, "teardown", False),
+        ):
+            policy = RegressionPolicy(ROOT, host)
+            policy.pytest_runtest_logreport(SimpleNamespace(
+                nodeid=candidate, when=phase, outcome="skipped", skipped=True,
+                longrepr=("file.py", 1, "Skipped: " + explanation),
+            ))
+            assert policy.skips[0]["allowed"] is accepted
+            assert bool(policy.errors) is not accepted
+
+
+@pytest.mark.parametrize("platform,count", [("linux", 6), ("win32", 44)])
+def test_credential_skip_allowances_match_native_receipts_and_fail_closed(platform, count):
+    receipt = json.loads((ROOT / "docs/credential-resolver-review/platform-skips.json").read_text())
+    expected = receipt["platforms"][platform]["skips"]
+    modules = ("tests/security/test_secret_mounts_posix.py::",
+               "tests/security/test_secret_resolver.py::",
+               "tests/security/test_wincred_resolver.py::")
+    actual = {node: reason for node, reason in expected_skips(platform).items()
+              if node.startswith(modules)}
+    assert actual == expected and len(actual) == count
+    other = "linux" if platform == "win32" else "win32"
+    for node, reason in actual.items():
+        for host, candidate, explanation, phase, accepted in (
+            (platform, node, reason, "setup", True),
+            (other, node, reason, "setup", False),
+            (platform, node + "[new]", reason, "setup", False),
+            (platform, node, reason + " changed", "setup", False),
+            (platform, node, reason, "teardown", False),
+        ):
+            policy = RegressionPolicy(ROOT, host)
+            policy.pytest_runtest_logreport(SimpleNamespace(
+                nodeid=candidate, when=phase, outcome="skipped", skipped=True,
+                longrepr=("file.py", 1, "Skipped: " + explanation),
+            ))
+            assert policy.skips[0]["allowed"] is accepted
+            assert bool(policy.errors) is not accepted
+
+
+@pytest.mark.parametrize("platform,count", [("linux", 1), ("win32", 5)])
+def test_operator_skip_allowances_match_native_receipts(platform, count):
+    receipt = json.loads((ROOT / "docs/operator-platform-skips.json").read_text())
+    actual = {node: reason for node, reason in expected_skips(platform).items()
+              if node.startswith(("tests/audit/test_anchor_review.py::", "tests/client/"))}
+    assert actual == receipt["skips"][platform] and len(actual) == count
+    other = "linux" if platform == "win32" else "win32"
+    assert not set(actual).intersection(expected_skips(other))
+
+
 def test_workflow_has_read_only_triggers_full_matrix_and_immutable_actions():
     workflow = yaml.safe_load((ROOT / ".github/workflows/regression.yml").read_text(encoding="utf-8"))
     # PyYAML's YAML 1.1 loader reads the unquoted Actions key 'on' as True.
@@ -298,3 +391,91 @@ def test_workflow_has_read_only_triggers_full_matrix_and_immutable_actions():
             action, sha = step["uses"].split("@")
             assert action in {"actions/checkout", "actions/setup-python", "actions/setup-node", "actions/upload-artifact"}
             assert len(sha) == 40 and all(char in "0123456789abcdef" for char in sha)
+
+
+@pytest.mark.parametrize("platform,count", [("linux", 1), ("win32", 3)])
+def test_scap_import_skips_match_review_receipts(platform, count):
+    receipt = json.loads((ROOT / "docs/scap-import-platform-skips.json").read_text())
+    actual = {node: reason for node, reason in expected_skips(platform).items()
+              if node.startswith("tests/ingest/test_scap_review.py::")}
+    assert actual == receipt["skips"][platform] and len(actual) == count
+    common = set(expected_skips("linux")) & set(actual)
+    if platform == "win32":
+        assert common == {"tests/ingest/test_scap_review.py::test_database_writer_wait_rechecks_authority[json]"}
+
+
+@pytest.mark.parametrize("platform,count", [("linux", 14), ("win32", 13)])
+def test_ssh_key_skip_policy_matches_opposite_platform_evidence(platform, count):
+    rows = json.loads((ROOT / "docs/ssh-key-platform-skips.json").read_text())
+    source_platform = "windows" if platform == "win32" else platform
+    selected = [row for row in rows if row["skip_on"] == source_platform]
+    expected = {row["nodeid"]: row["reason"] for row in selected}
+    actual = {node: reason for node, reason in expected_skips(platform).items()
+              if node.startswith("tests/security/test_ssh_key_credentials.py::")}
+    assert actual == expected and len(selected) == len(actual) == count
+    opposite = "linux" if platform == "win32" else "win32"
+    for row in selected:
+        assert row["passes_on"] == ("linux" if opposite == "linux" else "windows")
+        assert len(row["evidence_sha256"]) == 64
+        assert row["nodeid"] not in expected_skips(opposite)
+    for node, reason in actual.items():
+        for host, candidate, explanation, phase, accepted in (
+            (platform, node, reason, "setup", True),
+            (opposite, node, reason, "setup", False),
+            (platform, node + "[new]", reason, "setup", False),
+            (platform, node, reason + " changed", "setup", False),
+            (platform, node, reason, "teardown", False),
+        ):
+            policy = RegressionPolicy(ROOT, host)
+            policy.pytest_runtest_logreport(SimpleNamespace(
+                nodeid=candidate, when=phase, outcome="skipped", skipped=True,
+                longrepr=("file.py", 1, "Skipped: " + explanation),
+            ))
+            assert policy.skips[0]["allowed"] is accepted
+            assert bool(policy.errors) is not accepted
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_scan_writer_skip_does_not_allow_sqlite_or_changed_cases(platform):
+    node = "tests/scan_workers/test_review.py::test_sqlite_writer_admission_rechecks_authority[json]"
+    reason = "SQLite writer admission is specific to the SQLite backend"
+    assert expected_skips(platform)[node] == reason
+    for candidate, explanation, phase, accepted in (
+        (node, reason, "call", True),
+        (node.replace("[json]", "[sqlite]"), reason, "call", False),
+        (node + "[new]", reason, "call", False),
+        (node, reason + " changed", "call", False),
+        (node, reason, "teardown", False),
+    ):
+        policy = RegressionPolicy(ROOT, platform)
+        policy.pytest_runtest_logreport(SimpleNamespace(
+            nodeid=candidate, when=phase, outcome="skipped", skipped=True,
+            longrepr=("file.py", 1, "Skipped: " + explanation),
+        ))
+        assert policy.skips[0]["allowed"] is accepted
+        assert bool(policy.errors) is not accepted
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_windows_cleanup_skips_are_exact_and_never_allow_teardown_or_missing_capability(platform):
+    prefix = "tests/test_windows_acl_cleanup.py::"
+    reason = "native Windows read-only attributes and reparse points"
+    nodes = {prefix + name for name in WINDOWS_CLEANUP_TESTS}
+    assert len(nodes) == 17
+    actual = {node for node in expected_skips(platform) if node.startswith(prefix)}
+    assert actual == (nodes if platform == "linux" else set())
+    for node in nodes:
+        for candidate, explanation, phase, accepted in (
+            (node, reason, "setup", platform == "linux"),
+            (node + "[new]", reason, "setup", False),
+            (node, reason + " changed", "setup", False),
+            (node, "native link creation unavailable", "call", False),
+            (node, reason, "teardown", False),
+        ):
+            policy = RegressionPolicy(ROOT, platform)
+            policy.pytest_runtest_logreport(SimpleNamespace(
+                nodeid=candidate, when=phase, outcome="skipped", skipped=True,
+                longrepr=("file.py", 1, "Skipped: " + explanation),
+            ))
+            assert policy.skips[0]["allowed"] is accepted
+            assert bool(policy.errors) is not accepted

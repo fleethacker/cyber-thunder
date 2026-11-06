@@ -16,7 +16,7 @@ jobs:
   regression:
     name: Regression (${{ matrix.os }}, JSON + SQLite)
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -50,6 +50,13 @@ jobs:
       - name: Install Python test dependencies
         run: python -m pip install -e '.[dev]'
 
+      - name: Acquire pinned UDS for Linux rendering tests
+        if: runner.os == 'Linux'
+        run: |
+          python scripts/ci_setup_uds.py --directory "$RUNNER_TEMP/ct-ci-uds"
+          "$RUNNER_TEMP/ct-ci-uds/uds" version
+          echo "$RUNNER_TEMP/ct-ci-uds" >> "$GITHUB_PATH"
+
       - name: Check committed whitespace before generating UI assets
         run: git show --check --format= HEAD
 
@@ -69,6 +76,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/gate.sh
 
+      - name: Record partial release inventory
+        run: |
+          mkdir -p .build/release-inventory
+          python scripts/release_inventory.py --repo . --output .build/release-inventory/release.cdx.json --receipt .build/release-inventory/release.receipt.json
+
       - name: Preserve test and skip-policy reports
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -77,6 +89,8 @@ jobs:
           path: |
             .build/ci/pytest.xml
             .build/ci/policy.json
+            .build/release-inventory/release.cdx.json
+            .build/release-inventory/release.receipt.json
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14

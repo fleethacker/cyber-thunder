@@ -27,7 +27,7 @@ def policy_file(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": 1, "entries": [{"issuer": "https://id.example", "subject": "alice",
                     "node_actions": ["read"], "grants": [{"actions": sorted(access.ACTIONS - access.NODE_ONLY_ACTIONS),
-                                                           "target_ids": ["host-a"]}]}]}),
+                                                           "target_ids": ["host-a"], "environments": ["default"]}]}]}),
                     encoding="utf-8")
     if os.name == "posix":
         path.chmod(0o600)
@@ -57,7 +57,11 @@ def test_trusted_file_content_digest_and_scope_predicate_preserved(tmp_path):
     entries, digest = policy._load()
     assert entries and digest == hashlib.sha256(policy.path.read_bytes()).hexdigest()
     target = SimpleNamespace(id="host-a", environment="default", in_scope=False)
-    restricted = {"scan", "discover", "propose", "approve", "plan", "apply", "rollback", "verify"}
+    # Risk acceptance records a decision under the fixture's exact account/target/
+    # environment grant; it does not scan or change the out-of-scope target.
+    # A maintenance override can authorize execution scheduling, so remains blocked.
+    restricted = {"scan", "discover", "propose", "approve", "plan", "apply", "rollback", "verify",
+                  "maintenance.override"}
     for action in access.ACTIONS - access.NODE_ONLY_ACTIONS:
         assert policy.allows(principal(), action, target) is (action not in restricted)
     for flag in (None, 0, 1, "false"):

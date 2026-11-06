@@ -41,7 +41,11 @@ Saving recomputes the preview and stores ordinary effective CIDRs through the ex
 
 ## API
 
-All paths are under `/api/v1`. Save, registration and explicit connection testing use the application's existing named-human `X-Actor` requirement; this remains a typed identity rather than cryptographically verified identity.
+All paths are under `/api/v1`. In verified mode, authentication supplies the acting
+principal; role and node/target grants control saves, registration and connection
+tests. A connection also needs an explicit current account binding and an in-scope
+target. `X-Actor` supplies unverified attribution only in loopback development mode.
+See [account access](ACCOUNT_ACCESS.md); signing in alone does not grant access.
 
 | Method | Path | Behavior |
 |---|---|---|
@@ -49,7 +53,7 @@ All paths are under `/api/v1`. Save, registration and explicit connection testin
 | POST | `/targets/register-host` | Explicit OS/transport/address/account/reference/scope/reason; returns Target, 201 |
 | GET | `/targets/{id}/readiness` | Declaration checks with `ready_for_connection_test`; no connection |
 | POST | `/targets/{id}/discover` | Explicit authorized connection test; returns existing AssetFacts |
-| POST | `/discovery/scopes/preview` | Include/exclude normalization and exact counts; no actor required or state change |
+| POST | `/discovery/scopes/preview` | Include/exclude normalization and exact counts; no state change or typed actor, but verified authentication still applies |
 | PUT | `/discovery/scopes/ranges` | Same input plus required reason; returns `{scopes, preview}` |
 
 Registration requires `id`, `name`, `asset_type`, `transport`, `address`, `username`, `credential_ref`, `in_scope` and `reason`; optional fields are `port` and `sudo` (default false). Reasons are limited to 1,000 characters. Range requests use `include`, optional `exclude`, `allow_public` and `scanner_target`; saves additionally require `reason`.

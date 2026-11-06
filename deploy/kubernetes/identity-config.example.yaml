@@ -1,0 +1,23 @@
+# Copy and fill every empty value. This file deliberately cannot start the app.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cyberthunder-identity
+  namespace: cyberthunder
+data:
+  CT_AUTH_MODE: oidc
+  CT_OIDC_ISSUER: ""
+  CT_OIDC_AUDIENCE: cyber-thunder-api
+  CT_OIDC_JWKS_URL: ""
+  CT_OIDC_AUTHORIZED_PARTY: cyber-thunder-app
+  CT_OIDC_CLIENT_ID: cyber-thunder-app
+  CT_OIDC_ROLES_CLAIM: ct_roles
+  CT_OIDC_AUTHORIZATION_ENDPOINT: ""
+  CT_OIDC_TOKEN_ENDPOINT: ""
+  CT_OIDC_REDIRECT_URI: ""
+  CT_OIDC_SCOPE: openid
+  # Fill from the actual realm policy. Empty refuses risky actions after sign-in.
+  CT_STEP_UP_ACR_VALUES: "[]"
+  CT_STEP_UP_MAX_AGE_SECONDS: "300"
+  CT_TLS_CERT: /etc/cyberthunder-tls/tls.crt
+  CT_TLS_KEY: /etc/cyberthunder-tls/tls.key

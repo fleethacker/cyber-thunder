@@ -11,9 +11,11 @@ from starlette.routing import compile_path
 
 from cyberthunder.control.principal import Principal, principal_scope, operation_scope
 from cyberthunder.control.roles import permissions, permits, route_action
+from cyberthunder.security.step_up import StepUpPolicy, StepUpRequired, require_step_up, freshness_clock
 
 
 def mode_for(settings) -> str:
+    StepUpPolicy.from_settings(settings)
     mode = getattr(settings, "auth_mode", "dev")
     profile = getattr(settings, "security_mode", "range")
     if mode not in {"dev", "oidc", "mesh"} or profile not in {"range", "fleet"}:
@@ -65,7 +67,8 @@ def make_session_config(settings, state_dir: Path):
             jwks_url=settings.oidc_jwks_url, cache_path=state_dir.absolute() / "auth" / "id-jwks.json",
             max_age_s=settings.oidc_jwks_max_age, authorized_party=values[0]),
         client_secret_ref=settings.oidc_client_secret_ref, scope=settings.oidc_scope,
-        idle_timeout_s=settings.session_idle_seconds, absolute_timeout_s=settings.session_absolute_seconds)
+        idle_timeout_s=settings.session_idle_seconds, absolute_timeout_s=settings.session_absolute_seconds,
+        step_up_max_age_s=settings.step_up_max_age_s, step_up_acr_values=settings.step_up_acr_values)
 
 
 class AuthenticationMiddleware:
@@ -73,11 +76,12 @@ class AuthenticationMiddleware:
         self.app, self.ctx, self.routes, self.mode, self.validator = app, ctx, routes, mode, validator
         self.sessions = sessions
 
-    def _refusal(self, action: str, route: str, reason: str, principal=None) -> None:
+    def _refusal(self, action: str, route: str, reason: str, principal=None, challenge=None) -> None:
         # Never include request headers, query strings, tokens, bodies, or validator exceptions.
         with principal_scope(principal):
             self.ctx.audit.append("authorization.denied", principal.actor if principal else "unverified",
-                                  {"action": action, "route": route, "reason": reason}, outcome="rejected")
+                                  {"action": action, "route": route, "reason": reason,
+                                   **({"step_up": challenge} if challenge is not None else {})}, outcome="rejected")
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or not scope.get("path", "").startswith("/api/") or self.mode == "dev":
@@ -128,6 +132,20 @@ class AuthenticationMiddleware:
             elif not permits(principal, action):
                 reason, code = "role does not permit this action", 403
             else:
+                # Preflight also covers batch routes that report per-item exceptions.
+                # The core repeats this check alongside current resource authorization.
+                try:
+                    require_step_up(self.ctx.settings, principal, action, clock=freshness_clock(self.ctx))
+                except StepUpRequired as exc:
+                    from cyberthunder.api.errors import error_response
+                    try:
+                        await run_in_threadpool(self._refusal, action, route_path, "step-up required", principal, exc.challenge())
+                        response = error_response(exc)
+                    except Exception:
+                        response = JSONResponse({"detail": "authorization audit unavailable"}, status_code=503,
+                                                headers={"Cache-Control": "no-store"})
+                    await response(scope, receive, send)
+                    return
                 scope.setdefault("state", {})["principal"] = principal
                 async def private_send(message):
                     if message["type"] == "http.response.start":

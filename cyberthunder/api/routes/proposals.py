@@ -15,6 +15,7 @@ from cyberthunder.api.schemas import (ApplyBody, ApprovalBody, AssessmentReviewB
                                      BulkBody, ImpactBody, NoteBody)
 from cyberthunder.api.util import ActorDep, CtxDep, proposal_plus
 from cyberthunder.control.approvals import IllegalTransition, ProposalState
+from cyberthunder.security.step_up import StepUpRequired, ERROR as STEP_UP_ERROR
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["proposals"], route_class=MappedRoute)
@@ -71,6 +72,10 @@ def bulk(body: BulkBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
             p = _decide(ctx, pid, body.action, actor, body.note)
             results.append({"id": pid, "state": p.state.value})
         except Exception as e:  # noqa: BLE001  each id reports its own outcome
+            if isinstance(e, StepUpRequired):
+                results.append({"id": pid, "error": str(e), "status": 401,
+                                "code": STEP_UP_ERROR, "step_up": e.challenge()})
+                continue
             mapped = status_for(e)
             if mapped is None:
                 log.exception("bulk %s failed on %s", body.action, pid)
@@ -164,7 +169,10 @@ def apply(pid: str, body: ApplyBody | None = None, ctx=CtxDep, actor: str = Acto
     from cyberthunder.control.policy import assurance_block_reason
     finding = util.get_finding(ctx, p.finding_id)
     reason = None
-    if ReviewService(ctx).summary(finding)["suppressed"]:
+    review = ReviewService(ctx).summary(finding)
+    if review["remediation_held"]:
+        reason = "Risk acceptance holds remediation; revoke it or wait for expiry or reopened evidence"
+    elif review["suppressed"]:
         reason = "The finding has an active review suppression; reopen its review before applying"
     elif (p.decided_by or "").startswith("policy:"):
         reason = assurance_block_reason(ctx, finding)
@@ -173,14 +181,18 @@ def apply(pid: str, body: ApplyBody | None = None, ctx=CtxDep, actor: str = Acto
                          subject=p.id, outcome="blocked")
         raise HTTPException(409, reason)
     body = body or ApplyBody()
+    from cyberthunder.remediation.maintenance import MaintenanceService
+    override = body.maintenance_override.model_dump() if body.maintenance_override is not None else None
+    maintenance = MaintenanceService(ctx).guard(p, actor=actor, override=override, boundary="request")
     # The demo toggle is consumed only when the request does not ask for a forced failure itself.
     simulate = True if body.simulate_verify_fail else _demo_forces_failure(ctx)
 
     from_toggle = simulate and not body.simulate_verify_fail
 
     def work() -> None:
-        with feature("remediation engine"):
-            ctx.engine.execute(pid, actor=actor, simulate_verify_fail=simulate)
+        with feature("remediation engine"), MaintenanceService(ctx).request_observation(pid, maintenance):
+            options = {"maintenance_override": override} if override is not None else {}
+            ctx.engine.execute(pid, actor=actor, simulate_verify_fail=simulate, **options)
 
     try:
         util.run_background(work, f"apply-{pid}")

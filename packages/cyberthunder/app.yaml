@@ -3,6 +3,7 @@ kind: ServiceAccount
 metadata:
   name: cyberthunder
   namespace: cyberthunder
+automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -10,10 +11,10 @@ metadata:
   name: cyberthunder-readonly
 rules:
   - apiGroups: [""]
-    resources: ["namespaces", "nodes", "nodes/proxy", "pods", "serviceaccounts", "services"]
+    resources: ["namespaces", "nodes", "pods", "serviceaccounts", "services"]
     verbs: ["get", "list"]
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
     verbs: ["get", "list"]
   - apiGroups: ["batch"]
     resources: ["cronjobs", "jobs"]
@@ -84,6 +85,8 @@ metadata:
   namespace: cyberthunder
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: cyberthunder
@@ -93,11 +96,12 @@ spec:
         app.kubernetes.io/name: cyberthunder
     spec:
       serviceAccountName: cyberthunder
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
-        fsGroup: 1000
+        # Provision protected PVC ownership for this image's UID; do not add fsGroup.
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -107,7 +111,21 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: cyberthunder-identity
+                optional: false
           env:
+            - name: CT_SECURITY_MODE
+              value: fleet
+            - name: CT_OIDC_CLIENT_SECRET_REF
+              value: BROWSER_LOGIN
+            - name: CT_CRED_BROWSER_LOGIN
+              valueFrom:
+                secretKeyRef:
+                  name: cyberthunder-oidc-client
+                  key: client-secret
+                  optional: false
             - name: CT_STATE_DIR
               value: /var/lib/cyberthunder
             - name: HOME
@@ -138,15 +156,18 @@ spec:
                   optional: true
             - name: CT_OPENAI_MODEL
               value: gpt-4o-mini
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
           readinessProbe:
-            httpGet:
-              path: /api/v1/status
+            tcpSocket:
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
-            httpGet:
-              path: /api/v1/status
+            tcpSocket:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 30
@@ -157,10 +178,16 @@ spec:
               drop:
                 - ALL
           volumeMounts:
+            - name: application-tls
+              mountPath: /etc/cyberthunder-tls
+              readOnly: true
             - name: state
               mountPath: /var/lib/cyberthunder
             - name: kubeconfig
               mountPath: /etc/cyberthunder
+              readOnly: true
+            - name: cluster-credentials
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
             - name: tmp
               mountPath: /tmp
@@ -170,7 +197,45 @@ spec:
               memory: 512Mi
             limits:
               memory: 2Gi
+      initContainers:
+        - name: identity-preflight
+          image: ghcr.io/fleethacker/cyberthunder:0.2.0
+          imagePullPolicy: IfNotPresent
+          command: [python, /etc/package-identity/validate.py]
+          envFrom:
+            - configMapRef:
+                name: cyberthunder-identity
+                optional: false
+          env:
+            - name: CT_OIDC_CLIENT_SECRET_REF
+              value: BROWSER_LOGIN
+            - name: CT_STATE_DIR
+              value: /var/lib/cyberthunder
+            - name: CT_HOST
+              value: 0.0.0.0
+            - name: CT_SECURITY_MODE
+              value: fleet
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/cyberthunder
+              readOnly: true
+            - name: identity-preflight
+              mountPath: /etc/package-identity
+              readOnly: true
       volumes:
+        - name: identity-preflight
+          configMap:
+            name: cyberthunder-identity-preflight
+        - name: application-tls
+          secret:
+            secretName: cyberthunder-tls
+            optional: true
+            defaultMode: 0444
         - name: state
           persistentVolumeClaim:
             claimName: cyberthunder-state
@@ -182,6 +247,17 @@ spec:
                 path: kubeconfig
         - name: tmp
           emptyDir: {}
+        - name: cluster-credentials
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
 ---
 apiVersion: v1
 kind: Service
@@ -193,5 +269,5 @@ spec:
     app.kubernetes.io/name: cyberthunder
   ports:
     - name: http
-      port: 8000
+      port: 80
       targetPort: http

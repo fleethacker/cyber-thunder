@@ -81,11 +81,13 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/scans/{id}` | → ScanRun |
 
 ## Findings
-| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&category&benchmark&benchmark_release&confidence&review&q&sort_by&sort_dir&limit=200&offset=0` → `{findings: [Finding+], total, unfiltered_total, scan_id, view, summary, facets, sort_by, sort_dir, limit, offset}`. Filters and sorting run before pagination; see query contract below |
+| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&category&benchmark&benchmark_release&confidence&review&reassessment&q&sort_by&sort_dir&limit=200&offset=0` → `{findings: [Finding+], total, unfiltered_total, scan_id, view, summary, facets, sort_by, sort_dir, limit, offset}`. Filters and sorting run before pagination; see query contract below |
 |---|---|---|
 | GET | `/findings/{id}` | → Finding+ |
 | GET | `/findings/{id}/review` | `?scan_id` optional historical view → summary and ordered review history |
 | PUT | `/findings/{id}/review` | `{disposition, reason, supporting_evidence?, expires_at?, expected_revision, evidence_fingerprint}` → summary and history. Current findings only; stale revision/evidence returns `409`, historical writes `400` |
+| PUT | `/findings/{id}/risk-acceptance` | `{reason, supporting_evidence, expires_at, expected_revision, evidence_fingerprint}` → review history. Explicit current account/target/environment `risk.accept` grant and fresh human authentication; expiry at most 30 days |
+| POST | `/findings/{id}/risk-acceptance/revoke` | `{reason, expected_revision, evidence_fingerprint}` → review history; the same current authority is required. Historical writes are refused |
 | POST | `/findings/{id}/propose` | → Proposal+ (`409` if a live proposal or active review suppression exists, `404` if no library fix) |
 | POST | `/findings/{id}/explain` | `{force?: bool}` → Explanation (synchronous; may take up to `CT_LLM_TIMEOUT`) |
 | POST | `/findings/explain` | `{ids?: [..]}` → `{queued: n}`; background precompute, default = all open findings of the latest scan |
@@ -110,18 +112,33 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
   references, rule identifiers, scanner provenance and STIG benchmark names, not title keywords.
   See [FINDINGS.md](FINDINGS.md) for classification details.
 - `confidence` accepts `high`, `medium`, `low`, `unknown`; `review` accepts `unreviewed`, `confirmed`,
-  `false_positive`, `not_applicable`, `needs_investigation`. The review facet is independent of scanner status.
+  `false_positive`, `not_applicable`, `needs_investigation`, `risk_accepted`, `risk_expired`,
+  `risk_reopened` and `risk_revoked`. The review facet is independent of scanner status.
+  Risk status facets can overlap the effective ordinary disposition and must not be summed as disjoint counts.
+- `reassessment` accepts `not_reassessed`, `no_known_gap`, `unknown`, with CSV OR semantics.
+  These are the exact read-only [reassessment annotations](FINDING_REASSESSMENT.md), derived for
+  every authorized observation before filtering/pagination. No known gap does not establish freshness,
+  complete coverage, or a current pass. Named history retains its whole-run read boundary and cutoff.
+  Revoked history during query/page reads rebuilds counts and selection; revoked off-page finding
+  authority removes that contributor and rebuilds summary/facets too. Revoked page authority fails closed.
+  History is checked again after page authorization reads, even if every observation remains readable.
+  At most four attempts rebuild the query; continuing authority changes return `409` with a sanitized
+  string `detail` and no findings, counts, or facets. The caller may retry the query.
 - `q` is a case-insensitive substring of title, machine/host ID, rule ID, rule version, group ID,
   reference identifiers (including CVEs and STIGs), source, benchmark, or release.
 - `sort_by` accepts `default`, `severity`, `host`, `asset_type`, `category`, `title`, `rule_id`,
-  `rule_version`, `source`, `collected_at`, `benchmark`, `benchmark_release`, `confidence`, `review`.
+  `rule_version`, `source`, `collected_at`, `observed_at`, `benchmark`, `benchmark_release`, `confidence`, `review`.
   `sort_dir` is `asc` (default) or `desc`. The omitted/default sort preserves severity descending,
   open first, host, then rule version or rule ID; it accepts only `asc` as its direction token.
-  Explicit sorts use case-insensitive text, numeric severity, UTC-normalized observation time,
+  Explicit sorts use case-insensitive text, numeric severity, UTC-normalized timestamps,
   or the alphabetically sorted tuple of category names. Ties use finding ID ascending in either
   direction. Missing/invalid values, including unknown severity, come last for explicit sorts.
+  `observed_at` sorts the helper's `reassessment.observation.observed_at` rather than `collected_at`;
+  unknown or timezone-free observation times remain last in either direction, with ID ties ascending.
+  `collected_at` keeps the existing collection-time behavior.
   Confidence orders Low/Medium/High with Unknown last in either direction; review orders Unreviewed,
-  Needs investigation, Confirmed, False positive, Not applicable.
+  Needs investigation, Confirmed, False positive, Not applicable, Risk accepted.
+  Expired/reopened/revoked risk filters retain their ordinary effective disposition for sorting.
 - `total` remains the filtered count. `unfiltered_total`, `summary`, and `facets` describe the complete
   selected view before filters or pagination. `facets` has one key per filter axis, each containing
   `{value, label, count}` entries. Values are normalized filter tokens, labels retain source spelling,
@@ -177,6 +194,14 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/policy/evaluate` | `{proposal_id}` → PolicyDecision |
 
 ## Ingest and the constrained link
+
+`POST /ingest/scap-results` imports existing container OS XCCDF observations using
+a bounded JSON envelope containing `xml_base64` and an explicit target/evaluation
+manifest. Verified callers need node import and destination import/read grants;
+human and workload principals follow the same configured import authority.
+The response includes coverage and source hashes, and persisted findings use the
+existing findings/report APIs. No scanner executes and platform applicability
+remains unverified. See [SCAP_RESULTS](SCAP_RESULTS.md) for the exact contract.
 | GET | `/ingest/link` | → production/test mode, offline override, endpoint reachability, bounded observations and optional observed application rate. Configured kbps/latency are null in production. `connected` is attempt permission, including unknown. See [LINK.md](LINK.md) |
 |---|---|---|
 | PUT | `/ingest/link` | `{mode?, offline_override?, kbps?, latency_ms?, connected?, probe_enabled?, probe_endpoint?}`. Numeric inputs require test mode; probes default off and expire after 15 minutes. Audit `link.change`. Kill-switch guarded. |
@@ -193,7 +218,7 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/ingest/updates/jobs/{id}` | → the pull job with per-file progress; `404` if unknown |
 | GET | `/ingest/content` | → `HeldContent` `{files: [HeldRecord], products, scap: [{product_key, filename, datastream_path}], quarantine, dir}`. HeldRecord includes `filename`, `product_key`, `kind`, `version`, `version_label`, `upload_date`, `sha256`, `etag`, `bytes`, `url`, `fetched_at`, `fetched_by`, `source`, and `ingest: {delta_id?, catalog_path?, datastream_path?, upload?}`. New upload records use `ingest.upload.imported_at/imported_by` with null fetch fields; duplicate bytes return the existing record without changing its provenance |
 | POST | `/ingest/manifest` | → `{generated_at, node, items: [{filename, url, product_key, kind, version, expected_bytes?, expected_etag?}], path, sha256}` for missing updates matching saved subscriptions, written to `<state>/content/manifest.json`. Audit `content.manifest` |
-| POST | `/ingest/import-dir` | `{path}` (a folder on this node) → `{imported, refused: [{filename, reason}], skipped, missing, verified_by, deltas}`; named actor required, kill-switch guard before starting and between files (`423`); invalid body `400`. Lock-file entries are verified against `manifest.lock.json`. Audit `content.import`, `content.quarantine` |
+| POST | `/ingest/import-dir` | `{path, publication_intent?}` (a folder on this node) → `{imported, refused: [{filename, reason}], skipped, missing, verified_by, deltas}` with additive partial/commit status. Authentication, import authority and kill-switch checks apply; lock-file entries are verified against `manifest.lock.json`. Exceptional publication returns a bounded `409` review and needs a separate verified-human, fresh admin decision bound to the current generation and exact candidate; see [CONTENT_PUBLICATION](CONTENT_PUBLICATION.md). Each package commits independently |
 
 Folder imports route raw XML with no lock-file entry and unrecognized content kind through the validated
 upload helper (32 MiB per file). New records use `source: "uploaded"` and `ingest.upload` import metadata;
@@ -206,7 +231,7 @@ existing checks and `source: "imported"`. Previously accepted files remain if th
 |---|---|---|
 | GET | `/ingest/library` | → library view below; local reads only, no network requests or writes |
 | PUT | `/ingest/library/preferences` | complete preference body below → saved preferences with new `revision`, `updated_at`, `updated_by`; named actor required, audit `content.preferences`. `400` invalid body, `423` kill-switch guard, `409` stale revision; saves only, never downloads |
-| POST | `/ingest/content/upload` | multipart `file`, exactly one supported XML or ZIP benchmark package, at most 32 MiB → `201 {record: HeldRecord, delta: PullDelta\|null}`. Named actor required, kill-switch guarded; works offline. `400` invalid content, `413` size limit, `423` kill switch |
+| POST | `/ingest/content/upload` | multipart `file`, exactly one supported XML or ZIP benchmark package, at most 32 MiB, and optional JSON text `publication_intent` → `201 {record: HeldRecord, delta: PullDelta\|null}` with generation/active/commit status. Existing authenticity requirements, import authority and kill-switch checks apply; works offline. `400` invalid content, `413` size limit, `423` kill switch; bounded `409` publication review requires explicit confirmation as described in [CONTENT_PUBLICATION](CONTENT_PUBLICATION.md) |
 
 The library response contains:
 

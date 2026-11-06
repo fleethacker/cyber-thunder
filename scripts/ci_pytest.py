@@ -18,7 +18,7 @@ WINDOWS_IGNORED = frozenset({
 MODEL_REASON = "set CT_TEST_LLM=1 to test against a local model server"
 SHARING_REASON = "requires Windows file sharing semantics"
 UDS_REASON = "UDS CLI is required for configuration and payload rendering."
-# Exact names: a new test in this class must not silently inherit an allowance.
+# Former skip IDs retained for coverage and missing-tool enforcement tests.
 UDS_TESTS = (
     "test_normal_deployment_excludes_identity_and_credentials",
     "test_dev_deployment_selects_bootstrap_and_prints_credentials",
@@ -40,6 +40,250 @@ UDS_TESTS = (
     "test_standalone_setup_rejects_other_contexts_before_creating_password",
     "test_standalone_setup_rejects_arguments",
 )
+
+
+# Native ACL tests execute on Windows; each Linux skip is named explicitly.
+WINDOWS_FILE_TRUST_TESTS = (
+    "test_cache_integrity_allows_readers_and_rejects_writer_or_replacement",
+    "test_child_creation_is_safe_for_existing_reads_but_not_cache_creation",
+    "test_dacl_change_after_read_invalidates_the_operation",
+    "test_deny_ace_does_not_make_a_dangerous_allow_acceptable",
+    "test_external_kube_public_certificates_and_private_key_have_distinct_rules",
+    "test_file_mutation_granted_to_everyone_is_rejected[1073741824]",
+    "test_file_mutation_granted_to_everyone_is_rejected[16]",
+    "test_file_mutation_granted_to_everyone_is_rejected[256]",
+    "test_file_mutation_granted_to_everyone_is_rejected[262144]",
+    "test_file_mutation_granted_to_everyone_is_rejected[268435456]",
+    "test_file_mutation_granted_to_everyone_is_rejected[2]",
+    "test_file_mutation_granted_to_everyone_is_rejected[4]",
+    "test_file_mutation_granted_to_everyone_is_rejected[524288]",
+    "test_file_mutation_granted_to_everyone_is_rejected[65536]",
+    "test_fixture_is_genuinely_protected_and_checks_private_bytes",
+    "test_group_membership_or_unknown_sid_cannot_grant_file_mutation[S-1-5-11]",
+    "test_group_membership_or_unknown_sid_cannot_grant_file_mutation[S-1-5-21-100-200-300-4444]",
+    "test_group_membership_or_unknown_sid_cannot_grant_file_mutation[S-1-5-32-545]",
+    "test_handles_prevent_file_and_parent_replacement_and_data_writes",
+    "test_inherit_only_grant_is_checked_on_new_cache_file_before_write",
+    "test_junction_created_between_checks_and_open_is_rejected",
+    "test_kubeconfig_confidentiality_and_guard_recheck",
+    "test_native_api_unavailable_fails_closed_for_policy_and_cache",
+    "test_null_dacl_and_unsupported_object_ace_are_rejected",
+    "test_owner_must_be_in_the_trusted_sid_set",
+    "test_owner_rights_is_only_accepted_for_a_checked_trusted_owner",
+    "test_parent_mutation_including_delete_child_is_rejected[grandparent-16]",
+    "test_parent_mutation_including_delete_child_is_rejected[grandparent-256]",
+    "test_parent_mutation_including_delete_child_is_rejected[grandparent-262144]",
+    "test_parent_mutation_including_delete_child_is_rejected[grandparent-2]",
+    "test_parent_mutation_including_delete_child_is_rejected[grandparent-524288]",
+    "test_parent_mutation_including_delete_child_is_rejected[grandparent-64]",
+    "test_parent_mutation_including_delete_child_is_rejected[grandparent-65536]",
+    "test_parent_mutation_including_delete_child_is_rejected[parent-16]",
+    "test_parent_mutation_including_delete_child_is_rejected[parent-256]",
+    "test_parent_mutation_including_delete_child_is_rejected[parent-262144]",
+    "test_parent_mutation_including_delete_child_is_rejected[parent-2]",
+    "test_parent_mutation_including_delete_child_is_rejected[parent-524288]",
+    "test_parent_mutation_including_delete_child_is_rejected[parent-64]",
+    "test_parent_mutation_including_delete_child_is_rejected[parent-65536]",
+    "test_policy_dacl_change_during_parse_invalidates_decision",
+    "test_public_read_is_allowed_but_private_data_read_is_not",
+    "test_replacement_between_policy_lstat_and_native_open_is_rejected",
+    "test_windows_path_aliases_are_rejected[ ]",
+    "test_windows_path_aliases_are_rejected[.]",
+    "test_windows_path_aliases_are_rejected[:stream]",
+)
+
+
+WINDOWS_CLEANUP_TESTS = (
+    "test_remove_root_removes_native_readonly_git_object",
+    "test_cleanup_refuses_unregistered_root_before_rmtree",
+    "test_readonly_retry_refuses_paths_outside_its_registered_root[other-root]",
+    "test_readonly_retry_refuses_paths_outside_its_registered_root[parent-traversal]",
+    "test_readonly_retry_refuses_paths_outside_its_registered_root[unregistered]",
+    "test_readonly_retry_refuses_hardlinked_file_without_changing_outside_attributes",
+    "test_readonly_retry_refuses_reparse_points_and_their_children[junction]",
+    "test_readonly_retry_refuses_reparse_points_and_their_children[file-symlink]",
+    "test_readonly_retry_refuses_reparse_points_and_their_children[directory-symlink]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[writable]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[sharing]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[missing]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[directory]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[other-operation]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[generic-permission]",
+    "test_readonly_retry_attempts_unlink_once_and_propagates_second_error",
+    "test_remove_root_keeps_registration_and_reports_unhandled_error",
+)
+
+
+WINDOWS_FILE_TRUST_REVIEW_TESTS = (
+    "test_acl_fixture_refuses_hardlink_aliases",
+    "test_add_file_can_set_reparse_data_while_directory_is_pinned",
+    "test_cache_final_destination_read_cannot_ignore_revocation[purge]",
+    "test_cache_final_destination_read_cannot_ignore_revocation[replace]",
+    "test_cache_reopens_and_validates_published_file[bytes]",
+    "test_cache_reopens_and_validates_published_file[dacl]",
+    "test_conditional_allow_ace_is_refused_for_any_trustee[False]",
+    "test_conditional_allow_ace_is_refused_for_any_trustee[True]",
+    "test_kubernetes_protection_failure_stops_before_ambient_fallback[json-native-unavailable]",
+    "test_kubernetes_protection_failure_stops_before_ambient_fallback[json-parent-add-file]",
+    "test_kubernetes_protection_failure_stops_before_ambient_fallback[json-private-read]",
+    "test_kubernetes_protection_failure_stops_before_ambient_fallback[sqlite-native-unavailable]",
+    "test_kubernetes_protection_failure_stops_before_ambient_fallback[sqlite-parent-add-file]",
+    "test_kubernetes_protection_failure_stops_before_ambient_fallback[sqlite-private-read]",
+    "test_live_oidc_dacl_revocation_latches_without_reusing_memory_keys",
+    "test_private_file_refuses_individual_read_and_execute_grants[1]",
+    "test_private_file_refuses_individual_read_and_execute_grants[32]",
+)
+
+
+# Exact cases independently exercised on their native platform; no module allowance.
+NODE_HARDENING_SKIPS = {
+    "linux": {
+        "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;;GR;;;S-1-1-0)]": "native Windows DACL/handle checks",
+        "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;OICIIO;GR;;;S-1-1-0)]": "native Windows DACL/handle checks",
+        "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;;GW;;;S-1-1-0)]": "native Windows DACL/handle checks",
+        "tests/security/test_node_hardening.py::test_windows_protected_file_does_not_certify_the_state_directory": "native Windows selected-file versus state protection",
+        "tests/security/test_node_hardening.py::test_windows_shared_validator_failure_and_junction_are_unknown_or_unsafe": "native Windows DACL/handle checks",
+        "tests/security/test_node_hardening_review.py::test_windows_unknown_inherit_only_rights_are_not_protected": "native Windows inherited DACL masks",
+        "tests/security/test_node_hardening_review.py::test_windows_midwalk_acl_change_is_not_protected_and_closes_handles": "native Windows SID, held handles and DACL revocation",
+        "tests/security/test_node_hardening_review.py::test_windows_cli_does_not_expand_ambiguous_drive_paths[C:state]": "native Windows drive-relative path syntax",
+        "tests/security/test_node_hardening_review.py::test_windows_cli_does_not_expand_ambiguous_drive_paths[\\\\state]": "native Windows drive-relative path syntax"
+    },
+    "win32": {
+        "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[symlink]": "native Linux descriptor/permission checks",
+        "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[fifo]": "native Linux descriptor/permission checks",
+        "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[foreign_mode]": "native Linux descriptor/permission checks",
+        "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[parent_mode]": "native Linux descriptor/permission checks",
+        "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[owner]": "native Linux descriptor/permission checks",
+        "tests/security/test_node_hardening.py::test_linux_acl_unknown_and_midwalk_change_are_not_silently_passed": "native Linux xattr/descriptor checks",
+        "tests/security/test_node_hardening.py::test_linux_parent_symlink_and_unavailable_permission_metadata": "native Linux no-follow traversal",
+        "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[depth]": "native Linux descriptor lifetime and no-follow races",
+        "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[entries]": "native Linux descriptor lifetime and no-follow races",
+        "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[swap]": "native Linux descriptor lifetime and no-follow races",
+        "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[rename]": "native Linux descriptor lifetime and no-follow races",
+        "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[metadata]": "native Linux descriptor lifetime and no-follow races",
+        "tests/security/test_node_hardening_review.py::test_linux_different_device_is_not_enumerated": "native Linux descriptor filesystem boundary"
+    }
+}
+
+
+# Exact native-platform cases; opposite-platform receipts exercised each case.
+CREDENTIAL_RESOLVER_SKIPS = {
+    "win32": {
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[json-replace_file]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[json-replace_parent]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[json-rotate_projection]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[json-write_file]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[sqlite-replace_file]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[sqlite-replace_parent]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[sqlite-rotate_projection]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[sqlite-write_file]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_only_root_owned_readonly_projection_can_relax_directory_write_bits[False-True-0-False]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_only_root_owned_readonly_projection_can_relax_directory_write_bits[True-False-0-False]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_only_root_owned_readonly_projection_can_relax_directory_write_bits[True-True-0-True]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_only_root_owned_readonly_projection_can_relax_directory_write_bits[True-True-99999-False]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-absolute_data]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-escaping_data]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-escaping_key]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-generation_redirect]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-hardlink]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-public_value]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-absolute_data]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-escaping_data]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-escaping_key]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-generation_redirect]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-hardlink]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-public_value]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_requires_explicit_layout_and_accepts_atomic_rotation[json]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_requires_explicit_layout_and_accepts_atomic_rotation[sqlite]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_reader_group_requires_explicit_matching_dedicated_gid[json]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_reader_group_requires_explicit_matching_dedicated_gid[sqlite]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[json-385]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[json-388]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[json-416]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[json-420]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[json-438]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[sqlite-385]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[sqlite-388]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[sqlite-416]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[sqlite-420]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[sqlite-438]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[json-fifo]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[json-foreign_owner]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[json-writable_parent]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[sqlite-fifo]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[sqlite-foreign_owner]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[sqlite-writable_parent]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout"
+    },
+    "linux": {
+        "tests/security/test_secret_resolver.py::test_windows_world_readable_secret_fails_closed[json]": "native Windows private-file DACL enforcement",
+        "tests/security/test_secret_resolver.py::test_windows_world_readable_secret_fails_closed[sqlite]": "native Windows private-file DACL enforcement",
+        "tests/security/test_wincred_resolver.py::test_native_windows_abi_and_current_logon_with_mocked_credread[json]": "native Windows token and CredReadW ABI with mocked credential data",
+        "tests/security/test_wincred_resolver.py::test_native_windows_abi_and_current_logon_with_mocked_credread[sqlite]": "native Windows token and CredReadW ABI with mocked credential data",
+        "tests/security/test_wincred_resolver.py::test_native_windows_rejects_thread_impersonation_before_credread[json]": "native Windows thread impersonation with mocked credential data",
+        "tests/security/test_wincred_resolver.py::test_native_windows_rejects_thread_impersonation_before_credread[sqlite]": "native Windows thread impersonation with mocked credential data"
+    }
+}
+
+
+NATIVE_OPERATOR_SKIPS = {
+    "win32": {
+        "tests/audit/test_anchor_review.py::test_native_posix_file_protection[fifo]": "requires native POSIX mode and inode protection",
+        "tests/audit/test_anchor_review.py::test_native_posix_file_protection[key_symlink]": "requires native POSIX mode and inode protection",
+        "tests/audit/test_anchor_review.py::test_native_posix_file_protection[lock_symlink]": "requires native POSIX mode and inode protection",
+        "tests/audit/test_anchor_review.py::test_native_posix_file_protection[unsafe_parent]": "requires native POSIX mode and inode protection",
+        "tests/client/test_storage_config.py::test_linux_symlink_and_unsafe_parent": "native Linux symlink and mode checks"
+    },
+    "linux": {
+        "tests/client/test_storage_config.py::test_windows_inherited_public_read_never_receives_token_bytes": "native Windows inherited DACL privacy"
+    }
+}
+
+
+SCAP_IMPORT_SKIPS = {
+    "win32": {
+        "tests/ingest/test_scap_review.py::test_fifo_is_rejected_before_open": "requires native POSIX FIFO",
+        "tests/ingest/test_scap_review.py::test_database_writer_wait_rechecks_authority[json]": "SQLite writer contention only",
+        "tests/ingest/test_scap_review.py::test_file_replacement_cannot_turn_a_regular_file_into_a_blocking_pipe": "requires native POSIX FIFO replacement"
+    },
+    "linux": {
+        "tests/ingest/test_scap_review.py::test_database_writer_wait_rechecks_authority[json]": "SQLite writer contention only"
+    }
+}
+
+
+SSH_KEY_SKIPS = {
+    "win32": {
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[416]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[388]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[400]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_shared_private_key[386]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[leaf]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[parent]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[fifo]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_rejects_redirects_and_special_files[writable-parent]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[replace]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[mutate]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[chmod]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_race_during_bounded_read_denied[parent-swap]": "requires native POSIX ownership, modes and descriptor traversal",
+        "tests/security/test_ssh_key_credentials.py::test_posix_foreign_owner_denied": "requires native POSIX ownership, modes and descriptor traversal"
+    },
+    "linux": {
+        "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[GR]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[GW]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[SD]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[WD]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_rejects_foreign_private_key_rights[WO]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[parent-write]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[delete-child]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[junction]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[unavailable-api]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_native_boundary_denies_unsafe_source[untrusted-owner]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[replace]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[mutate]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[parent-swap]": "requires native Windows SID/DACL and file sharing",
+        "tests/security/test_ssh_key_credentials.py::test_windows_pins_source_and_rechecks_dacl[dacl]": "requires native Windows SID/DACL and file sharing"
+    }
+}
 
 
 def expected_skips(platform: str) -> dict[str, str]:
@@ -84,16 +328,27 @@ def expected_skips(platform: str) -> dict[str, str]:
                 "POSIX FIFO and O_NOFOLLOW semantics"
             )
     if platform == "linux":
+        allowed.update({
+            f"tests/test_windows_acl_cleanup.py::{name}":
+                "native Windows read-only attributes and reparse points"
+            for name in WINDOWS_CLEANUP_TESTS
+        })
+        allowed.update({
+            f"tests/security/test_windows_file_trust_review.py::{name}":
+                "native Windows security descriptors and file sharing"
+            for name in WINDOWS_FILE_TRUST_REVIEW_TESTS
+        })
+        allowed.update({
+            f"tests/security/test_windows_file_trust.py::{name}":
+                "native Windows security descriptors and file sharing"
+            for name in WINDOWS_FILE_TRUST_TESTS
+        })
         allowed["tests/security/test_oidc.py::test_windows_junction_cache_path_rejected"] = (
             "Windows directory junction fixture"
         )
         allowed["tests/security/test_access_file_trust.py::test_actual_windows_junction_parent_denied"] = (
             "requires Windows NTFS junction support"
         )
-        allowed.update({
-            f"tests/test_dev.py::DevelopmentModeTests::{name}": UDS_REASON
-            for name in UDS_TESTS
-        })
         allowed["tests/report/test_reports.py::test_commander_reproduce_command_runs_in_cmd"] = (
             "runs the command through cmd.exe"
         )
@@ -108,6 +363,20 @@ def expected_skips(platform: str) -> dict[str, str]:
             "test_audit_checkpoint_survives_windows_sharing",
         ):
             allowed[f"tests/state/test_file_read_sharing.py::{name}"] = SHARING_REASON
+    allowed.update(NODE_HARDENING_SKIPS[platform])
+    allowed.update(CREDENTIAL_RESOLVER_SKIPS[platform])
+    allowed.update(NATIVE_OPERATOR_SKIPS[platform])
+    allowed.update(SCAP_IMPORT_SKIPS[platform])
+    allowed.update(SSH_KEY_SKIPS[platform])
+    allowed["tests/scan_workers/test_review.py::test_sqlite_writer_admission_rechecks_authority[json]"] = (
+        "SQLite writer admission is specific to the SQLite backend"
+    )
+    if platform == "linux":
+        # The native Windows command boundary runs on the Windows matrix leg.
+        allowed["tests/ops/test_wsl_keepalive.py::test_keepalive_operator_and_task_boundaries"] = "native Windows PowerShell task-boundary fixture"
+        allowed["tests/test_release_vulnerability_evidence.py::ProcessTests::test_retained_traceback_cannot_retain_open_process_handle"] = "Windows native handle lifetime"
+    if platform == "win32":
+        allowed["tests/test_release_vulnerability_evidence.py::EvidenceTests::test_fifo_is_rejected_without_open"] = "POSIX special file"
     return allowed
 
 
