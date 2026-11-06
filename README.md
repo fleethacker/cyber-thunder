@@ -259,6 +259,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/COVERAGE.md](docs/COVERAGE.md) | implemented checks, benchmark denominators, executable fixes and runbooks |
 | [docs/CONFIDENCE.md](docs/CONFIDENCE.md) | evidence-strength grades, provenance, freshness and limits |
 | [docs/FINDING_REVIEW.md](docs/FINDING_REVIEW.md) | reasoned reviews, false positives, expiry, history and remediation guards |
+| [docs/FINDING_REASSESSMENT.md](docs/FINDING_REASSESSMENT.md) | retained observations, later incomplete scan attempts and account-scoped history without inventing freshness |
 | [docs/RISK_ACCEPTANCE.md](docs/RISK_ACCEPTANCE.md) | temporary account-authorized risk decisions, remediation holds and unchanged scanner failures |
 | [docs/REPORT_ASSURANCE.md](docs/REPORT_ASSURANCE.md) | raw scanner results and review decisions in commander and POA&M reports |
 | [docs/REMEDIATION_PLAN.md](docs/REMEDIATION_PLAN.md) | static change previews, declared capture paths, verification and rollback instructions |
@@ -267,6 +268,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/CHANGE_TIMELINE.md](docs/CHANGE_TIMELINE.md) | recorded apply, verification and recovery milestones without inventing progress from failed or incomplete records |
 | [docs/KUBERNETES_FIX_SAFETY.md](docs/KUBERNETES_FIX_SAFETY.md) | investigation-first Kubernetes guidance, retired deletion actions and recovery limits |
 | [docs/KUBERNETES_NAMESPACE_SCOPE.md](docs/KUBERNETES_NAMESPACE_SCOPE.md) | explicit namespace collection, unavailable cluster evidence and read-only limits |
+| [docs/CLUSTER_NAMESPACE_IMAGES.md](docs/CLUSTER_NAMESPACE_IMAGES.md) | namespace-limited workload image discovery, exact account access and incomplete survey results |
 | [docs/SCAN_WORKERS.md](docs/SCAN_WORKERS.md) | bounded parallel collection, account isolation, retained observations and cooperative timeout limits |
 | [docs/SCAN_WORKERS_REVIEW.md](docs/SCAN_WORKERS_REVIEW.md) | publication authority, partial-evidence preservation and remaining recovery limits |
 | [docs/HOST_SCOPE.md](docs/HOST_SCOPE.md) | container-host setup, explicit host access and reviewed IP/range scope |
@@ -284,6 +286,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/CHANGE_IMPACT.md](docs/CHANGE_IMPACT.md) | dependency evidence, model assessment, unknowns and review before applying a fix |
 | [docs/API.md](docs/API.md) | HTTP API v1 |
 | [docs/STATE.md](docs/STATE.md) | the state directory: documents (json files or SQLite) and files, `state migrate` and `state info`, WAL on a local volume only, backups |
+| [docs/STATE_RETENTION.md](docs/STATE_RETENTION.md) | conservative scan archive planning and private verified exports; source deletion remains unimplemented |
 | [docs/RELEASE_INVENTORY.md](docs/RELEASE_INVENTORY.md) | partial offline component inventory, CI artifacts and unverified dependency/image coverage |
 | [docs/RELEASE_VULNERABILITY_EVIDENCE.md](docs/RELEASE_VULNERABILITY_EVIDENCE.md) | bounded offline dependency scans, retained scanner/database hashes and explicit coverage limits |
 | [docs/UI.md](docs/UI.md) | screens and behaviour |

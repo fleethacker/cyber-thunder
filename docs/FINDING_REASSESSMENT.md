@@ -1,7 +1,7 @@
 # Finding reassessment history
 
-This separate NEXT change adds a read-only `reassessment` field to the findings
-list and detail APIs. It explains why an older observation remains visible after
+The findings list and detail APIs include a read-only `reassessment` field.
+It explains why an older observation remains visible after
 a later target scan could not reassess it. It does not change scanner status,
 observation time, evidence, confidence, review fingerprints or validity, risk
 acceptance, proposal permissions, approvals, or rollback interpretation.
@@ -137,7 +137,7 @@ observation times or reassessment state. A follow-on query change
 should consume this exact helper and test complete-view counts and pagination;
 it must not infer status or timestamps in the UI. Dedicated cluster/import
 reassessment and additional producer mappings also remain follow-on work.
-These are documented here without modifying the frozen shared backlog.
+These remaining query and producer capabilities are tracked in BACKLOG UI-04.
 
 Implementation receipts are retained under `.build/finding-reassessment-next/`
 in the implementation worktree. Independent review receipts are retained under
