@@ -200,12 +200,17 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 76 and len(windows) == 22
+    assert len(linux) == 95 and len(windows) == 22
     native_acl = {node: reason for node, reason in linux.items()
                   if node.startswith("tests/security/test_windows_file_trust.py::")}
-    assert len(native_acl) == 44
+    assert len(native_acl) == 46
     assert set(native_acl.values()) == {"native Windows security descriptors and file sharing"}
     assert not any(node.startswith("tests/security/test_windows_file_trust.py::") for node in windows)
+    native_review = {node: reason for node, reason in linux.items()
+                     if node.startswith("tests/security/test_windows_file_trust_review.py::")}
+    assert len(native_review) == 17
+    assert set(native_review.values()) == {"native Windows security descriptors and file sharing"}
+    assert not any(node.startswith("tests/security/test_windows_file_trust_review.py::") for node in windows)
     assert sum(reason == UDS_REASON for reason in linux.values()) == len(UDS_TESTS) == 19
     assert sum(reason == SHARING_REASON for reason in linux.values()) == 8
     policy = RegressionPolicy(ROOT, "linux")

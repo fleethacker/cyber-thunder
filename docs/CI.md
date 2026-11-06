@@ -73,7 +73,7 @@ The reviewed allowances are:
 | Windows | `tests/security/test_kube_credentials.py::test_real_posix_config_permission_failure` for `[420]`, `[416]`, `[438]` | 3 | `real POSIX file permissions` |
 | Linux | `tests/security/test_oidc.py::test_windows_junction_cache_path_rejected` | 1 | `Windows directory junction fixture` |
 | Linux | `tests/security/test_access_file_trust.py::test_actual_windows_junction_parent_denied` | 1 | `requires Windows NTFS junction support` |
-| Linux | 44 exact native Windows cases listed in `WINDOWS_FILE_TRUST_TESTS` in `scripts/ci_pytest.py` | 44 | `native Windows security descriptors and file sharing` |
+| Linux | 63 exact native Windows cases listed in `WINDOWS_FILE_TRUST_TESTS` and `WINDOWS_FILE_TRUST_REVIEW_TESTS` in `scripts/ci_pytest.py` | 63 | `native Windows security descriptors and file sharing` |
 | Linux | `tests/report/test_reports.py::test_commander_reproduce_command_runs_in_cmd` | 1 | `runs the command through cmd.exe` |
 | Linux | `tests/test_approval_io.py::test_deny_survives_windows_delete_handle[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |
 | Linux | `tests/state/test_file_read_sharing.py::test_deny_response_survives_windows_inventory_sharing[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |

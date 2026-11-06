@@ -44,6 +44,7 @@ UDS_TESTS = (
 
 # Native ACL tests execute on Windows; each Linux skip is named explicitly.
 WINDOWS_FILE_TRUST_TESTS = (
+
     "tests/security/test_windows_file_trust.py::test_fixture_is_genuinely_protected_and_checks_private_bytes",
     "tests/security/test_windows_file_trust.py::test_file_mutation_granted_to_everyone_is_rejected[2]",
     "tests/security/test_windows_file_trust.py::test_file_mutation_granted_to_everyone_is_rejected[4]",
@@ -91,6 +92,27 @@ WINDOWS_FILE_TRUST_TESTS = (
 )
 
 
+WINDOWS_FILE_TRUST_REVIEW_TESTS = (
+    "tests/security/test_windows_file_trust_review.py::test_acl_fixture_refuses_hardlink_aliases",
+    "tests/security/test_windows_file_trust_review.py::test_add_file_can_set_reparse_data_while_directory_is_pinned",
+    "tests/security/test_windows_file_trust_review.py::test_cache_final_destination_read_cannot_ignore_revocation[purge]",
+    "tests/security/test_windows_file_trust_review.py::test_cache_final_destination_read_cannot_ignore_revocation[replace]",
+    "tests/security/test_windows_file_trust_review.py::test_cache_reopens_and_validates_published_file[bytes]",
+    "tests/security/test_windows_file_trust_review.py::test_cache_reopens_and_validates_published_file[dacl]",
+    "tests/security/test_windows_file_trust_review.py::test_conditional_allow_ace_is_refused_for_any_trustee[False]",
+    "tests/security/test_windows_file_trust_review.py::test_conditional_allow_ace_is_refused_for_any_trustee[True]",
+    "tests/security/test_windows_file_trust_review.py::test_kubernetes_protection_failure_stops_before_ambient_fallback[json-native-unavailable]",
+    "tests/security/test_windows_file_trust_review.py::test_kubernetes_protection_failure_stops_before_ambient_fallback[json-parent-add-file]",
+    "tests/security/test_windows_file_trust_review.py::test_kubernetes_protection_failure_stops_before_ambient_fallback[json-private-read]",
+    "tests/security/test_windows_file_trust_review.py::test_kubernetes_protection_failure_stops_before_ambient_fallback[sqlite-native-unavailable]",
+    "tests/security/test_windows_file_trust_review.py::test_kubernetes_protection_failure_stops_before_ambient_fallback[sqlite-parent-add-file]",
+    "tests/security/test_windows_file_trust_review.py::test_kubernetes_protection_failure_stops_before_ambient_fallback[sqlite-private-read]",
+    "tests/security/test_windows_file_trust_review.py::test_live_oidc_dacl_revocation_latches_without_reusing_memory_keys",
+    "tests/security/test_windows_file_trust_review.py::test_private_file_refuses_individual_read_and_execute_grants[1]",
+    "tests/security/test_windows_file_trust_review.py::test_private_file_refuses_individual_read_and_execute_grants[32]",
+)
+
+
 def expected_skips(platform: str) -> dict[str, str]:
     if platform not in {"linux", "win32"}:
         raise ValueError(f"Unsupported CI platform: {platform}")
@@ -133,6 +155,11 @@ def expected_skips(platform: str) -> dict[str, str]:
                 "POSIX FIFO and O_NOFOLLOW semantics"
             )
     if platform == "linux":
+        allowed.update({
+            f"tests/security/test_windows_file_trust_review.py::{name}":
+                "native Windows security descriptors and file sharing"
+            for name in WINDOWS_FILE_TRUST_REVIEW_TESTS
+        })
         allowed.update({
             f"tests/security/test_windows_file_trust.py::{name}":
                 "native Windows security descriptors and file sharing"
