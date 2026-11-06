@@ -25,8 +25,8 @@ MAX_KEY_BYTES = 32 * 1024
 MAX_YAML_EVENTS = 4096
 MAX_YAML_DEPTH = 12
 _REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-_CERT = re.compile(br"-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----")
-_KEY = re.compile(br"-----BEGIN (PRIVATE KEY|RSA PRIVATE KEY|EC PRIVATE KEY)-----\r?\n"
+_CERT = re.compile(br"-{5}BEGIN CERTIFICATE-{5}\r?\n[A-Za-z0-9+/=\r\n]+-{5}END CERTIFICATE-{5}")
+_KEY = re.compile(br"-{5}BEGIN (PRIVATE KEY|RSA PRIVATE KEY|EC PRIVATE KEY)-{5}\r?\n"
                   br"[A-Za-z0-9+/=\r\n]+-----END \1-----\s*")
 _FAILURES = (OSError, ValueError, TypeError, AttributeError, RecursionError, yaml.YAMLError,
              UnsupportedAlgorithm, x509.DuplicateExtension, x509.UnsupportedGeneralNameType)

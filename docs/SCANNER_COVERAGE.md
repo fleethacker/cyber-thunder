@@ -132,13 +132,10 @@ acceptance open.
 | SCAN-01 | Sorted replace/append drop-ins; CLI precedence; real isolated file collection; guarded k3d multi-server collection; explicit API-server pass/fail and missing-data states | A scan of an already-running authorized k3d cluster showing measured per-server pass/fail. No local Docker executable or running WSL distribution was available during this work. |
 | SCAN-04 | Explicit bounded range alias; inspection of repository DISA RHEL 9 content; exact-byte preservation; conditional OVAL generation; result provenance, audit persistence, warning retention and failure/guard tests | Actual OpenSCAP execution of DISA RHEL 9 rules on Rocky 9, showing evaluated rules and the recorded override. No available OpenSCAP executable or running WSL distribution was found; no VM was started. |
 
-Parent integration seam: `scan_content.CONFIG_OPTIONS` currently excludes
-`cpe_alias` from its preflight freshness fingerprint. Add the complete bounded
-declaration there when integrating cross-cutting configuration work. The stored
-result provenance already records the exact declaration used, and each new alias
-evaluation validates the current inventory. Until the parent integration is
-made, changing only the alias can leave a previous observation appearing fresh;
-its persistent warning and original alias provenance still apply.
+`scan_content.CONFIG_OPTIONS` includes the complete `cpe_alias` declaration in
+the preflight freshness fingerprint. Changing the declaration invalidates a
+previous observation; stored results retain the exact declaration originally
+used. Each new alias evaluation validates the current inventory.
 
 Dependencies: no new packages. The implementation uses the existing PyYAML and
 Python standard library. Focused tests run with the shared Windows interpreter

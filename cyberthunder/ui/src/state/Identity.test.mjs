@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import * as Mantine from '@mantine/core';
 import { evaluate, mount, ui } from '../lib/setupTestSupport.mjs';
 
 const metadata = evaluate(new URL('../api/identity.ts', import.meta.url));
@@ -9,6 +11,29 @@ const signedIn = { ...anonymous, authenticated: true, csrf_token: 'fixture-csrf'
   principal: { actor: 'human:fixture', name: 'Test reader', roles: ['viewer'], kind: 'human' } };
 const response = (body) => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
 const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+
+test('the real identity provider connects account permissions to action controls', () => {
+  const gate = evaluate(new URL('../components/PermissionGate.tsx', import.meta.url), {
+    '@mantine/core': Mantine,
+  });
+  const { IdentityProvider } = evaluate(new URL('./Identity.tsx', import.meta.url), {
+    '../components/PermissionGate': gate,
+  });
+  const h = React.createElement;
+  const render = (identity) => renderToStaticMarkup(h(Mantine.MantineProvider, {},
+    h(IdentityProvider, { identity, logout: async () => {} },
+      h(gate.PermissionButton, { action: 'apply' }, 'Apply'))));
+  const button = (html) => [...html.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)]
+    .map((match) => match[0]).find((tag) => tag.includes('>Apply<'));
+  const disabled = /\sdisabled(?:=|\s|>)/;
+  const denied = render(signedIn);
+  assert.match(button(denied), disabled);
+  assert.match(denied, /apply permission required/);
+  assert.doesNotMatch(denied, /Account permissions are unavailable/);
+  assert.doesNotMatch(button(render({ ...signedIn, permissions: ['read', 'apply'] })), disabled);
+  assert.match(button(render({ ...signedIn, permissions: ['admin'] })), disabled);
+  assert.doesNotMatch(button(render({ ...anonymous, mode: 'dev' })), disabled);
+});
 
 function setup(t, fetcher) {
   const savedWindow = globalThis.window, savedFetch = globalThis.fetch;

@@ -1,6 +1,7 @@
 import { Alert, Badge, Button, Card, Group, Loader, Stack, Text, Title } from '@mantine/core';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { sessionHeaders, setSessionIdentity, type SessionIdentity } from '../api/identity';
+import { PermissionProvider } from '../components/PermissionGate';
 
 interface IdentityContext {
   identity: SessionIdentity;
@@ -13,9 +14,9 @@ const Context = createContext<IdentityContext | null>(null);
 export function IdentityProvider({ identity, logout, children }: {
   identity: SessionIdentity; logout: () => Promise<void>; children: ReactNode;
 }) {
-  return <Context.Provider value={{ identity, logout,
-    can: (action) => identity.mode === 'dev' || identity.permissions.includes(action) }}>
-    {children}
+  const can = (action: string) => identity.mode === 'dev' || identity.permissions.includes(action);
+  return <Context.Provider value={{ identity, logout, can }}>
+    <PermissionProvider can={can}>{children}</PermissionProvider>
   </Context.Provider>;
 }
 

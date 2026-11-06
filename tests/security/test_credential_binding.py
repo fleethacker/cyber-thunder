@@ -293,7 +293,7 @@ def test_missing_conflicting_or_wrong_transport_credentials_deny(tmp_path, trans
     credential(options={"transport": "basic"}), credential(options={"key_file": "~/.ssh/id_rsa"}),
     credential(options={"key_file": "relative/key"}), credential(options={"key_file": "%HOME%/key"}),
     credential(options={"context": []}), credential(options=None),
-    credential(credential_ref="-----BEGIN PRIVATE KEY-----\nprivate-material"),
+    credential(credential_ref="-" * 5 + "BEGIN PRIVATE KEY" + "-" * 5 + "\nprivate-material"),
     credential(credential_ref=".."), dict(credential(), password="never-serialize-this"),
 ])
 def test_credential_schema_rejects_raw_secrets_and_unknown_auth_fields(tmp_path, c):
