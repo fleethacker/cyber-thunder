@@ -233,15 +233,25 @@ def component_sources(data: KubeData, component: str) -> list[tuple[ObjRef, str,
     (kubeadm-style static pods) and, on k3s, the server node's config file and unit command line."""
     out = [(ObjRef(ref.namespace, "pod", ref.name), f"kube-system/{ref.name} container {ref.container}: ", f)
            for ref, f in component_pods(data, component)]
-    k3s = data.doc(K3S_FLAGS)
-    if isinstance(k3s, dict) and isinstance(k3s.get(component), dict):
+    config = data.doc(K3S_FLAGS)
+    servers = config.get("servers", [config]) if isinstance(config, dict) else []
+    if not isinstance(servers, list):
+        return out
+    from .k3s import K3S_DEFAULTS
+    for k3s in servers:
+        if (not isinstance(k3s, dict) or k3s.get("complete") is not True
+                or not isinstance(k3s.get(component), dict)
+                or not set(K3S_DEFAULTS.get(component, {})).issubset(k3s[component])
+                or any(not isinstance(v, str) for v in k3s[component].values())):
+            continue
         node = str(k3s.get("node") or "")
         try:
             node_ref = ObjRef(None, "node", node)
         except ValueError:
-            return out
+            continue
         src = " + ".join(k3s.get("sources") or []) or "k3s defaults"
-        out.append((node_ref, f"node {node} k3s {component} ({src}): ", dict(k3s[component])))
+        limitation = "; ".join(k3s.get("limitations") or [])
+        out.append((node_ref, f"node {node} k3s {component} ({src}; {limitation}): ", dict(k3s[component])))
     return out
 
 
@@ -269,14 +279,15 @@ APISERVER_RULES = ("CNTR-K8-000360", "CNTR-K8-000320", "CNTR-K8-000340", "CNTR-K
 def check_apiserver(target, data: KubeData) -> list[Finding]:
     out: list[Finding] = []
     sources = component_sources(data, "kube-apiserver")
-    if not sources and data.doc("pods") is not None:
+    if not sources:
         # k3s, RKE2 and managed clusters keep the API server out of the API; say so instead of passing silently
         why = ("No kube-apiserver flags were collected: no kube-apiserver pod in kube-system and no k3s server node "
-               "(target option node_target) to read them from. Review this rule on the control-plane node by hand.")
+               "configuration collected (target option node_target or k3d_cluster). Review this rule on the control-plane node by hand.")
         for sid in APISERVER_RULES:
             out.append(finding(target, stig(sid), None, why, status="not_reviewed"))
         return out
     for pod_ref, ev, f in sources:
+        start = len(out)
         if f.get("anonymous-auth", "").lower() == "true":
             out.append(finding(target, stig("CNTR-K8-000360"), pod_ref, ev + "--anonymous-auth=true"))
         if "insecure-port" in f and f["insecure-port"] != "0":
@@ -291,6 +302,14 @@ def check_apiserver(target, data: KubeData) -> list[Finding]:
             out.append(finding(target, stig("CNTR-K8-000610"), pod_ref, ev + "--audit-log-path not set"))
         if not f.get("audit-policy-file"):
             out.append(finding(target, stig("CNTR-K8-003280"), pod_ref, ev + "--audit-policy-file not set"))
+        # Explicit evaluated passes for collected k3s configurations. Do not infer passes
+        # for missing/failed collection or absent static-pod flags.
+        if pod_ref.kind == "node":
+            failed = {item.rule_version for item in out[start:]}
+            for sid in APISERVER_RULES:
+                if sid not in failed:
+                    out.append(finding(target, stig(sid), pod_ref, ev + "configured flags satisfy this check",
+                                       status="not_a_finding"))
     return out
 
 

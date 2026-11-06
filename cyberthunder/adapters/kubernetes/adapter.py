@@ -137,7 +137,13 @@ class KubernetesAdapter(Adapter):
                 p.write_text(r.stdout, encoding="utf-8")
                 col.artifacts[f"configz_{name}"] = str(p)
         node_id = (target.options or {}).get("node_target")
-        if node_id:
+        if "k3d_cluster" in (target.options or {}):
+            from . import k3d
+            try:
+                col.raw[checks.K3S_FLAGS] = {"servers": k3d.collect(target, data)}
+            except Exception as e:  # unavailable input never becomes passing defaults
+                col.errors.append(f"k3d configuration collection unavailable: {e}")
+        elif node_id:
             self._collect_k3s_node(target, str(node_id), data, col)
         col.facts = self._facts(target, data.doc("version") or {}, data.doc("nodes") or {})
         col.raw["server_version"] = col.facts.os_version
@@ -167,15 +173,19 @@ class KubernetesAdapter(Adapter):
             return
         cfg = nt.run(k3s.READ_CONFIG, sudo=bool(getattr(node, "sudo", True)))
         unit = nt.run(k3s.READ_EXECSTART)
+        env = nt.run(k3s.READ_ENVIRONMENT)
         if not cfg.ok:
-            col.errors.append(f"node_target {node_id}: {k3s.READ_CONFIG}: exit {cfg.exit_code}: "
-                              f"{(cfg.stderr or '').strip()[:200]}")
+            col.errors.append(f"node_target {node_id}: configuration read exit {cfg.exit_code}: "
+                              "configuration files unavailable")
         if not unit.ok:
             col.errors.append(f"node_target {node_id}: {k3s.READ_EXECSTART}: exit {unit.exit_code}")
-        if not cfg.ok and not unit.ok:
+        if not env.ok or env.stdout.strip():
+            col.errors.append(f"node_target {node_id}: service environment or environment files require review")
+            return
+        if not cfg.ok or not unit.ok:
             return
         try:
-            flags = k3s.effective_flags(cfg.stdout if cfg.ok else None, unit.stdout if unit.ok else None)
+            flags = k3s.effective_flags(None, unit.stdout, files=k3s.config_bundle(cfg.stdout))
         except ValueError as e:
             col.errors.append(f"node_target {node_id}: {e}")
             return

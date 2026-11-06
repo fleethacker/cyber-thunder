@@ -251,6 +251,13 @@ def oscap_findings(target, c: Collected) -> list[Finding]:
             f.asset_type = "linux"
             f.host = target.id
             f.id = Finding.make_id(f.host, f.source, f.rule_id)
+            if name == "oscap_results" and c.raw.get("cpe_alias"):
+                import copy
+                from .cpe_alias import WARNING
+                f.collection_provenance = dict(f.collection_provenance or {})
+                f.collection_provenance["cpe_alias"] = copy.deepcopy(c.raw["cpe_alias"])
+                f.tags.append("platform:cpe-alias")
+                f.evidence = f"{f.evidence + '; ' if f.evidence else ''}{WARNING}"
             if f.rule_id.startswith(rules.SSG_PREFIX):
                 ssg = f.rule_id[len(rules.SSG_PREFIX):]
                 match = next((r for r in NATIVE if r.ssg == ssg), None)

@@ -84,7 +84,8 @@ class _NodeTransport:
 
     def run(self, cmd, timeout=None, sudo=False):
         self.commands.append((cmd, sudo))
-        out = {k3s.READ_CONFIG: K3S_CONFIG, k3s.READ_EXECSTART: EXECSTART}.get(cmd)
+        bundle = "\0".join(["CT_K3S_CONFIG_V1", k3s.CONFIG_PATH, K3S_CONFIG, "CT_END", ""])
+        out = {k3s.READ_CONFIG: bundle, k3s.READ_EXECSTART: EXECSTART, k3s.READ_ENVIRONMENT: ""}.get(cmd)
         return CommandResult(cmd, 0 if out is not None else 127, out or "")
 
 
