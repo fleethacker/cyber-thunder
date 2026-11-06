@@ -20,6 +20,7 @@ from cyberthunder.control.principal import Principal, current_principal, princip
 from cyberthunder.control.roles import permissions
 from cyberthunder.findings.schema import Finding, Severity, Status
 from cyberthunder.inventory.targets import Target
+from cyberthunder.remediation.library import FixEntry
 
 
 def identity(subject="first-user", roles=("analyst", "approver"), kind="human"):
@@ -28,7 +29,8 @@ def identity(subject="first-user", roles=("analyst", "approver"), kind="human"):
 
 
 def proposal(ctx, target):
-    return ctx.gate.propose(actor="seed", finding_id="f-" + target, host=target, title="Test change",
+    finding = next(f for f in ctx.store.load_findings("scan-both") if f.host == target)
+    return ctx.gate.propose(actor=current_principal().actor, finding_id=finding.id, host=target, title="Test change",
                             fix_ref="fixture:setting", fix_preview="reviewed setting", rollback_plan="restore",
                             risk="test fixture")
 
@@ -40,7 +42,6 @@ def verified_app(state_dir, monkeypatch):
     for tid in ("alpha", "beta"):
         ctx.inventory.add(Target(tid, tid, "linux", transport="simulated", simulated=True, environment=tid))
     ctx.inventory.save()
-    proposals = {tid: proposal(ctx, tid) for tid in ("alpha", "beta")}
     ctx.store.save_scan_run({"id": "scan-both", "targets": ["alpha", "beta"], "status": "done"})
     ctx.store.save_findings("scan-both", [Finding(host=tid, asset_type="linux", source="fixture",
         rule_id="test-rule", title="Finding on " + tid, severity=Severity.MEDIUM,
@@ -52,11 +53,17 @@ def verified_app(state_dir, monkeypatch):
         {"issuer": identity().issuer, "subject": subject,
          "node_actions": ["kill.engage", "kill.release", "audit"],
          "grants": [{"target_ids": [tid], "actions": sorted(ACTIONS - {"read.all"})}]}
-        for subject, tid in (("first-user", "alpha"), ("second-user", "beta"))]}))
+        for subject, tid in (("first-user", "alpha"), ("second-user", "beta"),
+                            ("fixture-proposer", "alpha"), ("fixture-proposer-beta", "beta"))]}))
     path.chmod(0o600)
     ctx.access = AccessPolicy(path)
     ctx.gate.authorizer = ctx.authorize
     ctx.killswitch.authorizer = ctx.authorize
+    ctx.library.add(FixEntry("fixture:setting", "Test change", "linux", ["test-rule"], payload="reviewed setting"))
+    proposals = {}
+    for subject, tid in (("fixture-proposer", "alpha"), ("fixture-proposer-beta", "beta")):
+        with principal_scope(identity(subject, roles=("analyst",))):
+            proposals[tid] = proposal(ctx, tid)
     tokens = {}
 
     class Validator:

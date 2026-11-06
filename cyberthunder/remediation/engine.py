@@ -160,6 +160,8 @@ class RemediationEngine:
     def __init__(self, ctx: "AppContext"):
         self.ctx = ctx
         self._findings: dict[str, Finding] = {}     # findings proposed in this process, by id
+        from cyberthunder.control.separation import source_for
+        self.ctx.gate.separation_source = lambda proposal: source_for(self.ctx, proposal)
 
     # -- lookups -----------------------------------------------------------------------
     def _finding(self, finding_id: str) -> Finding | None:
@@ -265,11 +267,14 @@ class RemediationEngine:
 
     def propose(self, finding: Finding, *, actor: str = "agent", fix: FixEntry | None = None) -> Proposal | None:
         from cyberthunder.security.resources import check_record
+        from cyberthunder.control.identity import is_machine
+        authorize(self.ctx, "propose", actor=None if is_machine(actor) else actor, target=finding.host)
         check_record(self.ctx, finding, "propose")
         if self._review_suppressed(finding, actor, "propose"):
             return None
         existing = self.proposal_for_finding(finding.id)
         if existing is not None and existing.state.value not in TERMINAL:
+            check_record(self.ctx, existing, "propose")
             return existing
         entry = fix or self._resolve(finding)
         if entry is None:
