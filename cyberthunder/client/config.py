@@ -70,7 +70,7 @@ class ClientProfile:
             ca = None
             if document["ca_file"] is not None:
                 ca = files.read(document["ca_file"], maximum=262144).decode("ascii")
-                if "-----BEGIN CERTIFICATE-----" not in ca or "PRIVATE KEY" in ca:
+                if re.search(r"-{5}BEGIN CERTIFICATE-{5}", ca) is None or "PRIVATE KEY" in ca:
                     raise ValueError()
             material = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
             digest = hashlib.sha256(material + b"\0" + (ca or "system-trust").encode()).hexdigest()

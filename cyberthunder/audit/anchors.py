@@ -178,7 +178,7 @@ class _Trust:
     def public_key(self, checkpoint):
         path = self.keys[_scope(checkpoint)][_key_id(checkpoint["key_id"])]
         raw = self.reads.read(path, 8192)
-        if not re.fullmatch(br"-----BEGIN PUBLIC KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END PUBLIC KEY-----\s*", raw):
+        if not re.fullmatch(br"-{5}BEGIN PUBLIC KEY-{5}\r?\n[A-Za-z0-9+/=\r\n]+-{5}END PUBLIC KEY-{5}\s*", raw):
             raise ValueError
         key = serialization.load_pem_public_key(raw)
         if not isinstance(key, Ed25519PublicKey):
@@ -298,7 +298,7 @@ def export_checkpoint(signing_config, trust_config, output, *, previous=None):
     _key_id(config["key_id"])
     path = files.native_path(config["log_path"])
     private = reads.read(config["private_key"], 16384, private=True)
-    if not re.fullmatch(br"-----BEGIN PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END PRIVATE KEY-----\s*", private):
+    if not re.fullmatch(br"-{5}BEGIN PRIVATE KEY-{5}\r?\n[A-Za-z0-9+/=\r\n]+-{5}END PRIVATE KEY-{5}\s*", private):
         raise ValueError
     key = serialization.load_pem_private_key(private, password=None)
     if not isinstance(key, Ed25519PrivateKey):
