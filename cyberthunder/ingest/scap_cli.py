@@ -18,11 +18,12 @@ def run(args):
     from cyberthunder.control.killswitch import KillSwitchEngaged
     ctx = None
     try:
-        ctx = AppContext(Settings.from_env(state_dir=args.state_dir))
+        settings = Settings.from_env(state_dir=args.state_dir)
         # The offline CLI cannot establish a verified session. The API uses the same core
         # under the authenticated application principal; a raw --actor is never a substitute.
-        if ctx.settings.auth_mode != "dev":
+        if settings.auth_mode != "dev" or settings.security_mode == "fleet":
             raise PermissionError("use the authenticated SCAP upload API in verified mode")
+        ctx = AppContext(settings)
         result = import_results(ctx, read_local_file(args.xml, MAX_XML_BYTES),
             parse_manifest(read_local_file(args.manifest, MAX_MANIFEST_BYTES)), actor=args.actor)
         print(json.dumps(result, indent=2))

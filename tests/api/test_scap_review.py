@@ -13,6 +13,26 @@ from cyberthunder.ingest import scap_results as scap
 from tests.api.test_scap_results import HEADERS, URL, configured, envelope, scap_client
 
 
+@pytest.mark.parametrize("auth_mode,security_mode", [("oidc", "range"), ("mesh", "fleet"), ("dev", "fleet")])
+def test_local_cli_refusal_precedes_state_initialization(auth_mode, security_mode, tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    from cyberthunder import context
+    from cyberthunder.config import Settings
+    from cyberthunder.ingest import scap_cli
+
+    settings = SimpleNamespace(auth_mode=auth_mode, security_mode=security_mode)
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls, **kwargs: settings))
+    initialize = Mock(side_effect=AssertionError("unauthenticated import initialized application state"))
+    monkeypatch.setattr(context, "AppContext", initialize)
+    state = tmp_path / "uninitialized"
+    result = scap_cli.main(["--state-dir", str(state), "--actor", "range-operator",
+                            "unused.xml", "--manifest", "unused.json"])
+    assert result == 2
+    assert "authenticated SCAP upload API" in capsys.readouterr().err
+    initialize.assert_not_called()
+    assert not state.exists()
+
+
 def test_storage_permission_errors_do_not_expose_paths(scap_client, configured, monkeypatch):
     monkeypatch.setattr(configured.store, "save_scan_run",
         Mock(side_effect=PermissionError(errno.EACCES, "denied", "PRIVATE_STORAGE_PATH")))

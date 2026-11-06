@@ -100,8 +100,8 @@ python -m cyberthunder.ingest.scap_cli --state-dir STATE --actor "Joshua Ott" NA
 
 It reads each explicitly supplied local regular file with a byte cap. Symlinks,
 pipes and devices are rejected; the opened file's identity is checked again before
-reading. Verified mode refuses
-the local actor shortcut; use the authenticated upload API. It opens no connection
+reading. Verified or fleet mode refuses the local actor shortcut before initializing
+application state; use the authenticated upload API. It opens no connection
 and cannot establish a verified session itself.
 
 The main CLI exposes the same development-only import:

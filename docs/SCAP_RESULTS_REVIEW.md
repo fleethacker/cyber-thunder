@@ -70,3 +70,10 @@ Validation results (counts are per run):
   during import. The successful retry disabled that dump and plugin autoload.
   An intermediate publication test run also had harness errors corrected before
   the successful run; those receipts are retained, not counted as passing validation.
+
+Integration also moved the standalone CLI's verified/fleet-mode refusal ahead of
+application-state initialization. Three calibrated cases showed that startup was
+previously reached before rejection. The combined CLI-dispatch, node-inspection
+and importer check passed 56 cases with seven existing POSIX-only skips on
+Windows. Development imports still use the same bounded reader; verified imports
+use the authenticated API.
