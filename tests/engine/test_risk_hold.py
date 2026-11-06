@@ -92,3 +92,17 @@ def test_acceptance_serializes_with_proposal_creation(make_ctx, monkeypatch):
         return propose(*args, **kwargs)
     monkeypatch.setattr(ctx.gate, "propose", propose_with_accept)
     assert ctx.engine.propose(finding).state is ProposalState.PROPOSED
+
+
+def test_active_acceptance_does_not_block_authorized_rollback(make_ctx):
+    ctx = make_ctx(auto_propose=False)
+    finding = scan(ctx)[fakes.RULE_ROOT_LOGIN]
+    proposal = ctx.engine.propose(finding)
+    ctx.gate.approve(proposal.id, SAILOR)
+    assert ctx.engine.execute(proposal.id, actor=SAILOR).state is ProposalState.VERIFIED
+    service = ReviewService(ctx)
+    accept(service, finding)
+    assert service.summary(finding)["remediation_held"]
+    assert ctx.engine.rollback(proposal.id, actor=SAILOR).state is ProposalState.ROLLED_BACK
+    assert fakes.HOSTS[HOST] == fakes.seed_state()
+    assert service.summary(finding)["remediation_held"]

@@ -26,6 +26,7 @@ export function FindingReviewPanel({ finding, opened, onToggle, onFinding, onRev
   const permission = usePermissions();
   const draftAuthority = useRef(authorityRevision());
   const [review, setReview] = useState<FindingReviewHistory>();
+  const [reviewAuthority, setReviewAuthority] = useState<number | null>(null);
   const [draft, setDraft] = useState(() => reviewDraft(finding.review));
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -61,6 +62,7 @@ export function FindingReviewPanel({ finding, opened, onToggle, onFinding, onRev
         throw new Error('The finding changed during refresh. Refresh again to review the current evidence.');
       }
       setReview(history);
+      setReviewAuthority(requestedAuthority);
       callbacks.current.onFinding({ ...current, review: history });
       if (!draftBase.current) {
         setDraft(reviewDraft(history));
@@ -87,7 +89,7 @@ export function FindingReviewPanel({ finding, opened, onToggle, onFinding, onRev
     if (!review || !draftBase.current || !fresh || loading || saving || (conflict && !acknowledged)) return;
     const riskDecision = ['risk_accepted', 'risk_revoked'].includes(draft.disposition);
     if (!permission.can(riskDecision ? 'risk.accept' : 'review')) return;
-    if (draftAuthority.current !== authorityRevision()) {
+    if (draftAuthority.current !== authorityRevision() || reviewAuthority !== authorityRevision()) {
       setFresh(false);
       setError('Account or permissions changed. Refresh and review the current evidence before saving.');
       return;
@@ -140,7 +142,7 @@ export function FindingReviewPanel({ finding, opened, onToggle, onFinding, onRev
   const riskDecision = ['risk_accepted', 'risk_revoked'].includes(draft.disposition);
   const action = riskDecision ? 'risk.accept' : 'review';
   const held = isRemediationHeld(summary);
-  const blocked = !permission.can(action) || (held && draft.disposition !== 'risk_revoked') || loading || saving || !fresh || unavailable || !!identityProblem || !!status?.kill.engaged || basisChanged || (conflict && !acknowledged);
+  const blocked = !permission.can(action) || (held && draft.disposition !== 'risk_revoked') || loading || saving || !fresh || unavailable || !!identityProblem || !!status?.kill.engaged || basisChanged || reviewAuthority !== authorityRevision() || (conflict && !acknowledged);
   return (
     <Paper withBorder p="md" radius="md">
       <Stack gap="sm">
@@ -178,9 +180,10 @@ export function FindingReviewPanel({ finding, opened, onToggle, onFinding, onRev
               </>}
               <Checkbox label="I have reviewed the current evidence and review history" checked={acknowledged}
                 disabled={!fresh || loading || saving} onChange={(e) => {
-                  if (!review || !fresh || loading || saving) return;
+                  // A retained checkbox must acknowledge only the account that fetched this evidence.
+                  if (!review || !fresh || loading || saving || reviewAuthority !== authorityRevision()) return;
                   const checked = e.currentTarget.checked;
-                  if (checked) { draftBase.current = { ...review }; draftAuthority.current = authorityRevision(); }
+                  if (checked) { draftBase.current = { ...review }; draftAuthority.current = reviewAuthority; }
                   setAcknowledged(checked);
                 }} />
             </Stack>

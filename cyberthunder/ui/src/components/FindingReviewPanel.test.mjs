@@ -292,3 +292,35 @@ test('ordinary review permission alone and lost authority cannot submit a risk d
     assert.equal(panel.puts.length, 1);
   } finally { panel.unmount(); }
 });
+
+for (const decision of ['risk_accepted', 'confirmed']) {
+  test(`${decision}: an account change between refresh and acknowledgement requires another refresh`, async () => {
+    const panel = mount(baseline);
+    try {
+      await panel.settle();
+      await panel.change('Review decision', decision);
+      await panel.change('Reason', 'Maintenance constraint');
+      await panel.change('Supporting evidence', 'Owner schedule');
+      if (decision === 'risk_accepted') {
+        await panel.change('Expiry (required)', new Date(Date.now() + 86400000).toISOString().slice(0, 16));
+      }
+      panel.changeAuthority();
+      await panel.click(refresh);
+      const acknowledge = panel.control('I have reviewed the current evidence and review history').props.onChange;
+      panel.changeAuthority();
+      acknowledge({ currentTarget: { checked: true } });
+      await panel.settle();
+      await panel.submit();
+      assert.equal(panel.puts.length, 0, 'Evidence loaded under a former account cannot authorize this submission');
+      await panel.click(refresh);
+      // An old checkbox callback must not acknowledge a newer account's refresh either.
+      acknowledge({ currentTarget: { checked: true } });
+      await panel.settle();
+      await panel.submit();
+      assert.equal(panel.puts.length, 0, 'Retained acknowledgement must stay bound to its original account');
+      await panel.acknowledge();
+      await panel.submit();
+      assert.equal(panel.puts.length, 1);
+    } finally { panel.unmount(); }
+  });
+}

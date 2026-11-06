@@ -164,3 +164,25 @@ def test_history_reserves_a_slot_for_authorized_revocation(env, monkeypatch):
     with pytest.raises(ReviewConflict):
         accept(service, finding)
     assert revoke(service, finding)["revision"] == 2
+
+
+def test_acceptance_expiring_during_pending_audit_never_mutates_history(env, monkeypatch):
+    ctx, service, finding = env
+    now = datetime.now(timezone.utc)
+    expiry = now + timedelta(hours=1)
+    monkeypatch.setattr(review, "_now", lambda value=None: now)
+    append = ctx.audit.append
+
+    def cross_expiry(*args, **kwargs):
+        nonlocal now
+        result = append(*args, **kwargs)
+        if args[0] == "finding.risk_acceptance" and kwargs.get("outcome") == "pending":
+            now = expiry
+        return result
+
+    monkeypatch.setattr(ctx.audit, "append", cross_expiry)
+    with pytest.raises(ReviewConflict, match="expired before saving"):
+        accept(service, finding, expires_at=expiry.isoformat())
+    assert service.history(finding)["revision"] == 0
+    assert not service.summary(finding)["remediation_held"]
+    assert [r["outcome"] for r in ctx.audit.records()] == ["pending"]
