@@ -77,8 +77,13 @@ def principal_from_evidence(actor, evidence, *, human=False) -> Principal:
     required = {"kind", "iss", "sub", "name", "via", "verified"}
     optional = {"roles", "groups", "scopes", "acr", "amr", "auth_time", "expires_at", "session_id"}
     if (not isinstance(evidence, dict) or not required <= evidence.keys()
-            or evidence.keys() - required - optional or evidence.get("verified") is not True):
+            or evidence.keys() - required - optional - {"session_fingerprint"} or evidence.get("verified") is not True):
         raise ValueError("invalid recorded principal")
+    reference = evidence.get("session_fingerprint")
+    if reference is not None and (not isinstance(reference, str) or len(reference) != 71
+                                 or not reference.startswith("sha256:")
+                                 or any(c not in "0123456789abcdef" for c in reference[7:])):
+        raise ValueError("invalid recorded session reference")
     principal = Principal(issuer=evidence["iss"], subject=evidence["sub"], display_name=evidence["name"],
                           kind=evidence["kind"], via=evidence["via"],
                           **{key: value for key, value in evidence.items() if key in optional})
