@@ -1,5 +1,10 @@
 # Nessus / ACAS findings import (SCAN-06)
 
+For existing container OS OpenSCAP XCCDF results, use the separate
+[SCAP result importer](SCAP_RESULTS.md). It requires explicit target, evaluation
+and container provenance and preserves incomplete outcomes. Neither importer
+establishes platform applicability or executes a scanner.
+
 Import an offline `NessusClientData_v2` `.nessus` export as a persisted scan run and normalized findings.
 The existing `parse` command remains a JSON export utility. Inventory host import is also unchanged.
 This workflow does not contact a scanner or target, collect data, propose fixes, approve changes, or apply

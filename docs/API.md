@@ -177,6 +177,14 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | POST | `/policy/evaluate` | `{proposal_id}` → PolicyDecision |
 
 ## Ingest and the constrained link
+
+`POST /ingest/scap-results` imports existing container OS XCCDF observations using
+a bounded JSON envelope containing `xml_base64` and an explicit target/evaluation
+manifest. Verified callers need node import and destination import/read grants;
+human and workload principals follow the same configured import authority.
+The response includes coverage and source hashes, and persisted findings use the
+existing findings/report APIs. No scanner executes and platform applicability
+remains unverified. See [SCAP_RESULTS](SCAP_RESULTS.md) for the exact contract.
 | GET | `/ingest/link` | → production/test mode, offline override, endpoint reachability, bounded observations and optional observed application rate. Configured kbps/latency are null in production. `connected` is attempt permission, including unknown. See [LINK.md](LINK.md) |
 |---|---|---|
 | PUT | `/ingest/link` | `{mode?, offline_override?, kbps?, latency_ms?, connected?, probe_enabled?, probe_endpoint?}`. Numeric inputs require test mode; probes default off and expire after 15 minutes. Audit `link.change`. Kill-switch guarded. |

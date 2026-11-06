@@ -95,9 +95,7 @@ It reads each explicitly supplied local file with a byte cap. Verified mode refu
 the local actor shortcut; use the authenticated upload API. It opens no connection
 and cannot establish a verified session itself.
 
-General CLI registration is deliberately left to its owner: add
-`"cyberthunder.ingest.scap_cli"` to `CLI_MODULES` in `cyberthunder/cli.py`. Its
-`register_cli(subparsers)` then exposes:
+The main CLI exposes the same development-only import:
 
 ```text
 cyberthunder --state-dir STATE --actor "Joshua Ott" scap-results-import NAME-xccdf.xml --manifest manifest.json
