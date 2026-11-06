@@ -169,7 +169,10 @@ def apply(pid: str, body: ApplyBody | None = None, ctx=CtxDep, actor: str = Acto
     from cyberthunder.control.policy import assurance_block_reason
     finding = util.get_finding(ctx, p.finding_id)
     reason = None
-    if ReviewService(ctx).summary(finding)["suppressed"]:
+    review = ReviewService(ctx).summary(finding)
+    if review["remediation_held"]:
+        reason = "Risk acceptance holds remediation; revoke it or wait for expiry or reopened evidence"
+    elif review["suppressed"]:
         reason = "The finding has an active review suppression; reopen its review before applying"
     elif (p.decided_by or "").startswith("policy:"):
         reason = assurance_block_reason(ctx, finding)

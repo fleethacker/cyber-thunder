@@ -9,7 +9,7 @@ import type { FindingFacet, FindingsPage, FindingsQuery, FindingSort, SortDirect
 import { AssetIcon, AsyncView, Empty, Mono, PageTitle, SeverityBadge, StateBadge } from '../components/common';
 import { FindingDrawer } from '../components/FindingDrawer';
 import { ConfidenceBadge, ReviewBadge } from '../components/FindingAssurance';
-import { CONFIDENCE_LABELS, REVIEW_LABELS } from '../lib/findingAssurance';
+import { CONFIDENCE_LABELS, REVIEW_FILTER_LABELS } from '../lib/findingAssurance';
 import { fmtTime, statusColor } from '../lib/format';
 import { useLocalPref } from '../lib/hooks';
 import { findingResultLabel, findingRowHandlers } from '../lib/findingRow';
@@ -102,7 +102,7 @@ export default function Findings() {
     { key: 'benchmark_release', label: 'Release', value: release, set: setRelease },
   ];
   const optionLabel = (key: FindingFacet, value: string, fallback: string) => {
-    const labels: Record<string, string> = key === 'confidence' ? CONFIDENCE_LABELS : key === 'review' ? REVIEW_LABELS : LABELS;
+    const labels: Record<string, string> = key === 'confidence' ? CONFIDENCE_LABELS : key === 'review' ? REVIEW_FILTER_LABELS : LABELS;
     return ['category', 'severity', 'status', 'confidence', 'review'].includes(key) || value === '__missing__' ? labels[value] ?? fallback : fallback;
   };
   const options = (key: FindingFacet, selected: string[]) => {

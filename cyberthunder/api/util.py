@@ -314,7 +314,16 @@ CATEGORIES = ("stig", "cve", "hunt", "other")
 SORT_FIELDS = {"default", "severity", "host", "asset_type", "category", "title", "rule_id", "rule_version", "source",
                "collected_at", "benchmark", "benchmark_release", "confidence", "review"}
 CONFIDENCE_ORDER = {"low": 1, "medium": 2, "high": 3}
-REVIEW_ORDER = {"unreviewed": 0, "needs_investigation": 1, "confirmed": 2, "false_positive": 3, "not_applicable": 4}
+REVIEW_ORDER = {"unreviewed": 0, "needs_investigation": 1, "confirmed": 2, "false_positive": 3, "not_applicable": 4,
+                "risk_accepted": 5, "risk_expired": 6, "risk_reopened": 7, "risk_revoked": 8}
+
+
+def review_filter_values(review: dict) -> set[str]:
+    values = {review.get("disposition", "unreviewed")}
+    status = review.get("risk_acceptance_status", "none")
+    if status in {"expired", "reopened", "revoked"}:
+        values.add("risk_" + status)
+    return values
 
 
 def finding_categories(f: Finding) -> list[str]:
@@ -371,9 +380,11 @@ def finding_facets(findings: list[Finding], assurance: dict | None = None) -> di
     for name, field in (("confidence", "grade"), ("review", "disposition")):
         facets[name] = {}
         for f in findings:
-            value = (assurance or {}).get(f.id, {}).get(name, {}).get(field, "unknown" if name == "confidence" else "unreviewed")
-            entry = facets[name].setdefault(value, {"value": value, "label": value.replace("_", " ").capitalize(), "count": 0})
-            entry["count"] += 1
+            assessed = (assurance or {}).get(f.id, {}).get(name, {})
+            values = review_filter_values(assessed) if name == "review" else {assessed.get(field, "unknown")}
+            for value in values:
+                entry = facets[name].setdefault(value, {"value": value, "label": value.replace("_", " ").capitalize(), "count": 0})
+                entry["count"] += 1
     return {name: sorted(options.values(), key=lambda o: (o["value"] == MISSING, o["value"]))
             for name, options in facets.items()}
 
@@ -482,7 +493,7 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
         raise ValueError("unknown review disposition")
     sel = filter_findings(now, **filters)
     sel = [f for f in sel if (not confidence_filter or assurance[f.id]["confidence"]["grade"] in confidence_filter)
-           and (not review_filter or assurance[f.id]["review"]["disposition"] in review_filter)]
+           and (not review_filter or review_filter & review_filter_values(assurance[f.id]["review"]))]
     sel = sort_findings(sel, sort_by, sort_dir, assurance=assurance)
     page = sel[offset: offset + limit]
     return {"findings": [finding_plus(ctx, scanned.get(f.id, f), assurance=assurance[f.id], lifecycle=lifecycle) for f in page], "total": len(sel), "scan_id": sid,

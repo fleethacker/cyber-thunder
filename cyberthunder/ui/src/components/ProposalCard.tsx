@@ -6,7 +6,7 @@ import type { ReactNode } from 'react';
 import type { ProposalPlus } from '../api/types';
 import { fmtAgo, fmtZonedTime, label } from '../lib/format';
 import { canRequestRollback, proposalChangedAt } from '../lib/proposalHistory';
-import { isSuppressed } from '../lib/findingAssurance';
+import { isSuppressed, isRemediationHeld } from '../lib/findingAssurance';
 import { approvalBlockReason, approvalProgress, approvalReceiptOnly } from '../lib/proposalApprovals';
 import { ApprovalProgress } from './ApprovalProgress';
 import { ApplyTimeline } from './ApplyTimeline';
@@ -68,6 +68,7 @@ export function ProposalCard({
   const ruleIds = [f?.rule_version, f?.rule_id].filter(Boolean) as string[];
   const auto = (p.decided_by ?? '').startsWith('policy:');
   const suppressed = isSuppressed(f?.review);
+  const held = isRemediationHeld(f?.review);
   const historical = !['proposed', 'approved'].includes(p.state);
   const receiptOnly = approvalReceiptOnly(p);
   const approvalProblem = p.state === 'proposed' ? approvalBlockReason(p, actor) : null;
@@ -184,6 +185,9 @@ export function ProposalCard({
         {p.state === 'rolled_back' && <Alert color="yellow">This change was rolled back. Earlier passing observations may no longer describe the target. Check its current condition with a fresh scan.</Alert>}
 
         <Divider />
+        {held && <Alert color="orange" title="Remediation held by risk acceptance">
+          <Text size="sm">{f?.review?.current?.reason} The scanner risk remains. Revoke acceptance in Finding detail, or reassess after expiry or changed evidence before applying.</Text>
+        </Alert>}
         {suppressed && <Alert color="orange" title="Apply blocked by human review">
           <Text size="sm">{f?.review?.current?.reason || 'An active dismissal applies to the current evidence.'}</Text>
           <Text size="sm">Open Finding detail to review the evidence and recorded decision.</Text>
@@ -199,7 +203,7 @@ export function ProposalCard({
             </>
           )}
           {p.state === 'approved' && (
-            <PermissionButton action="apply" size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={actionsDisabled || busy || suppressed} onClick={() => actions.apply(p)}>Apply</PermissionButton>
+            <PermissionButton action="apply" size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={actionsDisabled || busy || suppressed || held} onClick={() => { if (!held) actions.apply(p); }}>Apply</PermissionButton>
           )}
           {p.state === 'applying' && <Button size="md" loading variant="light">Applying</Button>}
           {canRequestRollback(p) && (

@@ -21,7 +21,7 @@ export interface FindingConfidence {
   observed_at: string | null;
   evidence: Record<string, unknown>;
 }
-export type ReviewDisposition = 'unreviewed' | 'confirmed' | 'false_positive' | 'not_applicable' | 'needs_investigation';
+export type ReviewDisposition = 'unreviewed' | 'confirmed' | 'false_positive' | 'not_applicable' | 'needs_investigation' | 'risk_accepted' | 'risk_revoked';
 // Public attribution fields only. Never render a full principal or session object.
 export interface RecordedPrincipalEvidence {
   iss: string;
@@ -49,6 +49,9 @@ export interface FindingReview {
   disposition: ReviewDisposition;
   active: boolean;
   suppressed: boolean;
+  remediation_held?: boolean;
+  risk_acceptance_status?: 'none' | 'active' | 'expired' | 'reopened' | 'revoked';
+  risk_acceptance?: FindingReviewEvent | null;
   revision: number;
   evidence_fingerprint: string;
   current: FindingReviewEvent | null;
@@ -65,6 +68,8 @@ export interface FindingReviewInput {
   expected_revision: number;
   evidence_fingerprint: string;
 }
+export type RiskRevocationInput = Pick<FindingReviewInput, 'reason' | 'expected_revision' | 'evidence_fingerprint'>;
+export type RiskAcceptanceInput = RiskRevocationInput & { supporting_evidence: string; expires_at: string };
 
 export interface Explanation {
   finding_id: string;

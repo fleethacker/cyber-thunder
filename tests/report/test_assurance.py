@@ -52,7 +52,7 @@ def test_review_counts_do_not_rewrite_raw_findings_or_count_suppression_as_remed
     data, rows = evidence_rows(node)
     assert data["assurance"]["counts"] == {
         "total": 8, "raw_open": 7, "confirmed": 1, "unreviewed": 3, "suppressed": 2,
-        "needs_investigation": 1, "scanner_pass": 1, "scanner_not_applicable": 0,
+        "needs_investigation": 1, "risk_accepted": 0, "scanner_pass": 1, "scanner_not_applicable": 0,
         "scanner_not_reviewed": 0, "scanner_error": 0,
     }
     assert data["decisions"]["verified"] == 1

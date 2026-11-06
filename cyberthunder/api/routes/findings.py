@@ -51,7 +51,10 @@ def get_finding(finding_id: str, ctx=CtxDep, scan_id: str | None = None) -> dict
 def propose(finding_id: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
     finding = util.get_finding(ctx, finding_id)
     from cyberthunder.findings.review import ReviewService
-    if ReviewService(ctx).summary(finding)["suppressed"]:
+    review = ReviewService(ctx).summary(finding)
+    if review["remediation_held"]:
+        raise HTTPException(409, "Risk acceptance holds remediation; revoke it or wait for expiry or reopened evidence")
+    if review["suppressed"]:
         raise HTTPException(409, "This observation has an active review suppression; reopen its review before proposing a fix")
     fix = ctx.library.resolve(finding)
     if fix is None:

@@ -25,7 +25,7 @@ MAX_DEPTH = 12
 MAX_PATH_PARTS = 128
 # Deliberately enumerated independently of roles: new actions require review here.
 ACTIONS = frozenset({"read", "read.all", "scan", "discover", "propose", "explain", "plan", "import",
-                     "approve", "deny", "cancel", "apply", "rollback", "verify", "review",
+                     "approve", "deny", "cancel", "apply", "rollback", "verify", "review", "risk.accept",
                      "admin", "policy", "audit", "export", "kill.engage", "kill.release"})
 NODE_ONLY_ACTIONS = frozenset({"read.all"})
 
@@ -192,6 +192,9 @@ class _Grant:
     credential: CredentialBinding | None
 
     def matches(self, action, tid, environment):
+        if action == "risk.accept" and (not self.target_ids or not self.environments
+                                       or "*" in self.target_ids or "*" in self.environments):
+            return False
         return (action in self.actions
                 and (self.target_ids is None or self.target_ids == ("*",) or tid in self.target_ids)
                 and (self.environments is None or self.environments == ("*",) or environment in self.environments))
@@ -399,6 +402,10 @@ class AccessPolicy:
             matched = []
             for entry in entries:
                 if entry.issuer != issuer:
+                    continue
+                # Risk acceptance is an explicit account/environment/target grant.
+                # Group membership, person association and node grants cannot supply it.
+                if action == "risk.accept" and (target is None or entry.kind != "subject"):
                     continue
                 if not ((entry.kind == "subject" and entry.selector == subject)
                         or (entry.kind == "group" and entry.selector in groups)):

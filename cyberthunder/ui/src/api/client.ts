@@ -198,6 +198,8 @@ export const api = {
   finding: (id: string) => get<FindingPlus>(`/findings/${enc(id)}`),
   findingReview: (id: string, scan_id?: string) => get<FindingReviewHistory>(`/findings/${enc(id)}/review`, { scan_id }),
   saveFindingReview: (id: string, body: FindingReviewInput) => put<FindingReviewHistory>(`/findings/${enc(id)}/review`, body),
+  acceptFindingRisk: (id: string, body: import('./types').RiskAcceptanceInput) => put<FindingReviewHistory>(`/findings/${enc(id)}/risk-acceptance`, body),
+  revokeFindingRisk: (id: string, body: import('./types').RiskRevocationInput) => post<FindingReviewHistory>(`/findings/${enc(id)}/risk-acceptance/revoke`, body),
   propose: (id: string) => post<ProposalPlus>(`/findings/${enc(id)}/propose`),
   explain: (id: string, force = false) => post<Explanation>(`/findings/${enc(id)}/explain`, { force }),
   explainAll: (ids?: string[]) => post<{ queued: number }>('/findings/explain', ids ? { ids } : {}),

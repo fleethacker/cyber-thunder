@@ -86,6 +86,10 @@ class ReviewSuppressed(EngineError):
     """An active review excludes this observation from remediation."""
 
 
+class RemediationHeld(EngineError):
+    """An active operator risk acceptance holds remediation without suppressing risk."""
+
+
 class PolicyEvidenceBlocked(EngineError):
     """Standing approval no longer suffices for the current evidence or review."""
 
@@ -243,16 +247,19 @@ class RemediationEngine:
                 f"the cited requirement ({cite}); the proposed library fix needs human approval before it runs.")
 
     # -- proposals ---------------------------------------------------------------------
-    def _review_suppressed(self, finding: Finding, actor: str, action: str) -> bool:
+    def _review_blocked(self, finding: Finding, actor: str, action: str) -> bool:
         from cyberthunder.findings.review import ReviewService
         current = self.ctx.store.get_finding(finding.id) or finding
         review = ReviewService(self.ctx).summary(current)
-        if not review["suppressed"]:
+        if not (review["suppressed"] or review["remediation_held"]):
             return False
         self.ctx.audit.append("finding.review_blocked", actor,
                               {"action": action, "finding_id": finding.id,
-                               "disposition": review["disposition"], "revision": review["revision"]},
+                               "disposition": review["disposition"], "revision": review["revision"],
+                               "remediation_held": review["remediation_held"]},
                               subject=finding.id, outcome="blocked")
+        if action == "apply" and review["remediation_held"]:
+            raise RemediationHeld("Risk acceptance holds remediation; revoke it or wait for expiry or reopened evidence")
         return True
 
     def _guard_policy_evidence(self, proposal: Proposal, finding: Finding, actor: str) -> None:
@@ -266,11 +273,16 @@ class RemediationEngine:
             raise PolicyEvidenceBlocked(reason + "; cancel this proposal and request individual approval")
 
     def propose(self, finding: Finding, *, actor: str = "agent", fix: FixEntry | None = None) -> Proposal | None:
+        from cyberthunder.findings.review import ReviewService
+        with ReviewService(self.ctx).remediation_guard(finding):
+            return self._propose(finding, actor=actor, fix=fix)
+
+    def _propose(self, finding: Finding, *, actor: str, fix: FixEntry | None) -> Proposal | None:
         from cyberthunder.security.resources import check_record
         from cyberthunder.control.identity import is_machine
         authorize(self.ctx, "propose", actor=None if is_machine(actor) else actor, target=finding.host)
         check_record(self.ctx, finding, "propose")
-        if self._review_suppressed(finding, actor, "propose"):
+        if self._review_blocked(finding, actor, "propose"):
             return None
         existing = self.proposal_for_finding(finding.id)
         if existing is not None and existing.state.value not in TERMINAL:
@@ -429,7 +441,7 @@ class RemediationEngine:
         finding = self._finding(p.finding_id)
         if finding is None:
             raise EngineError(f"finding {p.finding_id} not found in any scan")
-        if self._review_suppressed(finding, actor, "apply"):
+        if self._review_blocked(finding, actor, "apply"):
             raise ReviewSuppressed("The current finding has an active review suppression; reopen its review before applying")
         self._guard_policy_evidence(p, finding, actor)
         fix = self._fix_for(p, finding)
@@ -455,7 +467,7 @@ class RemediationEngine:
                                                  "copied": len(copied), "dir": str(snap)})
             from cyberthunder.findings.review import ReviewService
             with ReviewService(self.ctx).remediation_guard(finding):
-                if self._review_suppressed(finding, actor, "apply"):
+                if self._review_blocked(finding, actor, "apply"):
                     raise ReviewSuppressed("A review suppressed the finding before apply; no fix was executed")
                 self._guard_policy_evidence(p, finding, actor)
                 guard_approved_assessment(self.ctx, p)
@@ -506,7 +518,7 @@ class RemediationEngine:
                                             f"{_short(vr.evidence, 200)}")
             self._auto_rollback(p, target, adapter, transport, fix, before, why)
             return gate.get(p.id)
-        except (ReviewSuppressed, PolicyEvidenceBlocked, ReviewConflict, AssessmentBlocked,
+        except (ReviewSuppressed, RemediationHeld, PolicyEvidenceBlocked, ReviewConflict, AssessmentBlocked,
                 ScopeViolation, rollback_guard.RollbackBlocked):
             # Before-state capture is read-only. Do not run a rollback when apply never ran.
             if gate.get(p.id).state is ProposalState.APPLYING:

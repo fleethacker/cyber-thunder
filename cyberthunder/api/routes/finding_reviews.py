@@ -28,6 +28,19 @@ class ReviewBody(BaseModel):
     evidence_fingerprint: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class RiskRevocationBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: StrictStr = Field(min_length=1, max_length=MAX_REASON_LENGTH)
+    expected_revision: StrictInt = Field(ge=0)
+    evidence_fingerprint: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class RiskAcceptanceBody(RiskRevocationBody):
+    supporting_evidence: StrictStr = Field(min_length=1, max_length=MAX_SUPPORTING_EVIDENCE_LENGTH)
+    expires_at: StrictStr = Field(max_length=40)
+
+
 def _finding(ctx, finding_id: str, scan_id: str | None = None):
     # Do not fall back to an old scan when the finding disappeared from the current picture.
     if scan_id is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", scan_id):
@@ -55,3 +68,19 @@ def save_review(finding_id: str, body: ReviewBody, ctx=CtxDep, actor: str = Acto
         return ReviewService(ctx).save(_finding(ctx, finding_id), actor=actor, **body.model_dump())
     except ReviewConflict as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@router.put("/findings/{finding_id}/risk-acceptance")
+def accept_risk(finding_id: str, body: RiskAcceptanceBody, ctx=CtxDep, actor: str = ActorDep,
+                scan_id: str | None = None) -> dict:
+    if scan_id is not None:
+        raise ValueError("historical review views are read-only; omit scan_id to accept current risk")
+    return ReviewService(ctx).accept_risk(_finding(ctx, finding_id), actor=actor, **body.model_dump())
+
+
+@router.post("/findings/{finding_id}/risk-acceptance/revoke")
+def revoke_risk(finding_id: str, body: RiskRevocationBody, ctx=CtxDep, actor: str = ActorDep,
+                scan_id: str | None = None) -> dict:
+    if scan_id is not None:
+        raise ValueError("historical review views are read-only; omit scan_id to revoke current risk acceptance")
+    return ReviewService(ctx).revoke_risk(_finding(ctx, finding_id), actor=actor, **body.model_dump())

@@ -19,6 +19,7 @@ export function rolePermits(permissions: readonly string[] | null | undefined, a
 const LABELS: Record<string, string> = {
   approve: 'approve changes', deny: 'deny changes', apply: 'apply changes', rollback: 'roll back changes',
   verify: 'verify changes', review: 'record reviews', plan: 'request change assessments or previews',
+  'risk.accept': 'accept risk or revoke risk acceptance',
   scan: 'start scans', discover: 'collect asset facts', propose: 'propose fixes', explain: 'generate explanations',
   admin: 'manage inventory and configuration', policy: 'change standing approval policy',
   'kill.engage': 'engage the kill switch', 'kill.release': 'release the kill switch', read: 'read this information',

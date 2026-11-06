@@ -67,6 +67,7 @@ def test_unreviewed_pass_is_not_a_human_decision_and_reads_do_not_write(env, mon
     for status in ("not_a_finding", "not_applicable", "not_reviewed", "error", "open"):
         result = service.history(replace(finding, status=status))
         assert result == {"disposition": "unreviewed", "active": False, "suppressed": False,
+                          "remediation_held": False, "risk_acceptance_status": "none", "risk_acceptance": None,
                           "revision": 0, "evidence_fingerprint": evidence_fingerprint(replace(finding, status=status)),
                           "current": None, "history_count": 0, "reopened_reason": None,
                           "identity_verified": False, "history": []}

@@ -100,10 +100,14 @@ def static_plan(engine: RemediationEngine, proposal_id: str, *, actor: str) -> d
               if current.is_open else "Current stored finding is not open.")
     if usable:
         review = ReviewService(ctx).summary(current)
+        check("remediation_held", "blocked" if review["remediation_held"] else "pass",
+              "Operator risk acceptance holds remediation; the scanner risk remains open." if review["remediation_held"] else
+              "No active operator risk acceptance holds remediation.")
         check("suppression", "blocked" if review["suppressed"] else "pass",
               "Current finding has an active review suppression." if review["suppressed"] else
               "Current finding has no active review suppression.")
     else:
+        check("remediation_held", "unknown", "Risk acceptance cannot be assessed without a matching current finding.")
         check("suppression", "unknown", "Active suppression cannot be assessed without a matching current finding.")
 
     if (proposal.decided_by or "").startswith("policy:"):

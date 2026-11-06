@@ -136,6 +136,8 @@ def assurance_block_reason(ctx, finding: Finding) -> str | None:
         return blocked
 
     review = ReviewService(ctx).summary(finding)
+    if review["remediation_held"]:
+        return "operator risk acceptance holds remediation"
     if review["suppressed"] or review["disposition"] == "needs_investigation":
         return "finding review requires attention: " + review["disposition"].replace("_", " ")
     confidence = assess_for_context(ctx, finding)

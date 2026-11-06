@@ -33,8 +33,10 @@ def test_assurance_filters_facets_sort_and_immutable_observation(client, ctx, mo
 
 
 def test_assurance_filter_validation(client):
-    for params in ({"confidence": "99%"}, {"review": "risk_accepted"}):
+    for params in ({"confidence": "99%"}, {"review": "risk_forever"}):
         assert client.get("/api/v1/findings", params=params).status_code == 400
+    for status in ("risk_accepted", "risk_expired", "risk_reopened", "risk_revoked"):
+        assert client.get("/api/v1/findings", params={"review": status}).status_code == 200
 
 
 def test_suppressed_apply_is_rejected_before_background_work(client, ctx, approved):

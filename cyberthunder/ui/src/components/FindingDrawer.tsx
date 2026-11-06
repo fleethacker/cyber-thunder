@@ -8,7 +8,7 @@ import { PermissionButton, usePermissions } from './PermissionGate';
 import { api, errorText } from '../api/client';
 import type { FindingPlus, ProposalPlus } from '../api/types';
 import { fmtAgo, fmtTime } from '../lib/format';
-import { isSuppressed } from '../lib/findingAssurance';
+import { isSuppressed, isRemediationHeld } from '../lib/findingAssurance';
 import { findingResultLabel } from '../lib/findingRow';
 import { useAsync } from '../lib/hooks';
 import { CitationChips } from './CitationChips';
@@ -73,7 +73,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
     }
   };
   const propose = async () => {
-    if (!permission.can('propose') || busy || isSuppressed(f.review)) return;
+    if (!permission.can('propose') || busy || isSuppressed(f.review) || isRemediationHeld(f.review)) return;
     setBusy('propose');
     setActionError(null);
     try {
@@ -91,6 +91,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
   const ex = f.explanation;
   const scannerStatus = f.scanner_status ?? f.remediated?.scan_status ?? f.status;
   const suppressed = isSuppressed(f.review);
+  const held = isRemediationHeld(f.review);
   const live = f.proposal && !['denied', 'cancelled', 'verified', 'rolled_back', 'failed'].includes(f.proposal.state);
   return (
     <Stack gap="md">
@@ -170,7 +171,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
             <PermissionButton action="propose"
               size="sm"
               leftSection={<IconSend size={16} />}
-              disabled={!f.fix || !!live || f.status !== 'open' || suppressed}
+              disabled={!f.fix || !!live || f.status !== 'open' || suppressed || held}
               loading={busy === 'propose'}
               onClick={() => void propose()}
             >
@@ -190,6 +191,7 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
           )}
           {live && <Text size="xs" c="dimmed">A live proposal already exists ({f.proposal?.state}).</Text>}
           {suppressed && <Text size="sm" c="orange">Propose is disabled while this human dismissal is active. {f.review?.current?.reason} Review the current evidence to reverse the dismissal.</Text>}
+          {held && <Text size="sm" c="orange">Risk acceptance holds remediation. The scanner failure remains open. Use the risk review form to revoke acceptance, or reassess after expiry or changed evidence.</Text>}
         </Stack>
       </Paper>
 

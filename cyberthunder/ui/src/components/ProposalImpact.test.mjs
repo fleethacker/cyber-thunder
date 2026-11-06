@@ -11,7 +11,7 @@ async function setup(t, state, flags = {}) {
     impact: (p, inspectOnly) => calls.push(['impact', p.id, inspectOnly]) };
   const panel = mount(() => evaluate(new URL('./ProposalCard.tsx', import.meta.url), {
     '@mantine/core': ui, '../lib/format': { fmtAgo: () => 'earlier', fmtZonedTime: (value) => value, label: (value) => value },
-    '../lib/proposalHistory': helpers, '../lib/findingAssurance': { isSuppressed: () => false },
+    '../lib/proposalHistory': helpers,
     './PermissionGate': permissions.imports, './ApplyTimeline': ui, './CitationChips': ui, './ProposalDiff': ui, './ProposalPlan': ui, './FixPanel': ui, './common': ui,
     './ApprovalProgress': ui, '../lib/proposalApprovals': approvalFixture(flags.identity),
   }).ProposalCard, { p: proposal(state, 'change'), actions, ...flags });
@@ -19,6 +19,18 @@ async function setup(t, state, flags = {}) {
   await panel.settle();
   return { ...panel, calls };
 }
+
+test('risk hold disables apply and a retained handler cannot invoke it', async (t) => {
+  const p = proposal('approved', 'change');
+  p.finding = { ...p.finding, review: { active: true, suppressed: false, remediation_held: true,
+    disposition: 'risk_accepted', current: { reason: 'Temporary constraint' } } };
+  const panel = await setup(t, 'approved', { p });
+  const apply = panel.find(node => node.props?.children === 'Apply');
+  assert.equal(apply.props.disabled, true);
+  apply.props.onClick();
+  assert.deepEqual(panel.calls, []);
+  assert.ok(panel.find(node => node.props?.title === 'Remediation held by risk acceptance'));
+});
 
 test('impact action is under the disruption question and proposed inspection cannot approve', async (t) => {
   const panel = await setup(t, 'proposed');

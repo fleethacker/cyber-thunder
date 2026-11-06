@@ -1,6 +1,6 @@
 import { Badge, Button, CopyButton, Group, Popover, Stack, Text } from '@mantine/core';
 import type { FindingConfidence, FindingReview } from '../api/types';
-import { CONFIDENCE_LABELS, isSuppressed, REVIEW_LABELS, reviewDisposition } from '../lib/findingAssurance';
+import { CONFIDENCE_LABELS, isSuppressed, isRemediationHeld, REVIEW_LABELS, reviewDisposition } from '../lib/findingAssurance';
 import { fmtTime } from '../lib/format';
 import { Collapsible, JsonView } from './common';
 
@@ -38,5 +38,8 @@ export function ReviewBadge({ review, onClick }: { review?: FindingReview | null
       aria-label={`${REVIEW_LABELS[disposition]}: open human review and history`}>{REVIEW_LABELS[disposition]}</Button>
       : <Badge color={color} variant="light">{REVIEW_LABELS[disposition]}</Badge>}
     {isSuppressed(review) && <Badge size="xs" variant="outline" color="orange">Suppressed</Badge>}
+    {isRemediationHeld(review) && <Badge size="xs" variant="outline" color="orange">Remediation held</Badge>}
+    {review?.risk_acceptance_status && !['none', 'active'].includes(review.risk_acceptance_status) &&
+      <Badge size="xs" variant="outline">Risk acceptance {review.risk_acceptance_status}</Badge>}
   </Group>;
 }

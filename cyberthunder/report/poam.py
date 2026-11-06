@@ -27,7 +27,8 @@ COLUMNS = ["Host", "Asset Type", "STIG ID", "Rule ID", "Title", "Severity (CAT)"
            "Last Review Disposition", "Reviewed By", "Review Reason", "Review Supporting Evidence",
            "Review Expires At", "Reviewed At", "Review Reopened Reason", "Review Evidence Fingerprint",
            "Reviewer Identity", "Proposed By", "Proposer Identity", "Approval Quorum",
-           "Approval Validation", "Approval Evidence"]
+           "Approval Validation", "Approval Evidence", "Remediation Held", "Risk Acceptance Status",
+           "Risk Decision Evidence"]
 
 # Days allowed to close a finding, by severity. A planning default, not policy: the owner edits the CSV.
 SCHEDULE_DAYS = {Severity.HIGH: 30, Severity.MEDIUM: 90, Severity.LOW: 180}
@@ -95,7 +96,10 @@ def poam_rows(ctx: "AppContext", scan_id: str | None = None) -> list[dict]:
                     status, milestone = "Completed", "Scanner reports not_a_finding"
                 else:
                     milestone = "Reassess observation; prior verification does not establish closure"
-        if review["suppressed"]:
+        if review["remediation_held"]:
+            status = "Open (risk accepted; remediation held)"
+            milestone = "Reassess risk before acceptance expiry; acceptance is not remediation or change approval"
+        elif review["suppressed"]:
             status = "Suppressed (review)"
             milestone = "Reassess before review expiry; suppression is not remediation"
         elif incomplete:
@@ -124,6 +128,10 @@ def poam_rows(ctx: "AppContext", scan_id: str | None = None) -> list[dict]:
             "Confidence Grade": assessed["confidence"]["grade"], "Confidence Reason": assessed["confidence"]["reason"],
             "Review Disposition": review["disposition"], "Review Active": "yes" if review["active"] else "no",
             "Review Suppressed": "yes" if review["suppressed"] else "no",
+            "Remediation Held": "yes" if review["remediation_held"] else "no",
+            "Risk Acceptance Status": review["risk_acceptance_status"],
+            "Risk Decision Evidence": json.dumps(review["risk_acceptance"], ensure_ascii=False, sort_keys=True)
+                                      if review["risk_acceptance"] else "",
             "Last Review Disposition": event.get("disposition", ""), "Reviewed By": event.get("reviewed_by", ""),
             "Review Reason": event.get("reason", ""), "Review Supporting Evidence": event.get("supporting_evidence", ""),
             "Review Expires At": event.get("expires_at") or "", "Reviewed At": event.get("reviewed_at", ""),

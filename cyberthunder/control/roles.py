@@ -5,11 +5,11 @@ READ = frozenset({"read", "read.all", "kill.engage"})
 ROLE_PERMISSIONS = {
     "viewer": READ,
     "analyst": READ | {"scan", "discover", "propose", "explain", "plan", "import"},
-    "approver": READ | {"approve", "deny", "cancel", "apply", "rollback", "verify", "plan", "review"},
+    "approver": READ | {"approve", "deny", "cancel", "apply", "rollback", "verify", "plan", "review", "risk.accept"},
     "admin": READ | {"admin", "policy", "kill.release"},
     "auditor": READ | {"audit", "export"},
 }
-HUMAN_ACTIONS = frozenset({"approve", "deny", "cancel", "apply", "rollback", "verify", "review", "admin", "policy", "kill.release"})
+HUMAN_ACTIONS = frozenset({"approve", "deny", "cancel", "apply", "rollback", "verify", "review", "risk.accept", "admin", "policy", "kill.release"})
 
 
 def permissions(principal) -> frozenset[str]:
@@ -28,6 +28,8 @@ WRITE_ACTIONS = {
     ("POST", "/cluster/known-good/from-finding/{finding_id}"): "admin", ("DELETE", "/cluster/known-good/exceptions/{exception_id}"): "admin",
     ("POST", "/findings/explain"): "explain", ("POST", "/findings/{finding_id}/propose"): "propose",
     ("POST", "/findings/{finding_id}/explain"): "explain", ("PUT", "/findings/{finding_id}/review"): "review",
+    ("PUT", "/findings/{finding_id}/risk-acceptance"): "risk.accept",
+    ("POST", "/findings/{finding_id}/risk-acceptance/revoke"): "risk.accept",
     ("PUT", "/discovery/scopes"): "admin", ("POST", "/discovery/scopes/preview"): "read",
     ("GET", "/discovery/scopes/recipes"): "read", ("PUT", "/discovery/scopes/recipes"): "admin",
     ("POST", "/discovery/scopes/recipes/preview"): "read",

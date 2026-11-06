@@ -127,7 +127,7 @@ def test_static_contract_and_only_one_redacted_audit(ctx, monkeypatch, approved,
     assert plan["fix"] == fix.to_dict()
     assert plan["fix_sha256"] == plan["approved_fix_sha256"] == fix_digest(fix)
     assert statuses(plan) == {"scope": "pass", "approval": "pass" if approved else "blocked",
-                              "fix_binding": "pass", "current_finding": "pass", "suppression": "pass",
+                              "fix_binding": "pass", "current_finding": "pass", "suppression": "pass", "remediation_held": "pass",
                               "policy_evidence": "unknown"}
     assert all(set(c) == {"code", "status", "detail"} and c["detail"] for c in plan["checks"])
     text = json.dumps(plan)

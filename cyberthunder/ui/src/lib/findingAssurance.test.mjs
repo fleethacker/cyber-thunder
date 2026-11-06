@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createModuleLoader } from './moduleTestSupport.mjs';
 
 const load = createModuleLoader();
-const { isSuppressed, reviewDisposition, reviewDraft, reviewInput } = load(new URL('./findingAssurance.ts', import.meta.url));
+const { isSuppressed, isRemediationHeld, reviewDisposition, reviewDraft, reviewInput } = load(new URL('./findingAssurance.ts', import.meta.url));
 const { api, ApiError } = load(new URL('../api/client.ts', import.meta.url));
 const { setSessionIdentity } = load(new URL('../api/identity.ts', import.meta.url));
 setSessionIdentity({ mode: 'dev', authenticated: false, login_available: false, permissions: [] });
@@ -57,6 +57,39 @@ test('expired or reopened decisions do not prefill a dismissal for new evidence'
   const active = reviewDraft({ ...summary, active: true, disposition: 'false_positive', current });
   assert.equal(active.reason, 'Old evidence');
   assert.equal(new Date(active.expiresAt).toISOString(), current.expires_at.replace('Z', '.000Z'));
+});
+
+test('risk acceptance is a distinct hold with bounded expiry and required supporting evidence', () => {
+  const held = { ...summary, active: true, disposition: 'risk_accepted', remediation_held: true, risk_acceptance_status: 'active' };
+  assert.equal(isSuppressed(held), false);
+  assert.equal(isRemediationHeld(held), true);
+  assert.equal(isRemediationHeld({ ...held, active: false }), false);
+  const risk = { ...draft, disposition: 'risk_accepted' };
+  assert.throws(() => reviewInput({ ...risk, supportingEvidence: ' ' }, summary, now), /Supporting evidence/);
+  assert.throws(() => reviewInput({ ...risk, expiresAt: '' }, summary, now), /expiry/);
+  assert.throws(() => reviewInput({ ...risk, expiresAt: new Date(now + 31 * 86400000).toISOString() }, summary, now), /30 days/);
+  assert.equal(reviewInput({ ...risk, expiresAt: new Date(now + 30 * 86400000).toISOString() }, summary, now).disposition, 'risk_accepted');
+  assert.equal(reviewInput({ ...risk, disposition: 'risk_revoked', expiresAt: '2020-01-01' }, summary, now).expires_at, null);
+});
+
+test('risk endpoints preserve explicit authority boundaries and never send a disposition or principal', async () => {
+  const oldFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, ...options });
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const basis = { reason: 'Reviewed', expected_revision: 2, evidence_fingerprint: 'a'.repeat(64) };
+    await api.acceptFindingRisk('finding/one', { ...basis, supporting_evidence: 'Evidence', expires_at: '2026-11-07T12:00:00Z' });
+    await api.revokeFindingRisk('finding/one', basis);
+    assert.deepEqual(calls.map(c => [c.method, c.url]), [
+      ['PUT', '/api/v1/findings/finding%2Fone/risk-acceptance'],
+      ['POST', '/api/v1/findings/finding%2Fone/risk-acceptance/revoke'],
+    ]);
+    assert.deepEqual(JSON.parse(calls[1].body), basis);
+    assert.ok(calls.every(c => !('disposition' in JSON.parse(c.body)) && !('reviewed_principal' in JSON.parse(c.body))));
+  } finally { globalThis.fetch = oldFetch; }
 });
 
 test('client preserves CSV query names, review route, exact PUT body and stale 409 details', async () => {

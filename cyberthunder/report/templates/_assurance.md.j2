@@ -2,9 +2,9 @@
 
 Assessed at {{ r.assurance.assessed_at }}. Human review is separate from scanner status and change approval. Reviewer identity: **{{ r.assurance.identity_label }}**. Suppression is not remediation.
 
-| Raw scanner open | Confirmed | Unreviewed | Suppressed | Needs investigation |
-|---:|---:|---:|---:|---:|
-| {{ r.assurance.counts.raw_open }} | {{ r.assurance.counts.confirmed }} | {{ r.assurance.counts.unreviewed }} | {{ r.assurance.counts.suppressed }} | {{ r.assurance.counts.needs_investigation }} |
+| Raw scanner open | Confirmed | Unreviewed | Suppressed | Needs investigation | Risk accepted (remediation held) |
+|---:|---:|---:|---:|---:|---:|
+| {{ r.assurance.counts.raw_open }} | {{ r.assurance.counts.confirmed }} | {{ r.assurance.counts.unreviewed }} | {{ r.assurance.counts.suppressed }} | {{ r.assurance.counts.needs_investigation }} | {{ r.assurance.counts.risk_accepted }} |
 
 Review counts above are subsets of raw-open observations, including discovery. Verified fixes do not rewrite these raw counts.
 Scanner pass: {{ r.assurance.counts.scanner_pass }}; scanner not applicable: {{ r.assurance.counts.scanner_not_applicable }}; scanner not reviewed: {{ r.assurance.counts.scanner_not_reviewed }}; scanner errors: {{ r.assurance.counts.scanner_error }}.
@@ -22,6 +22,14 @@ All selected scanner observations and current discovery items are retained below
 Severity: {{ f.severity }} | Finding: {{ f.id | md_cell }} | Source: {{ f.source | md_cell }} | Rule: {{ f.rule_id | md_cell }}
 
 Original scanner status: **{{ f.status }}**. {% if review.suppressed %}**SUPPRESSED BY REVIEW - NOT REMEDIATED.**{% endif %}
+
+Risk acceptance: **{{ review.risk_acceptance_status }}**. {% if review.remediation_held %}**REMEDIATION HELD. Risk remains open; no fix or remediation approval is established.**{% endif %}
+{% if review.risk_acceptance %}
+Recorded risk decision: {{ review.risk_acceptance.disposition }}; actor: {{ review.risk_acceptance.reviewed_by | md_cell }};
+reason: {{ review.risk_acceptance.reason | md_cell }}; evidence: {{ review.risk_acceptance.supporting_evidence | md_cell }};
+expiry: {{ (review.risk_acceptance.expires_at or "none") | md_cell }};
+original evidence fingerprint: {{ review.risk_acceptance.evidence_fingerprint }}.
+{% endif %}
 
 Confidence: **{{ f.confidence.grade }}** - {{ f.confidence.reason | md_cell }}
 

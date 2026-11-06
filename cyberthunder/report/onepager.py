@@ -170,6 +170,7 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     assurance = build_assurance(ctx, [*findings, *(f for f in disc if f.id not in finding_ids)])
     assured = {row["id"]: row for row in assurance["findings"]}
     suppressed_ids = {row["id"] for row in assurance["findings"] if row["review"]["suppressed"]}
+    held_ids = {row["id"] for row in assurance["findings"] if row["review"]["remediation_held"]}
     # A subsequent open observation wins over an older verified fix.
     lifecycle = access.lifecycle(ctx)
     current = {f.id: lifecycle.assess(f) for f in findings}
@@ -246,6 +247,7 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     ac = assurance["counts"]
     bluf.append(f"Raw scanner open: {ac['raw_open']}; confirmed: {ac['confirmed']}; "
                 f"unreviewed: {ac['unreviewed']}; suppressed: {ac['suppressed']}; "
+                f"risk accepted (remediation held, risk retained): {ac['risk_accepted']}; "
                 f"needs investigation: {ac['needs_investigation']}. "
                 "Review counts are subsets of raw open, including discovery; suppression is not remediation.")
     bluf.append(f"Scanner not reviewed: {ac['scanner_not_reviewed']}; errors: {ac['scanner_error']}. "
@@ -265,8 +267,11 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
                    + ": accept them into the inventory or remove them from the network.")
     if counts["proposed"]:
         nxt.append(f"Approve or deny {counts['proposed']} pending proposal(s) in the approval queue.")
+    if held_ids:
+        nxt.append(f"Reassess {len(held_ids)} accepted risk(s) before expiry. Remediation remains held until authorized "
+                   "revocation, expiry or changed evidence; risk acceptance does not approve a change.")
     proposed_ids = {p.finding_id for p in props if p.state not in (ProposalState.DENIED, ProposalState.CANCELLED)}
-    uncovered = [f for f in open_f if f.severity == Severity.HIGH and f.id not in proposed_ids]
+    uncovered = [f for f in open_f if f.severity == Severity.HIGH and f.id not in proposed_ids and f.id not in held_ids]
     if uncovered:
         nxt.append(f"{len(uncovered)} CAT I finding(s) have no proposed fix: remediate by hand or add a library entry.")
     if counts["rolled_back"] or counts["failed"]:

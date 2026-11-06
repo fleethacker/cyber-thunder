@@ -31,7 +31,7 @@ def build_assurance(ctx: "AppContext", findings: list[Finding]) -> dict:
     now = datetime.now(timezone.utc)
     reviews = ReviewService(ctx)
     rows = []
-    counts = dict.fromkeys(("total", "raw_open", "confirmed", "unreviewed", "suppressed",
+    counts = dict.fromkeys(("total", "raw_open", "confirmed", "unreviewed", "suppressed", "risk_accepted",
                             "needs_investigation", "scanner_pass", "scanner_not_applicable",
                             "scanner_not_reviewed", "scanner_error"), 0)
     status_counts = {s.value: 0 for s in Status}
@@ -43,7 +43,9 @@ def build_assurance(ctx: "AppContext", findings: list[Finding]) -> dict:
         status_counts[finding.status.value] += 1
         if finding.is_open:
             counts["raw_open"] += 1
-            if review["suppressed"]:
+            if review["remediation_held"]:
+                counts["risk_accepted"] += 1
+            elif review["suppressed"]:
                 counts["suppressed"] += 1
             elif review["disposition"] == "unreviewed":
                 counts["unreviewed"] += 1

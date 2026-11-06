@@ -1,8 +1,13 @@
 # Finding review
 
 Reviews record a named operator's decision separately from the scanner's original observation. They never
-change scanner status, severity, evidence, confidence, or remediation approval. Identity is self-asserted:
-`identity_verified` is always `false`. This is not authentication or a role/authorization redesign.
+change scanner status, severity, evidence, confidence, or remediation approval. Verified mode records the
+authenticated human principal and checks current target authority. Local development records a clearly
+unverified, self-asserted identity. Recorded identity evidence never supplies current authorization.
+
+Operator risk acceptance is a separate authorized decision with a remediation hold, described in
+[RISK_ACCEPTANCE.md](RISK_ACCEPTANCE.md). Its accept/revoke operations share this ledger and lifecycle
+locks. Ordinary review saves cannot create risk decisions or replace an active risk acceptance.
 
 `ReviewService(ctx)` exposes `summary(finding, *, now=None)`, `history(finding)`, and
 `save(finding, *, actor, disposition, reason, supporting_evidence='', expires_at=None,
@@ -28,7 +33,10 @@ Summary fields:
 | `current` | Most recently saved event, even if it no longer applies; otherwise `null` |
 | `history_count` | All saved events, including reversals |
 | `reopened_reason` | Explanation for mismatched or expired evidence; otherwise `null` |
-| `identity_verified` | Always `false` |
+| `identity_verified` | Whether the recorded decision was bound to a verified human principal |
+| `remediation_held` | Active operator risk acceptance; distinct from false-positive suppression |
+| `risk_acceptance_status` | `none`, `active`, `expired`, `reopened`, or `revoked` |
+| `risk_acceptance` | Last risk decision visible to this observation's owner, or `null` |
 
 History views add `history`, in append order. Each event has `id`, `revision`, `disposition`, `reason`,
 `supporting_evidence`, `expires_at`, `reviewed_at`, `reviewed_by`, `identity_verified`, `scope`, and
