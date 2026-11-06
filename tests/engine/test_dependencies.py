@@ -242,7 +242,7 @@ def test_unknown_modes_and_missing_fixture_never_write(ctx, tmp_path, monkeypatc
 
 def test_missing_current_finding_does_not_infer_live_state(ctx, tmp_path, monkeypatch):
     proposal, _, root, _ = seed(ctx, tmp_path)
-    persist(ctx, [], "missing-current", offset=10)
+    persist(ctx, [], "missing-current", offset=10, targets=[proposal.host])
     wire(ctx, monkeypatch, root)
     result = dep.collect_dependencies(ctx.engine, proposal.id, actor=ACTOR, live=False)
     assert any("matching current finding" in s for s in result["unknowns"])

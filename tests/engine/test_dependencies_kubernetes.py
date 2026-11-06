@@ -169,7 +169,7 @@ def test_pdb_selector_semantics(ctx, tmp_path, monkeypatch, selector, matched):
 
 def test_kubernetes_missing_current_finding_never_uses_historical_object(ctx, tmp_path, monkeypatch):
     proposal, _, root, _ = kube_seed(ctx, tmp_path)
-    persist(ctx, [], "removed-finding", offset=10)
+    persist(ctx, [], "removed-finding", offset=10, targets=[proposal.host])
     wire(ctx, monkeypatch, root)
     monkeypatch.setattr(ctx, "transport_for", lambda t: pytest.fail("historical object queried"))
     result = dep.collect_dependencies(ctx.engine, proposal.id, actor=ACTOR)
