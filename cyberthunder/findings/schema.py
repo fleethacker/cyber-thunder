@@ -129,8 +129,8 @@ class Finding:
     fix_ref: str | None = None       # resolved remediation-library entry, set by the engine
     scan_id: str | None = None       # scan run that produced this finding
     collection_provenance: dict[str, Any] | None = None  # optional collector facts; see docs/CONFIDENCE.md
-    catalog_rule_metadata: dict[str, Any] | None = None  # reference metadata only; not scanner evidence or coverage
     authorization_scope: dict[str, Any] | None = None  # captured target identity; absent legacy evidence is unclassified
+    catalog_rule_metadata: dict[str, Any] | None = None  # reference metadata only; not scanner evidence or coverage
 
     def __post_init__(self) -> None:
         if not isinstance(self.severity, Severity):

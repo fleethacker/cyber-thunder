@@ -68,16 +68,27 @@ outer pinned snapshot. One snapshot supplies all configured families for one
 target. Different targets in a long scan can observe different generations;
 each target/finding records its exact snapshot. Authority is checked again after
 the read and before annotation; the scanner retains its existing authorization
-check before publishing results.
+check before publishing results. Configured metadata also requires a fresh node
+`read` authorization immediately before the scanner writes collected results,
+after coverage and known-good processing.
 
 Only the active `catalog` lineage is considered. Its committed product must
 exactly match the binding, its publication must be trusted under the existing
 publication policy, and its catalog must be a matching single Benchmark.
-Operator attestation and authorized exception provenance are retained as stored;
-neither is relabeled a publisher signature or evidence of the newest release.
-An active `unsigned_dev` publication is explicitly untrusted for this feature.
+The receipt exposes only assurance status, attestation/signature booleans,
+document/key digests when present, and the original unsigned/unknown-signer status
+for an authorized exception. Private override reasons, actor identities, key
+locations, scopes, signer labels and URLs remain in the authoritative local
+receipt. Source type is an enumerated label; filenames are sanitized basenames.
+No receipt is relabeled a publisher signature or evidence of the newest release.
+Only the existing `operator_attested`, `human_override`, and
+`trusted_https_source` assurance classes can supply rule references, and only
+when the ledger also marks the publication trusted. Development and unknown
+assurance classes are explicitly untrusted for this feature.
 
-The ledger's integrity checks remain authoritative. The exact catalog bytes
+The ledger's integrity checks remain authoritative. Every active publication's
+source and derived artifacts are rechecked even inside an outer pinned read
+scope; this includes untrusted development publications. The exact catalog bytes
 being parsed are also checked against their committed size and SHA-256, even
 inside an existing pinned read scope. XML uses the existing bounded parser that
 refuses DTD/entity declarations. Legacy state is validated by the existing
@@ -85,7 +96,18 @@ generation reader but never promoted to active metadata. Missing/corrupt managed
 ledgers, artifacts, inconsistent lineage/product references, unreadable content
 and read-authorization failures propagate as scan target errors. They do not
 produce a successful bundled fallback. Previously persisted findings are not
-rewritten or cleared by such a failure.
+rewritten or cleared by such a failure. The catalog's parsed release must also
+match its committed lineage, and the explicit benchmark identity must match the
+lineage itself.
+
+The additional reference reader limits each bundled JSON file to 2 MiB and a
+nesting depth of 32, catalog XML to 32 MiB, rules/bundled rows/annotations to
+10,000, metadata text to 4,096 characters, each emitted record to 16 KiB, and the
+combined annotations plus collection summary to 8 MiB. Existing XML depth and
+element limits still apply. JSON duplicate keys and duplicate bundled STIG IDs
+are errors. Limits fail before attaching any annotations or publishing a scan;
+metadata is never silently truncated. These limits apply to this reader; they
+do not replace the shared publication ledger's existing read/size policy.
 
 Each annotation contains:
 
@@ -94,7 +116,7 @@ Each annotation contains:
 - The bundled extract's relative source path and SHA-256.
 - The pinned ledger generation and selected publication generation (which can
   differ when another product was published later).
-- The source package's SHA-256/size, filename, source type, authenticity evidence
+- The source package's SHA-256/size, sanitized filename, source type, public authenticity facts
   and publication bookkeeping status.
 - The exact catalog SHA-256/size, benchmark ID/title, version, release text,
   normalized release/scheme and catalog rule count.
@@ -115,7 +137,13 @@ findings were emitted. Unknown catalog severity remains `unknown`.
 | `matched` | Exactly one catalog Rule/version matches the original stable STIG ID. |
 | `missing` | The active catalog does not contain that exact stable STIG ID. Absence alone does not establish withdrawal. |
 | `withdrawn` | A unique match explicitly carries withdrawn, deprecated or obsolete status on the rule or benchmark. |
-| `ambiguous` | Duplicate STIG IDs, multiple Rule/version values or ambiguous title fields prevent a unique match. |
+| `ambiguous` | Duplicate STIG IDs, multiple Rule/version values, or missing/empty/ambiguous title fields prevent a unique match. |
+
+Only fields in the benchmark's XCCDF namespace participate. Foreign versions do
+not establish a match. Titles allow plain text or a bounded set of XHTML text
+formatting; embedded check/fix elements do not become titles. Duplicate benchmark
+titles also prevent a unique rule reference. Explicit benchmark or rule
+withdrawal remains conservative even alongside an accepted status.
 
 All outcomes have `assessment: not_assessed`. Missing or ambiguous mappings do
 not borrow an ID from a similar title or reference. Unmatched annotations label
@@ -137,6 +165,11 @@ provenance participates in the existing evidence fingerprint. The new optional
 field preserves that fingerprint and review scope across catalog-only changes;
 older findings deserialize with a null field. No review or approval policy is
 changed, and stored historical documents are not migrated.
+The optional field is appended after the existing dataclass fields so legacy
+positional construction keeps its meaning. Its name, version-1 envelope, mapping
+statuses and `not_assessed` contract are unchanged. Consumers must tolerate the
+documented public subset of authenticity facts; private receipt extensions are
+not a display contract.
 
 External OpenSCAP, SCC, Evaluate-STIG and PowerSTIG results retain their actual
 scanner metadata. Linux native results already merged into an OpenSCAP finding
@@ -158,6 +191,13 @@ Assertions preserve the existing evidence fingerprint, review scope and entire
 confidence assessment even when a matched catalog has different check text,
 title, severity and rule ID.
 Native rule, parser, scan and remediation-identity regressions supplement them.
+The independent review adds calibrated failures for source corruption inside a
+pinned scope, private receipt disclosure, unknown assurance, metadata ambiguity
+and resource limits, plus authorization revocation after annotation. Real native
+Windows/Linux simulator findings retain their complete semantics and selected
+fix payload through apply/verify/rollback despite changed catalog requirements
+and an additional unimplemented catalog rule. Exact runs, hashes, counts and
+remaining limits are recorded in `docs/CATALOG_RULE_METADATA_REVIEW.md`.
 
 Before full VAL-03 closure, a separately reviewed design must establish when a
 new release's changed requirement is still implemented by an existing check,

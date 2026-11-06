@@ -349,6 +349,8 @@ class Scanner:
             # target replacement. Do not publish facts under that old request.
             authorize(ctx, "scan", actor=actor, target=target)
             check_record(ctx, run, "scan")
+            if collected.raw.get("catalog_rule_metadata", {}).get("snapshot_generation") is not None:
+                authorize(ctx, "read", actor=actor)
             ctx.store.write_json(workdir / "collected.json", collected.to_dict())
             res.errors.extend(collected.errors)
             res.findings = len(findings)
