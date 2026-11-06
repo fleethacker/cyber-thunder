@@ -118,7 +118,9 @@ def _write_cache(path: Path, data: bytes, *, expected_digest=_UNCHECKED) -> None
             # Validate the actual completed temporary object before publication.
             if read_cache(Path(temporary)) != data:
                 raise ValueError("Cache changed before publication")
-            read_cache(path)
+            current = read_cache(path)
+            if expected_digest is not _UNCHECKED and digest(current) != expected_digest:
+                raise ValueError("Cache invalidated before publication")
         os.replace(temporary, path)
         if os.name == "nt" and read_cache(path) != data:
             raise ValueError("Cache changed during publication")

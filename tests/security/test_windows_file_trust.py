@@ -118,7 +118,7 @@ def test_deny_ace_does_not_make_a_dangerous_allow_acceptable(tmp_path, acl):
         read(path)
 
 
-@pytest.mark.parametrize("mask", [0x40, 0x10000, 0x40000, 0x80000, 0x100, 0x10])
+@pytest.mark.parametrize("mask", [0x2, 0x40, 0x10000, 0x40000, 0x80000, 0x100, 0x10])
 @pytest.mark.parametrize("ancestor", ["parent", "grandparent"])
 def test_parent_mutation_including_delete_child_is_rejected(tmp_path, acl, mask, ancestor):
     directory = tmp_path / "outer" / "inner"
@@ -134,7 +134,8 @@ def test_parent_mutation_including_delete_child_is_rejected(tmp_path, acl, mask,
 def test_child_creation_is_safe_for_existing_reads_but_not_cache_creation(tmp_path, acl):
     path = tmp_path / "existing"
     path.write_bytes(b"public")
-    acl(tmp_path, protected_aces(directory=True) + "(A;;0x6;;;S-1-1-0)")
+    acl(tmp_path, protected_aces(directory=True) + "(A;;0x4;;;S-1-1-0)")
+    # ADD_SUBDIRECTORY alone cannot write reparse data; ADD_FILE can.
     assert read(path) == b"public"
     with pytest.raises(ft.FileTrustError):
         cache.write_cache(tmp_path / "new-cache", b"{}")

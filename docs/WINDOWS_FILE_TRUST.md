@@ -20,7 +20,7 @@ The checks distinguish these uses:
 | --- | --- |
 | `access.json`, public CA/client certificates, JWKS cache | Integrity; other accounts may read |
 | Selected kubeconfig (including inline tokens), client private key | Integrity and confidentiality; other accounts may not read data or execute/map the file |
-| Every parent directory | Trusted owner; other accounts may not mutate permissions, attributes, extended attributes, delete the directory or delete its children |
+| Every parent directory | Trusted owner; other accounts may not mutate permissions, attributes, extended attributes, set reparse data, delete the directory or delete its children |
 | Immediate JWKS cache directory during writes | Parent protection plus no foreign child creation |
 
 Untrusted owners are refused because an owner normally has implicit `WRITE_DAC`, even without an
@@ -30,8 +30,13 @@ conservatively rejects untrusted owners regardless. [Windows well-known SIDs](ht
 
 For an untrusted trustee, effective allow entries must not grant file writes/appends, writes to
 attributes or extended attributes, `DELETE`, `WRITE_DAC` or `WRITE_OWNER`. A parent's `DELETE_CHILD`
-right can defeat a child's own delete restriction, so it is also forbidden. Generic rights are expanded
-with `MapGenericMask`; checking only a literal write bit would miss `GENERIC_WRITE` and `GENERIC_ALL`.
+right can defeat a child's own delete restriction, so it is also forbidden. Directory `FILE_ADD_FILE`
+shares the `FILE_WRITE_DATA` bit that permits setting reparse data, and is forbidden even on reads.
+A no-delete-sharing handle alone does not block this operation on an empty directory. Only
+`FILE_ADD_SUBDIRECTORY` can be allowed to other accounts for existing reads; cache creation forbids
+that right too. [Reparse data access requirements](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/4aeefef8-92c3-4abc-af7a-a610caf8a165)
+
+Generic rights are expanded with `MapGenericMask`; checking only a literal write bit would miss `GENERIC_WRITE` and `GENERIC_ALL`.
 Public read and metadata-only read rights do not confer integrity authority.
 [File access rights](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)
 
@@ -60,10 +65,18 @@ ACL support. Missing parent directories or missing native API support are failur
 leaf remains an ordinary cache miss. Reads and cache size limits remain bounded by their callers.
 
 JWKS writes hold the parent chain, check any existing destination, verify the newly created temporary
-file's DACL before writing, recheck before atomic replacement and check the resulting bytes. Private
-credential checks run again through the existing Kubernetes guard before each subprocess operation.
-Kubernetes evidence reports `protection: "windows_dacl"` only after these checks succeed. Failures keep
-the existing sanitized policy, authentication and credential error contracts; no credential contents
+file's DACL before writing, recheck before atomic replacement and check the resulting bytes. The
+last destination read must still match the expected digest, including after temporary-file validation;
+an observed purge or newer update cannot be discarded. Atomic replacement provides publication of
+one complete file, not a cross-process compare-and-swap transaction. Another trusted writer can
+still change the destination after the last comparison; deployments must serialize cache writers
+and coordinate administrative purge with them. A post-publication validation failure denies the
+operation but does not restore an earlier cache, which could undo a revocation.
+
+Private credential checks run again through the existing Kubernetes guard before each subprocess operation.
+The guard releases its handles before kubectl opens paths, so it does not pin credentials for the
+external process's lifetime. Kubernetes evidence reports `protection: "windows_dacl"` only after
+these checks succeed. Failures keep the existing sanitized policy, authentication and credential error contracts; no credential contents
 or raw native diagnostics enter responses.
 
 ## Provisioning a new local directory
@@ -112,7 +125,8 @@ On Windows, the default pytest session deliberately creates a disposable `ct-tru
 at the temporary volume's root and applies a protected native DACL to that new directory. Pytest
 `tmp_path`/`tmp_path_factory` and in-process `tempfile` fixtures use descendants of it. This avoids
 silently inheriting permissions from a developer's writable home/temp ancestors. ACL mutation helpers
-are restricted to registered temporary roots; negative tests alter only disposable files/directories.
+are restricted to registered temporary roots and refuse hardlinked files, whose shared descriptor
+could otherwise affect a name outside the root; negative tests alter only disposable files/directories.
 An explicit `--basetemp` remains honored and must already have protected ancestors. No production
 validator is patched off, and no live directory permissions are changed. POSIX fixture paths are unchanged.
 At session teardown, the fixture closes retained test SQLite backends beneath its own disposable root
@@ -121,13 +135,17 @@ before deleting it; test request contexts can otherwise keep database handles op
 Tests exercise actual Windows security descriptors and sharing violations, including public/private
 read distinctions, null DACLs, generic permissions, foreign trustees, OWNER RIGHTS, deny-plus-allow
 semantics, parent deletion/ACL rights, inherited cache permissions, junction/replacement races,
-policy changes during parsing and credential guard rechecks. The owner predicate is tested against an
-actual descriptor with a deliberately restricted trusted SID set; tests do not create another Windows
+policy changes during parsing and credential guard rechecks. Independent regressions also exercise
+native reparse writes through a handle requesting only `FILE_ADD_FILE`, conditional ACEs, cache
+revocation during temporary-file validation, publication reopens and refusal of ambient Kubernetes
+credentials after protection failures. Fixtures do not weaken production validation. The owner predicate
+is tested against an actual descriptor with a deliberately restricted trusted SID set; tests do not create another Windows
 account or enable restore privileges just to change ownership.
 
 The checks trust the service account, SYSTEM and the named administrative principals. They do not
 defend against those principals, accounts exercising backup/restore/take-ownership privileges, kernel
-compromise, physical/offline disk access or previously copied credentials. No privileges are enabled
-by this module. Domain-specific conditional ACLs, SMB shares,
-remote filesystems, ReFS deployment and service-account rollout require separate acceptance; local
+compromise, physical/offline disk access or previously copied credentials. Existing access handles
+and memory mappings are not revoked by hardening a DACL; provision fresh protected files and stop
+previous users before service startup. No privileges are enabled by this module. Domain-specific
+conditional ACLs, SMB shares, remote filesystems, ReFS deployment and service-account rollout require separate acceptance; local
 Windows fixtures do not establish enterprise effective access or validate a live identity provider.

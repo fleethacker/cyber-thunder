@@ -39,6 +39,8 @@ def set_dacl(path, aces=None, *, null=False):
     path = Path(path).absolute()
     resolved = path.resolve()
     assert any(resolved == root or root in resolved.parents for root in _roots), "ACL fixture escaped its root"
+    # A hardlink can reside inside the root while sharing an ACL with an outside file.
+    assert path.is_dir() or path.stat().st_nlink == 1, "ACL fixture must not modify hardlinked files"
     adv = c.WinDLL("advapi32", use_last_error=True)
     kernel = c.WinDLL("kernel32", use_last_error=True)
     ptr = c.c_void_p
