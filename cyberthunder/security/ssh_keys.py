@@ -15,8 +15,8 @@ from .secret_resolver import MountedSecret, _path, _read_mounted
 
 MAX_KEY_BYTES = 32 * 1024
 _ENVELOPE = re.compile(
-    rb"-----BEGIN (RSA|EC|OPENSSH|DSA) PRIVATE KEY-----\r?\n"
-    rb"([A-Za-z0-9+/=\r\n]+)-----END \1 PRIVATE KEY-----"
+    rb"-{5}BEGIN (RSA|EC|OPENSSH|DSA) PRIVATE KEY-{5}\r?\n"
+    rb"([A-Za-z0-9+/=\r\n]+)-{5}END \1 PRIVATE KEY-{5}"
 )
 
 
