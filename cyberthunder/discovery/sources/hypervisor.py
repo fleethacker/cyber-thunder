@@ -9,7 +9,7 @@ shut down. Listing VMs from the hypervisor puts them in front of the operator an
                      .vmx file read with Transport.read_file (paths come from vmrun's own output and are
                      only ever read, never executed)
 
-vCenter / ESXi inventory is a follow-up (it needs the vSphere API and a read-only role); see DISCOVERY.md.
+vCenter / ESXi API inventory is a separate source in vsphere.py; see docs/VSPHERE_DISCOVERY.md.
 """
 from __future__ import annotations
 

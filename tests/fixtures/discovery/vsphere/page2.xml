@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns="urn:vim25" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soap:Body><ContinueRetrievePropertiesExResponse><returnval>
+    <objects>
+      <obj type="VirtualMachine">vm-103</obj>
+      <propSet><name>name</name><val xsi:type="xsd:string">编译机 &amp; test</val></propSet>
+      <propSet><name>runtime.powerState</name><val xsi:type="VirtualMachinePowerState">poweredOn</val></propSet>
+      <propSet><name>runtime.host</name><val type="HostSystem" xsi:type="ManagedObjectReference">host-10</val></propSet>
+    </objects>
+    <objects>
+      <obj type="VirtualMachine">vm-104</obj>
+      <propSet><name>name</name><val xsi:type="xsd:string">outside-selected-range</val></propSet>
+      <propSet><name>runtime.powerState</name><val xsi:type="VirtualMachinePowerState">poweredOn</val></propSet>
+      <propSet><name>guest.ipAddress</name><val xsi:type="xsd:string">192.168.50.8</val></propSet>
+    </objects>
+  </returnval></ContinueRetrievePropertiesExResponse></soap:Body>
+</soap:Envelope>

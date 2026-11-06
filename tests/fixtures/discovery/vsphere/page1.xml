@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns="urn:vim25" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soap:Body><RetrievePropertiesExResponse><returnval>
+    <token>page-two-fixture</token>
+    <objects>
+      <obj type="HostSystem">host-10</obj>
+      <propSet><name>name</name><val xsi:type="xsd:string">esxi-01.lab</val></propSet>
+      <propSet><name>hardware.systemInfo.uuid</name><val xsi:type="xsd:string">hardware-10</val></propSet>
+      <propSet><name>summary.config.product.fullName</name><val xsi:type="xsd:string">VMware ESXi 8.0.3</val></propSet>
+      <propSet><name>runtime.connectionState</name><val xsi:type="HostSystemConnectionState">connected</val></propSet>
+      <propSet><name>runtime.powerState</name><val xsi:type="HostSystemPowerState">poweredOn</val></propSet>
+      <propSet><name>config.network.vnic</name><val xsi:type="ArrayOfHostVirtualNic">
+        <HostVirtualNic><device>vmk0</device><spec><ip><ipAddress>10.20.0.10</ipAddress></ip></spec></HostVirtualNic>
+      </val></propSet>
+    </objects>
+    <objects>
+      <obj type="VirtualMachine">vm-101</obj>
+      <propSet><name>name</name><val xsi:type="xsd:string">build-box</val></propSet>
+      <propSet><name>config.instanceUuid</name><val xsi:type="xsd:string">instance-101</val></propSet>
+      <propSet><name>config.guestFullName</name><val xsi:type="xsd:string">Rocky Linux 9</val></propSet>
+      <propSet><name>runtime.powerState</name><val xsi:type="VirtualMachinePowerState">poweredOn</val></propSet>
+      <propSet><name>runtime.host</name><val type="HostSystem" xsi:type="ManagedObjectReference">host-10</val></propSet>
+      <propSet><name>guest.ipAddress</name><val xsi:type="xsd:string">10.20.0.21</val></propSet>
+      <propSet><name>guest.hostName</name><val xsi:type="xsd:string">build-01.lab</val></propSet>
+    </objects>
+    <objects>
+      <obj type="VirtualMachine">vm-102</obj>
+      <propSet><name>name</name><val xsi:type="xsd:string">build-box</val></propSet>
+      <propSet><name>config.instanceUuid</name><val xsi:type="xsd:string">instance-102</val></propSet>
+      <propSet><name>runtime.powerState</name><val xsi:type="VirtualMachinePowerState">poweredOff</val></propSet>
+      <propSet><name>runtime.host</name><val type="HostSystem" xsi:type="ManagedObjectReference">host-10</val></propSet>
+      <propSet><name>guest.ipAddress</name><val xsi:type="xsd:string">10.20.0.22</val></propSet>
+    </objects>
+  </returnval></RetrievePropertiesExResponse></soap:Body>
+</soap:Envelope>

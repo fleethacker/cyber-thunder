@@ -40,7 +40,7 @@ from .models import RUN_MODES, DiscoveredAsset, DiscoveryRun, DiscoveryScope, as
 from .oui import tag_virtual
 from .recipes import ScopeRecipeStore
 from .simulated import DEMO_SCOPE, SimulatedSweep
-from .sources import active_directory, hypervisor, kube, neighbors, network_gear, nmap
+from .sources import active_directory, hypervisor, kube, neighbors, network_gear, nmap, vsphere
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -470,6 +470,10 @@ class DiscoveryService:
             if not t.in_scope:
                 continue
             o = t.options or {}
+            if o.get("hypervisor") == "vsphere":
+                got.extend(vsphere.collect(self.ctx, t, scopes, run.requested_by,
+                                           lambda scope: self._guard_scope(scope, run.requested_by)))
+                continue
             jobs: list[tuple[str, Callable[["Transport"], list[DiscoveredAsset]]]] = []
             if t.asset_type == "cisco_ios":
                 jobs.append(("network gear", lambda tr, t=t: self._gear(tr, t, run)))
@@ -502,8 +506,9 @@ class DiscoveryService:
             finally:
                 self._close(transport)
         # devices on the enclave only: anything a source reports outside the swept scopes is dropped,
-        # except powered-off VMs, which have no address and are tied to a hypervisor already in scope
-        return [a for a in got if any(s.contains(a.address) for s in scopes) or (not a.address and a.facts.get("vm_name"))]
+        # except addressless VM/host metadata from an explicitly scoped hypervisor source
+        return [a for a in got if any(s.contains(a.address) for s in scopes)
+                or (not a.address and (a.facts.get("vm_name") or vsphere.is_observation(a)))]
 
     @staticmethod
     def _gear(transport: "Transport", t: Target, run: DiscoveryRun) -> list[DiscoveredAsset]:
@@ -537,15 +542,19 @@ class DiscoveryService:
     # -- reconcile -----------------------------------------------------------------------------
     @staticmethod
     def merge_observations(observed: Iterable[DiscoveredAsset]) -> list[DiscoveredAsset]:
-        """One asset per device: observations sharing a MAC or an address are folded together."""
+        """Network observations share MAC/IP keys; vSphere inventory objects retain their own identity."""
         out: list[DiscoveredAsset] = []
         for a in observed:
-            hit = next((x for x in out if (a.mac and x.mac == a.mac) or (a.address and x.address == a.address)), None)
+            if vsphere.is_observation(a):
+                hit = next((x for x in out if vsphere.is_observation(x) and x.id == a.id), None)
+            else:
+                hit = next((x for x in out if not vsphere.is_observation(x)
+                            and ((a.mac and x.mac == a.mac) or (a.address and x.address == a.address))), None)
             if hit is None:
                 out.append(a)
                 continue
             hit.merge(a)
-            if hit.mac or hit.address:
+            if not vsphere.is_observation(hit) and (hit.mac or hit.address):
                 hit.id = asset_id_for(hit.mac, hit.address)
         return out
 
