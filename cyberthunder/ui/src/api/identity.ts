@@ -10,6 +10,19 @@ export interface SessionIdentity {
 }
 
 let current: SessionIdentity | null = null;
+let revision = 0;
+let currentAuthority = 'signed-out';
+
+/** Authority only: display names, expiry ticks and array order do not reset a view. */
+export function authorityKey(identity: SessionIdentity | null): string {
+  if (!identity) return 'signed-out';
+  const p = identity.principal;
+  return JSON.stringify([identity.mode, identity.authenticated, p?.issuer, p?.subject, p?.actor,
+    p?.source, p?.verified, p?.kind, [...new Set(p?.roles ?? [])].sort(),
+    [...new Set(identity.permissions)].sort(), identity.csrf_token]);
+}
+
+export function authorityRevision(): number { return revision; }
 
 export interface StepUpChallenge { reason: string; max_age: number; acr_values: string[] }
 const STEP_UP_REASONS = ['assurance_not_configured', 'human_authentication_required', 'invalid_authentication_time',
@@ -36,6 +49,9 @@ export function stepUpRequired(challenge: StepUpChallenge): void {
 export function sessionIdentity(): SessionIdentity | null { return current; }
 
 export function setSessionIdentity(identity: SessionIdentity | null): void {
+  const next = authorityKey(identity);
+  if (next !== currentAuthority) revision++;
+  currentAuthority = next;
   current = identity;
 }
 
@@ -48,6 +64,6 @@ export function sessionHeaders(method: string): Record<string, string> {
 
 export function sessionExpired(): void {
   if (current?.mode === 'dev') return;
-  current = null;
+  setSessionIdentity(null);
   window.dispatchEvent(new Event('ct:session-expired'));
 }

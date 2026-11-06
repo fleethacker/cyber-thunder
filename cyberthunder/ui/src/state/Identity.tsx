@@ -1,6 +1,6 @@
 import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, Text, Title } from '@mantine/core';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { sessionHeaders, setSessionIdentity, parseStepUpChallenge, type SessionIdentity, type StepUpChallenge } from '../api/identity';
+import { sessionHeaders, setSessionIdentity, authorityKey, parseStepUpChallenge, type SessionIdentity, type StepUpChallenge } from '../api/identity';
 import { PermissionProvider } from '../components/PermissionGate';
 
 interface IdentityContext {
@@ -28,8 +28,20 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
   const [challenge, setChallenge] = useState<StepUpChallenge | null>(null);
   const [reauthError, setReauthError] = useState<string | null>(null);
   const [reauthBusy, setReauthBusy] = useState(false);
-  const reauthPending = useRef(false);
+  const reauthPending = useRef<number | null>(null);
   const reauthGeneration = useRef(0);
+  const authority = useRef(authorityKey(null));
+  const acceptIdentity = useCallback((value: SessionIdentity | null) => {
+    const next = authorityKey(value);
+    if (next !== authority.current) {
+      authority.current = next;
+      reauthGeneration.current++;
+      reauthPending.current = null;
+      setReauthBusy(false); setReauthError(null); setChallenge(null);
+    }
+    setSessionIdentity(value);
+    setIdentity(value);
+  }, []);
   const refresh = useCallback(async () => {
     const version = ++generation.current;
     setBusy(true);
@@ -42,20 +54,18 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
             || typeof value.principal.actor !== 'string' || typeof value.principal.name !== 'string'
             || !Array.isArray(value.principal.roles)))) throw new Error('Sign-in status could not be verified.');
       if (version !== generation.current) return;
-      setSessionIdentity(value);
-      setIdentity(value);
+      acceptIdentity(value);
       setError(null);
     } catch (e) {
       if (version !== generation.current) return;
-      setSessionIdentity(null);
-      setIdentity(null);
+      acceptIdentity(null);
       setError((e as Error).message);
     } finally { if (version === generation.current) setBusy(false); }
-  }, []);
+  }, [acceptIdentity]);
 
   useEffect(() => {
     void refresh();
-    const expire = () => { reauthGeneration.current++; setReauthBusy(false); setIdentity(null); setChallenge(null); void refresh(); };
+    const expire = () => { acceptIdentity(null); void refresh(); };
     const stepUp = (event: Event) => {
       const value = parseStepUpChallenge({ error: 'insufficient_user_authentication', step_up: (event as CustomEvent).detail });
       if (value) { setChallenge(value); setReauthError(null); }
@@ -63,7 +73,7 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
     window.addEventListener('ct:session-expired', expire);
     window.addEventListener('ct:step-up', stepUp);
     return () => { generation.current++; reauthGeneration.current++; window.removeEventListener('ct:session-expired', expire); window.removeEventListener('ct:step-up', stepUp); };
-  }, [refresh]);
+  }, [refresh, acceptIdentity]);
 
   useEffect(() => {
     if (!identity?.authenticated) return;
@@ -72,22 +82,22 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
   }, [identity?.authenticated, refresh]);
 
   const logout = async () => {
+    const previousAuthority = authority.current;
     generation.current++;
     reauthGeneration.current++;
     setReauthBusy(false);
     const response = await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin',
       headers: sessionHeaders('POST') });
+    if (previousAuthority !== authority.current) return;
     if (!response.ok) { setError('Sign-out failed. Retry to close this application session.'); return; }
-    setSessionIdentity(null);
-    setIdentity(null);
-    setChallenge(null);
+    acceptIdentity(null);
     await refresh();
   };
 
   const reauthenticate = async () => {
-    if (reauthPending.current || !identity?.authenticated || !identity.login_available || !challenge?.acr_values.length) return;
-    reauthPending.current = true; setReauthBusy(true); setReauthError(null);
-    const version = reauthGeneration.current;
+    if (reauthPending.current !== null || !identity?.authenticated || !identity.login_available || !challenge?.acr_values.length) return;
+    const version = ++reauthGeneration.current;
+    reauthPending.current = version; setReauthBusy(true); setReauthError(null);
     try {
       const returnTo = window.location.pathname + window.location.search + window.location.hash;
       const response = await fetch('/auth/reauthenticate', { method: 'POST', credentials: 'same-origin', cache: 'no-store',
@@ -102,11 +112,14 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
       window.location.assign(destination.href);
     } catch {
       if (version === reauthGeneration.current) setReauthError('Reauthentication could not be started. Refresh sign-in and try again.');
-    } finally { reauthPending.current = false; if (version === reauthGeneration.current) setReauthBusy(false); }
+    } finally {
+      if (reauthPending.current === version) reauthPending.current = null;
+      if (version === reauthGeneration.current) setReauthBusy(false);
+    }
   };
 
   if (identity && (identity.mode === 'dev' || identity.authenticated)) {
-    return <IdentityProvider identity={identity} logout={logout}>
+    return <IdentityProvider key={authorityKey(identity)} identity={identity} logout={logout}>
       {children}
       <Modal opened={!!challenge} onClose={() => { if (!reauthBusy) setChallenge(null); }} title="Reauthenticate before deciding"
         closeOnClickOutside={!reauthBusy} closeOnEscape={!reauthBusy}>
