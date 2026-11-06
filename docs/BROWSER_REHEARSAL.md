@@ -141,12 +141,31 @@ results and hashes, rather than overwritten:
   scopes the assertion to saved paragraph text. Neither failure required an
   application change. Both runs kept source/build unchanged and stopped all fixtures.
 
-Visible usability follow-up for the application owner: after successful
+The earlier run exposed a usability issue: after successful
 revocation, the open form retains its draft and still displays **Revoke risk
 acceptance**, while the saved history and current review correctly show the
 revoked state. See `json-normal/risk-revoked-history.png` in the passing receipts.
-Resetting that draft or displaying a completed action would make the next step
-clearer. Repeat submission of that retained draft is not covered by this run.
+Repeat submission of that retained draft was not covered by that run.
+
+### Completed revocation form correction
+
+Source `bee62167d40027a2edda5af76d4bbf51c894e6d0` resets a successfully revoked
+risk decision to an empty Unreviewed draft. Failed submissions retain their input.
+The component regression failed on the previous behavior, then all 452 UI tests
+passed with the correction. A repeated submission of the empty completed form
+cannot repeat revocation or silently create another review.
+
+The four-case rehearsal was repeated against the rebuilt `index-fqp8F2eU.js`
+(SHA-256 `b01d3e3edfddee70b0216f037bd09e55b1c1190ca56a8995dfddd2dc146b846b`).
+All four cases passed at the same source commit, including the new assertions
+that the completed Revoke button disappears and the reason field is empty.
+The previous risk hold, original scanner evidence, approval, kill-switch,
+verification, manual/automatic rollback and audit checks remain in the runner.
+Source and build remained unchanged, all fixtures stopped, and no browser runtime
+errors were recorded. Receipts are retained at
+`.build/browser-rehearsals/20261106T073135Z-l7m2svom/receipts/` and copied with
+verified hashes under `.build/owner-evidence/`. The same simulated, template and
+unverified-identity limits apply; this is not live account or target acceptance.
 
 ## Earlier lifecycle evidence
 

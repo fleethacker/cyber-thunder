@@ -1,6 +1,7 @@
 """Raw catalog reconciliation, safe selection, and honest live-index failure states."""
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -13,6 +14,7 @@ from cyberthunder.ingest.content.select import select
 from cyberthunder.ingest.service import IngestError
 from tests.ingest.content_helpers import FakeOpener, FakeResponse, SNAPSHOT, apex_answer, record, snapshot_records
 from tests.ingest.test_content_index import BUNDLE, PAGE
+from tests.ingest.test_content_uploads import archive, benchmark
 
 STIG = "U_RHEL_9_V2R10_STIG.zip"
 URL = f"https://dl.dod.cyber.mil/{STIG}"
@@ -93,8 +95,14 @@ def test_library_exposes_duplicates_metadata_and_leaves_preferences_and_local_fi
     original = svc.preferences()
     prefs = {k: original[k] for k in ("mode", "products", "kinds", "check_on_reconnect", "auto_pull", "revision")}
     saved = svc.save_preferences({**prefs, "mode": "selected", "products": ["RHEL_9"]}, "ITC Rivera")
+    held_bytes = archive(("U_RHEL_9_Manual-xccdf.xml", benchmark(bid="RHEL_9_STIG", release="10")))
+    svc.store.files_dir.mkdir(parents=True, exist_ok=True)
+    held_path = svc.store.files_dir / STIG
+    held_path.write_bytes(held_bytes)
     svc.store.put({"filename": STIG, "product_key": "RHEL_9", "kind": "manual_stig", "version": [2, 10],
+                   "sha256": hashlib.sha256(held_bytes).hexdigest(), "bytes": len(held_bytes),
                    "source": "imported", "fetched_at": "2026-01-01T00:00:00Z"})
+    held_index = svc.store.state.read_json(svc.store.index_path)
     view = svc.library()
     assert len(view["publications"]) == len(raw)
     assert len({p["publication_id"] for p in view["publications"]}) == len(raw)
@@ -104,6 +112,8 @@ def test_library_exposes_duplicates_metadata_and_leaves_preferences_and_local_fi
     assert view["preferences"] == saved
     assert view["products"][0]["selected"]
     assert view["held"]["files"][0]["fetched_at"] == "2026-01-01T00:00:00Z"
+    assert held_path.read_bytes() == held_bytes
+    assert svc.store.state.read_json(svc.store.index_path) == held_index
     assert svc.store.state.read_json(svc.catalog_cache)["schema_version"] == 2
 
 
