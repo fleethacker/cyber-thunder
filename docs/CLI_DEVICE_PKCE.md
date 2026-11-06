@@ -65,3 +65,59 @@ step-up cases. It does not establish production realm acceptance, stronger fresh
 authentication, cross-user workstation isolation, immediate bearer revocation,
 Windows domain/service-account provisioning or deployment accreditation. See
 [operator setup and remaining limits](CLI_AUTH.md).
+
+## Local acceptance receipt — 2026-11-06
+
+The tested runtime revision is `9ec262566f1646a60fedbf102253d79ec5bdbdbc`,
+including PKCE commit `3c40a49cd072084244d7f189855a52a7a7e19790` on reviewed base
+`dd93db00b250d93515e52d816fe3063b9a33a1dc`. This receipt was added afterward as
+a documentation-only change; results are attributed to that runtime revision.
+
+| Focused run | Exact result |
+| --- | --- |
+| Windows, Python 3.12.10 | 147 passed, 1 skipped, 65 warnings in 240.64s |
+| Native WSL Linux, Python 3.12.16 | 147 passed, 1 skipped, 65 warnings in 138.42s |
+
+Both runs selected `tests/client`, the verified local-CLI bypass guard in
+`tests/security/test_identity_boundary.py`, and `tests/engine/test_cli.py`, with
+JSON and SQLite backends enabled. Windows skipped only the native Linux
+symlink/mode test; Linux skipped only the native Windows inherited-DACL test.
+Warnings were existing FastAPI/Starlette deprecations. The logout-order
+regression first reproduced four failures before the fix; the targeted run
+afterward passed all 39 selected tests.
+
+Actual Keycloak 26.7.4 acceptance passed **19 of 19 checks** against the same
+runtime revision using cached image ID
+`sha256:3d911baa186f352563854039b95f21a7e2c01c76b527fdc64f24a0885b927bdf`.
+The loopback fixture required S256 on its public human client. Real CLI terminal
+subprocesses and browser login/consent established the API-verified human;
+issuer, audience and authorized party matched the configuration. Scoped target
+and finding reads excluded the other target. Refresh rotated both credentials
+and preserved the authentication event. Empty accepted-ACR configuration,
+unaccepted ACR and stale authentication each produced the expected HTTP 401.
+
+Logout cleared the local session and changed its generation before networking.
+Access revocation followed by refresh revocation each returned HTTP 200 without
+an error; the CLI exited 0 with `provider_revocation: acknowledged`. A copied
+unexpired JWT still received HTTP 200 from `/whoami`, confirming the documented
+expiry limitation. Client processes constructed no `AppContext` or local node
+state and sent no typed actor or browser cookie. The provider run used the real
+Linux account-home token locator with private `0700`/`0600` storage, a unique
+profile entry and no replacement of existing entries; it did not fake that locator.
+
+All 786 selected source files matched the native copy before and after tests and
+provider acceptance. The source-manifest SHA-256 is
+`f18b6b53762457ae05f54dd94e5ef28413a2f86af67f075636b7332941ec7901`.
+The final sanitized receipt is `keycloak-cli-pkce-attempt-5.json`; full focused
+outputs and the manifest are retained with the separate local handoff. Owned
+provider/API processes, temporary token files, CA/key/realm state and protected
+browser profiles were removed. Source copies and sanitized evidence were retained.
+
+Earlier receipts remain separate: the pre-PKCE failure, a browser selector
+failure, the observed refresh-first logout failure, an interrupted harness setup,
+and the diagnostic rerun. The diagnostic harness briefly compared source hashes
+against a reused expectation variable; its original false comparison is retained
+alongside an independent 785-file recheck showing no changes. The final harness
+uses separate variables and passed its source comparison directly. No prior
+receipt is relabeled as final acceptance. These are synthetic loopback results;
+the deployment and identity limits above remain open.
