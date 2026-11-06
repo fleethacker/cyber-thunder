@@ -17,6 +17,7 @@ import { RiskTagsForFix } from './FixPanel';
 import { DiffButton } from './ProposalDiff';
 import { ConfidenceBadge } from './FindingAssurance';
 import { FindingReviewAccess } from './FindingActions';
+import { FindingCatalogReference } from './FindingCatalogReference';
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -129,6 +130,8 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
       </Section>
 
       <FindingReviewAccess finding={f} opened={reviewOpen} onToggle={() => setReviewOpen((o) => !o)} onFinding={st.setData} onReviewed={onReviewed} />
+
+      <FindingCatalogReference finding={f} />
 
       <Section title="Citations">
         <CitationChips ids={citationsOf(f)} links />

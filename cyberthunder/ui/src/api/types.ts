@@ -169,6 +169,7 @@ export interface Finding {
   asset_type: string | null;
   fix_ref: string | null;
   scan_id: string | null;
+  catalog_rule_metadata?: unknown;
 }
 
 export interface FindingPlus extends Finding {
