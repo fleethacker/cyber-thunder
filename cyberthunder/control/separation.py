@@ -152,6 +152,32 @@ def _audit_records(gate, pid: str) -> list[dict]:
         raise PermissionError("approval audit integrity cannot be established") from None
 
 
+def _validate_lifecycle(proposal, records) -> None:
+    """A valid old vote cannot revive a cancelled or already consumed proposal."""
+    state, votes = "proposed", []
+    outcomes = {"applying": "ok", "applied": "ok", "verified": "ok", "cancelled": "ok",
+                "denied": "ok", "failed": "failed", "rolled_back": "reverted"}
+    for record in records:
+        action = record.get("action", "")
+        if action in {"proposal.approval_recorded", "proposal.approved"} and record.get("outcome") == "ok":
+            vote = record.get("details", {}).get("approval")
+            if not isinstance(vote, dict):
+                raise PermissionError("audited approval receipt is unavailable")
+            votes.append(vote)
+            state = "approved" if action == "proposal.approved" else "proposed"
+        elif action.startswith("proposal."):
+            edge = action.removeprefix("proposal.")
+            if edge in outcomes and record.get("outcome") == outcomes[edge]:
+                state = edge
+    if proposal.state.value != state or proposal.approvals != votes:
+        raise PermissionError("proposal state or receipts differ from the audited lifecycle")
+    if votes and len(votes) == proposal.required_approvals:
+        last = votes[-1]
+        if (proposal.decided_by != last["actor"] or proposal.decided_principal != last["principal"]
+                or proposal.decided_at != last["approved_at"] or proposal.decision_note != last["note"]):
+            raise PermissionError("final decision differs from its audited approval")
+
+
 def validate(gate, proposal, *, quorum: bool = False) -> dict:
     """Check the immutable creation record, current facts, and each persisted vote."""
     requirements = proposal.approval_requirements
@@ -168,6 +194,7 @@ def validate(gate, proposal, *, quorum: bool = False) -> dict:
     if len(creations) != 1 or digest(creations[0].get("approval_requirements")) != digest(requirements):
         raise PermissionError("proposal requirements differ from the creation record")
     try:
+        _validate_lifecycle(proposal, records)
         source = requirements["source"]
         if (requirements["version"] != 1 or requirements["ruleset"] != RULESET
                 or type(proposal.required_approvals) is not int

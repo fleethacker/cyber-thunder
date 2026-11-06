@@ -297,8 +297,7 @@ class ApprovalGate:
                     if new == ProposalState.APPROVED:
                         raise PermissionError("separated approvals must use individual human decisions")
                     if new == ProposalState.APPLYING:
-                        separation.validate(self, p, quorum=True)
-                        self._validate_approved_assessments(p)
+                        self._validate_application(p, actor)
             except PermissionError as e:
                 self.audit.append(f"proposal.{new.value}", actor, {"from": p.state.value, "reason": str(e)},
                                   subject=pid, outcome="rejected")
@@ -376,6 +375,9 @@ class ApprovalGate:
             if p.approvals and association != separation.assessment_association(p.assessment):
                 raise PermissionError("all approvers must review the same assessment; create a new proposal to change it")
             self._validate_approved_assessments(p)
+            # Assessment work may take time; its callbacks cannot make stale
+            # finding/fix facts count toward a new approval.
+            separation.validate(self, p)
             self._authorize("approve", actor, p)
             if separation.actor_evidence(self, "approve", actor, p)[1] != evidence:
                 raise PermissionError("approval identity changed during the decision")
@@ -421,6 +423,29 @@ class ApprovalGate:
             fresh = self._assessment(p.id, old.get("id"), old.get("note"))
             if separation.assessment_association(fresh) != separation.assessment_association(old):
                 raise PermissionError("an approved assessment changed; create a new proposal and collect approvals")
+
+    def _validate_application(self, p: Proposal, actor: str) -> None:
+        self._authorize("apply", actor, p)
+        if separation.enforced(self, p):
+            separation.validate(self, p, quorum=True)
+            self._validate_approved_assessments(p)
+            separation.validate(self, p, quorum=True)
+        # Revocation during receipt/source reads must stop this operation too.
+        self._authorize("apply", actor, p)
+
+    def validate_apply(self, pid: str, actor: str) -> None:
+        """Re-read authority immediately before mutation, after before-state IO."""
+        with self._locked():
+            p = self._items[pid]
+            self._authorize("apply", actor, p)
+            if p.state != ProposalState.APPLYING:
+                raise IllegalTransition("only the current applying proposal may execute")
+            try:
+                self._validate_application(p, actor)
+            except PermissionError as exc:
+                self.audit.append("proposal.apply_revalidated", actor, {"reason": str(exc)},
+                                  subject=pid, outcome="rejected")
+                raise
 
     def review_assessment(self, pid: str, actor: str, assessment_id: str,
                           note: str | None = None) -> Proposal:

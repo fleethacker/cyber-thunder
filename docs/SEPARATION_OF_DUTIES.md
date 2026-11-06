@@ -48,7 +48,11 @@ changed assessment cannot be substituted through a single-person re-review:
 cancel, create a new proposal, and collect fresh approvals for the new receipt.
 
 `start_apply` rechecks the complete distinct-human quorum and all associations
-before entering `APPLYING`. A policy or direct state transition cannot substitute
+before entering `APPLYING`. Receipt validation is followed by a fresh source and
+operation-authorization check. After before-state capture, the engine re-reads
+the persisted proposal and validates the quorum, audited lifecycle, current
+finding/fix, receipts and apply permission immediately before mutation or runbook
+issuance. A policy or direct state transition cannot substitute
 for a human approval in protected mode, including the second CAT I approval.
 Policy signing and step-up authentication are separate work.
 
@@ -80,8 +84,12 @@ ignored, and the gate rejects callers supplying managed proposal fields directly
 Proposals and audit remain files for both document backends. The proposal lock
 serializes concurrent approvers, including separate gate instances. Audit is
 written before proposal state; an I/O failure can leave an audit event whose
-decision was not saved. Only persisted approvals with matching audit records
-count, and no last-good or in-memory approval bypass is permitted.
+decision was not saved. The complete ordered receipt list and current lifecycle
+must agree with the audit, including the final decision identity. An old proposal
+snapshot cannot revive a cancelled, denied or already-consumed approval. An
+audit/state mismatch fails closed: cancel a still-pending persisted proposal and
+create a fresh one, rather than replaying an orphaned decision. No last-good or
+in-memory approval bypass is permitted.
 
 ## Legacy and local development
 
@@ -119,3 +127,31 @@ callbacks remain trusted server resources. These records are not cryptographical
 signed approvals or an externally anchored ledger. Audit validation currently
 reads the local chain for each protected decision; large-log indexing is future
 work. The optional first-change device-registrar rule is not implemented here.
+
+## Independent review checks
+
+The bounded review reproduced and fixed three gaps: restoring an old proposal
+snapshot bypassed later audited cancellation/denial/apply; revocation during
+start-apply receipt validation was not rechecked; and finding, receipt or fix
+changes during before-state capture could reach the mutation boundary. Tests in
+`tests/security/test_separation_review.py` cover these cases, partial-receipt
+deletion, final-identity relabeling, audit-first persistence failure/recovery,
+source changes during assessment, and unchanged protected runbook issuance.
+
+Focused validation uses both JSON and SQLite with the shared interpreter and
+checkout `PYTHONPATH`: the separation suites, identity-boundary/browser suites,
+engine/assessment/review/guardrail suites and approval-I/O tests. The adapters are
+inert fixtures; no target or external identity-provider operations are performed.
+The full integration gate and real multi-person acceptance remain separate.
+
+Windows focused results, with both document backends in each run: separation
+and initial adversarial cases **132 passed (87.52s)**; browser/API and engine
+regressions **291 passed (167.52s)**; final adversarial, engine and guardrail
+checks **111 passed (105.72s)**. These overlapping runs had no failures or skips;
+warnings were framework deprecations.
+
+A rejected final check performs no fix and no automatic rollback. If already in
+`APPLYING`, the proposal remains blocked under the existing recovery state machine;
+these checks do not grant recovery authority or turn it back into an approved
+proposal. Previously counted votes still attest authorization at decision time,
+not later IdP introspection or retroactive account revocation.

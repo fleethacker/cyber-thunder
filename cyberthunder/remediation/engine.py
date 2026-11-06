@@ -462,11 +462,12 @@ class RemediationEngine:
                 current_target = self._target(p, "execute", actor)
                 if rollback_guard.identity(current_target) != bound_identity:
                     raise rollback_guard.RollbackBlocked("target connection identity changed during before-state capture")
-                if fix.kind == "runbook":
-                    return self._issue_runbook(p, target, fix)
+                gate.validate_apply(p.id, actor)
                 self.ctx.killswitch.guard(f"remediation.apply:{p.id}", actor)
                 if rollback_guard.identity(self._target(p, "execute", actor)) != bound_identity:
                     raise rollback_guard.RollbackBlocked("target connection identity changed before apply")
+                if fix.kind == "runbook":
+                    return self._issue_runbook(p, target, fix)
                 step = "apply"
                 ar = adapter.apply(target, transport, fix, finding, before)
             snapshot.save_result(snap, "apply", ar)
