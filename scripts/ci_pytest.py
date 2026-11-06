@@ -145,6 +145,63 @@ NODE_HARDENING_SKIPS = {
 }
 
 
+# Exact native-platform cases; opposite-platform receipts exercised each case.
+CREDENTIAL_RESOLVER_SKIPS = {
+    "win32": {
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[json-replace_file]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[json-replace_parent]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[json-rotate_projection]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[json-write_file]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[sqlite-replace_file]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[sqlite-replace_parent]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[sqlite-rotate_projection]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_midread_identity_changes_are_refused[sqlite-write_file]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_only_root_owned_readonly_projection_can_relax_directory_write_bits[False-True-0-False]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_only_root_owned_readonly_projection_can_relax_directory_write_bits[True-False-0-False]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_only_root_owned_readonly_projection_can_relax_directory_write_bits[True-True-0-True]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_only_root_owned_readonly_projection_can_relax_directory_write_bits[True-True-99999-False]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-absolute_data]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-escaping_data]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-escaping_key]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-generation_redirect]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-hardlink]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[json-public_value]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-absolute_data]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-escaping_data]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-escaping_key]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-generation_redirect]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-hardlink]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_rejects_redirects_and_exposed_values[sqlite-public_value]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_requires_explicit_layout_and_accepts_atomic_rotation[json]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_projection_requires_explicit_layout_and_accepts_atomic_rotation[sqlite]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_reader_group_requires_explicit_matching_dedicated_gid[json]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_reader_group_requires_explicit_matching_dedicated_gid[sqlite]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[json-385]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[json-388]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[json-416]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[json-420]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[json-438]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[sqlite-385]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[sqlite-388]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[sqlite-416]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[sqlite-420]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_regular_secret_rejects_group_or_public_permissions[sqlite-438]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[json-fifo]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[json-foreign_owner]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[json-writable_parent]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[sqlite-fifo]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[sqlite-foreign_owner]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout",
+        "tests/security/test_secret_mounts_posix.py::test_untrusted_nodes_fail_before_read[sqlite-writable_parent]": "POSIX dir_fd, ownership, modes and Kubernetes projection layout"
+    },
+    "linux": {
+        "tests/security/test_secret_resolver.py::test_windows_world_readable_secret_fails_closed[json]": "native Windows private-file DACL enforcement",
+        "tests/security/test_secret_resolver.py::test_windows_world_readable_secret_fails_closed[sqlite]": "native Windows private-file DACL enforcement",
+        "tests/security/test_wincred_resolver.py::test_native_windows_abi_and_current_logon_with_mocked_credread[json]": "native Windows token and CredReadW ABI with mocked credential data",
+        "tests/security/test_wincred_resolver.py::test_native_windows_abi_and_current_logon_with_mocked_credread[sqlite]": "native Windows token and CredReadW ABI with mocked credential data"
+    }
+}
+
+
 def expected_skips(platform: str) -> dict[str, str]:
     if platform not in {"linux", "win32"}:
         raise ValueError(f"Unsupported CI platform: {platform}")
@@ -222,6 +279,7 @@ def expected_skips(platform: str) -> dict[str, str]:
         ):
             allowed[f"tests/state/test_file_read_sharing.py::{name}"] = SHARING_REASON
     allowed.update(NODE_HARDENING_SKIPS[platform])
+    allowed.update(CREDENTIAL_RESOLVER_SKIPS[platform])
     return allowed
 
 

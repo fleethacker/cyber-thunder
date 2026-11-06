@@ -106,12 +106,12 @@ The goal is that a target's own log names the person who approved the change and
 | Any | Broker checkout (Vault first, CyberArk CCP/Conjur) with proposal id and approver as metadata | Broker must run on the enclave; PSM session recording forces execution through its proxy | Request, scope, time out, revoke on kill switch, audit the lease | The broker, accounts, rotation, recording |
 
 **ZT-12 Windows per-user remoting.** Pillars: User, Device, Application. Step: 90 days (range domain), 180 days (enclave). Effort: 1 week app, 1-2 weeks enclave with the range owner. Depends: ZT-02, ZT-15 or AD changes, ZT-29.
-- Today: Verified mode can select an explicit per-account NTLM environment credential under the fleet HTTPS/CA rules. AD Kerberos delegation, JEA, protected-user behavior and real domain acceptance remain unimplemented/unvalidated.
+- Today: Verified mode selects an explicit per-account NTLM credential under the fleet HTTPS/CA rules. Protected mounted-file and Windows Credential Manager sources now supply bounded password leases; fleet password references require a resolver. AD Kerberos delegation, JEA, protected-user behavior and real domain acceptance remain unimplemented/unvalidated ([CREDENTIAL_RESOLVERS](CREDENTIAL_RESOLVERS.md)).
 - Target: options in the table; CredSSP rejected (reusable credentials on the target), Basic rejected outright.
 - Done when: in fleet mode a Basic or CredSSP target is refused at `make_transport`; an apply approved by bob shows bob in the target's 4624/4648 events and the JEA transcript; a cmdlet outside the role capability fails on the target; a LAPS checkout writes an audit record naming the admin and host.
 
 **ZT-13 Linux and Cisco: short-lived SSH certificates, PIV for interactive, TACACS+.** Pillars: User, Device. Step: 90 days (range), 180 days (enclave). Effort: 1 week app, 1 week CA and sshd on the range. Depends: ZT-18, ZT-19.
-- Today: Selected SSH key/environment credentials are explicit and bound to account and operation; fleet host identity checks and sudo policy are enforced. SSH certificate issuance, PIV and TACACS+ integration remain open.
+- Today: Selected SSH keys and password references are explicit and bound to account and operation; fleet host identity checks and sudo policy are enforced. Protected mounted-file and Windows Credential Manager sources can provide password leases; environment passwords are limited to range compatibility. SSH certificate issuance, PIV and TACACS+ integration remain open.
 - Target: short-lived SSH certificates issued per approver by an enclave CA that the range sshd trusts, with the approver's identity as the principal; `look_for_keys` off and host keys pinned from the inventory (ZT-30); PIV or CAC over PKCS#11 for interactive console use; Cisco devices authenticate and account per user through TACACS+, so every pushed command carries the approver's name in the device's accounting log.
 - Done when: on a range RHEL host sshd logs the approver's key id and serial, matching the audit record; the certificate fails after expiry; a stray key in `~/.ssh` is not offered; Cisco TACACS+ accounting names the approver for each pushed command.
 
@@ -144,7 +144,7 @@ The goal is that a target's own log names the person who approved the change and
 ### 1.5 Credential backend
 
 **ZT-19 Pluggable credential resolver replacing `CT_CRED_<ref>`.** Pillars: Data, Application. Step: 30 days (env, keyring, k8s), 90 days (Vault, CyberArk). Effort: 1 week, plus 3-5 days per broker. Depends: none for the interface.
-- Today: An explicit account/action credential-binding layer now guards environment references, SSH keys and protected kubeconfigs and audits credential use without values. OS keyring, mounted-secret and broker lease backends remain open; environment references are not a production vault.
+- Today: Implemented a protected source registry, bounded account/target/action password leases, private mounted files, explicitly selected Kubernetes projections and native Windows Credential Manager lookup for SSH/WinRM ([CREDENTIAL_RESOLVERS](CREDENTIAL_RESOLVERS.md)). Fleet password references refuse environment fallback; registry changes invalidate existing use and audit events identify the actual backend without secret values. Native Windows/Linux fixtures pass, but service-logon provisioning, actual kubelet mounts and real target authentication remain acceptance work. Linux Secret Service, Vault and CyberArk remain open.
 - Target: `transport/credentials.py`: `resolve(ref, *, purpose, principal, target) -> Lease`; `Secret` redacts in `repr`/`str` and refuses JSON. Schemes `env:` (dev only), `keyring:` (Credential Manager/DPAPI, Secret Service), `k8s:` (mounted Secret), `vault:`, `cyberark:`; fleet mode forbids `env:`. Every use writes `credential.resolve` (ref, backend, purpose, target, lease id, never the value) and `credential.failed` on logon failure.
 - Done when: a scan succeeds with no `CT_CRED_*` set using keyring; fleet mode refuses `env:` at inventory load; a legacy `credential_ref=lab_root` still works in dev mode; no lease or secret prints its value.
 
@@ -154,6 +154,7 @@ The goal is that a target's own log names the person who approved the change and
 - Done when: a patched `subprocess.Popen` sees no canary in argv or child env; the temp file is gone after an exception; a key in a fake `HOME/.ssh` is not offered.
 
 **ZT-21 Rotation without restarts.** Pillars: Data, Automation. Step: 90 days. Effort: 2-3 days. Depends: ZT-19.
+- Today: Resolver-backed passwords are read at each new authentication lease. WinRM creates a new session per operation; SSH reads the rotated value on its next connection, while a cached authenticated connection continues to use current authorization guards. Protected registry mapping changes invalidate old uses. Static-credential age findings and broker-side revocation remain open.
 - Target: resolve per operation; `k8s:` re-reads the mounted file; static scan accounts get a rotation interval and the tool raises its own finding when one is older.
 - Done when: changing the mounted Secret between two scans takes effect with no restart; an overdue static credential produces a finding.
 

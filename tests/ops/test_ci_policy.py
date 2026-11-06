@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 104 and len(windows) == 35
+    assert len(linux) == 108 and len(windows) == 79
     native_acl = {node: reason for node, reason in linux.items()
                   if node.startswith("tests/security/test_windows_file_trust.py::")}
     assert len(native_acl) == 46
@@ -294,6 +294,34 @@ def test_node_assessment_allowances_match_native_review_and_refuse_other_cases(p
     actual = {node: reason for node, reason in expected_skips(platform).items()
               if node.startswith(("tests/security/test_node_hardening.py::",
                                   "tests/security/test_node_hardening_review.py::"))}
+    assert actual == expected and len(actual) == count
+    other = "linux" if platform == "win32" else "win32"
+    for node, reason in actual.items():
+        for host, candidate, explanation, phase, accepted in (
+            (platform, node, reason, "setup", True),
+            (other, node, reason, "setup", False),
+            (platform, node + "[new]", reason, "setup", False),
+            (platform, node, reason + " changed", "setup", False),
+            (platform, node, reason, "teardown", False),
+        ):
+            policy = RegressionPolicy(ROOT, host)
+            policy.pytest_runtest_logreport(SimpleNamespace(
+                nodeid=candidate, when=phase, outcome="skipped", skipped=True,
+                longrepr=("file.py", 1, "Skipped: " + explanation),
+            ))
+            assert policy.skips[0]["allowed"] is accepted
+            assert bool(policy.errors) is not accepted
+
+
+@pytest.mark.parametrize("platform,count", [("linux", 4), ("win32", 44)])
+def test_credential_skip_allowances_match_native_receipts_and_fail_closed(platform, count):
+    receipt = json.loads((ROOT / "docs/credential-resolver-review/platform-skips.json").read_text())
+    expected = receipt["platforms"][platform]["skips"]
+    modules = ("tests/security/test_secret_mounts_posix.py::",
+               "tests/security/test_secret_resolver.py::",
+               "tests/security/test_wincred_resolver.py::")
+    actual = {node: reason for node, reason in expected_skips(platform).items()
+              if node.startswith(modules)}
     assert actual == expected and len(actual) == count
     other = "linux" if platform == "win32" else "win32"
     for node, reason in actual.items():

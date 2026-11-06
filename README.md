@@ -225,6 +225,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/VALIDATION.md](docs/VALIDATION.md) | real-platform evidence, untested versions and missing run metadata |
 | [docs/AUTHORIZATION.md](docs/AUTHORIZATION.md) | authentication modes, browser login, roles, target policy and explicit credentials |
 | [docs/ACCOUNT_ACCESS.md](docs/ACCOUNT_ACCESS.md) | exact policy schema, per-account examples, target credentials and original artifact ownership |
+| [docs/CREDENTIAL_RESOLVERS.md](docs/CREDENTIAL_RESOLVERS.md) | protected password sources, account-bound leases, rotation and native deployment acceptance |
 | [docs/WINDOWS_FILE_TRUST.md](docs/WINDOWS_FILE_TRUST.md) | native owner/DACL checks, protected-path provisioning and deployment limits |
 | [docs/STEP_UP.md](docs/STEP_UP.md) | fresh authentication requirements for privileged actions |
 | [docs/SEPARATION_OF_DUTIES.md](docs/SEPARATION_OF_DUTIES.md) | independent human approvals and CAT I quorum |

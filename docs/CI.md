@@ -88,6 +88,14 @@ fake command shims. This is a coverage limitation, not evidence of a successful
 deployment or a fully exercised UDS integration. Installing a reviewed UDS CLI
 for these tests is a future improvement; simply widening the allowance is not.
 
+Credential-resolver tests add 44 exact POSIX cases skipped on Windows and four
+native Windows cases skipped on Linux. Their node IDs, reasons and receipt
+hashes are recorded in [platform-skips.json](credential-resolver-review/platform-skips.json)
+and mirrored in `CREDENTIAL_RESOLVER_SKIPS`. Every case ran successfully on its
+native platform. The allowances do not waive actual service-logon provisioning,
+kubelet mount acceptance or remote authentication. See
+[credential resolver validation](CREDENTIAL_RESOLVERS.md#focused-validation-and-compatibility-migration).
+
 The exact UDS method allowlist is also stored as `UDS_TESTS` in the helper:
 
 ```text
