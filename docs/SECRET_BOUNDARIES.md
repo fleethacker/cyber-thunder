@@ -103,6 +103,9 @@ both failures were the lifecycle case, once per backend. After the correction,
 **22 passed** in 19.41 seconds, with existing framework deprecation warnings.
 The additional tests launch a real Python child to verify environment exclusion,
 exercise the dependency-collector boundary, and check explicit override refusal.
+The same committed correction (`9557257`) passed **22 tests** on native Linux
+under WSL with Python 3.12.16 in 10.73 seconds. No test was skipped on either
+platform. Both runs used isolated fixture state and no remote targets.
 
 The original failure identified `child 1 environment (plaintext)` and
 `child 2 environment (plaintext)`. The corrected lifecycle contains no detected
@@ -114,5 +117,5 @@ cryptographic token validation, browser-session/CSRF flows, every adapter and
 failure branch, or actual network outbox delivery. It does not prove the absence
 of arbitrary encodings, compression, fragmented log messages, or timing/memory
 side channels. The lifecycle captures process creation; the separate local
-environment test launches an actual Python child. Linux/container compatibility
-and the remaining credential paths still need their own validation.
+environment test launches an actual Python child. The deployed container and
+the remaining credential paths still need their own validation.
