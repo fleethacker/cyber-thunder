@@ -46,18 +46,30 @@ file and rename. It is the layout the tool has always had: a state directory can
 over a slow link with plain tools.
 
 `CT_STATE_BACKEND=sqlite` keeps every document as a row in `state.db` in the state directory, in WAL mode with a
-busy timeout. One writer at a time and readers that never wait is what lets two API workers and the CLI share
-one state directory without losing each other's updates; a write that meets another writer waits instead of
-failing. Files stay files, so `audit verify`, the proposals file lock and the inventory merge work as before.
+bounded busy timeout. WAL normally lets readers proceed alongside a single writer, but contention can still
+delay or fail operations. A competing writer waits up to the busy timeout and can fail if it expires.
+Files stay files, so `audit verify`, the proposals file lock and the inventory merge work as before.
+
+Persisted inventory authorization reads retry only when a post-parse file identity check detects a changed
+snapshot, such as an atomic replacement by another inventory writer. There are at most eight fresh,
+fully validated reads, with 10 ms between attempts and no wait after the last attempt. No old or cached
+scope is substituted. Missing, unreadable, or malformed inventory fails immediately; continuously changing
+inventory fails closed when the attempt limit is reached. These reads take no additional inventory lock,
+including when registration already holds the writer lock. The attempt limit does not impose a wall-clock
+deadline on filesystem access or parsing.
 
 Both backends pass the same test suite: the `state_dir` fixture in `tests/conftest.py` runs every state test
 once per backend in one pytest run, which is what `scripts/gate.sh` executes (`CT_STATE_BACKENDS=json` narrows
 a local run to one backend). `tests/state/test_concurrency.py` starts two API processes and the CLI against one
 state directory, has them add targets, scan, propose and decide at the same time, and checks that nothing is
-lost and the audit chain verifies, once per backend. Measured on the development laptop (Windows 11): a
-concurrent phase of 17 s (json) and 20 s (sqlite) in which 27 targets were added (24 over HTTP by two workers,
+lost and the audit chain verifies, once per backend. This storage proof uses development authentication;
+verified browser sessions still require one process and one replica, as described in
+[PACKAGE_IDENTITY.md](PACKAGE_IDENTITY.md). It does not establish shared browser sessions across workers.
+The historical development-laptop measurement recorded on 2026-11-05 (Windows 11) had a concurrent phase
+of 17 s (json) and 20 s (sqlite) in which 27 targets were added (24 over HTTP by two workers,
 3 by the CLI), 53 proposals were decided and 3 scans ran, ending with 80 proposals, all of it present
-afterwards in every process's view, and 177 audit records in a verified chain. `tests/state/test_roundtrip.py`
+afterwards in every process's view, and 177 audit records in a verified chain. These are historical timings,
+not a claim about current rerun duration. `tests/state/test_roundtrip.py`
 moves the 39 documents of a simulated-range state each way and leaves its 23 files untouched.
 
 Every process that shares a state directory must run with the same `CT_STATE_BACKEND`. The sqlite backend logs a
