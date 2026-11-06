@@ -267,6 +267,10 @@ test('acceptance and reasoned reversal use their own endpoints and cannot submit
     await panel.submit();
     assert.equal(panel.puts[1].operation, 'revoke');
     assert.deepEqual(Object.keys(panel.puts[1].body).sort(), ['evidence_fingerprint', 'expected_revision', 'reason']);
+    assert.deepEqual(panel.draft(), { disposition: 'unreviewed', reason: '', supportingEvidence: '', expiresAt: '' },
+      'A completed revocation must leave a new, empty review draft');
+    await panel.submit();
+    assert.equal(panel.puts.length, 2, 'Submitting again cannot repeat the revocation or silently create a review');
   } finally { panel.unmount(); }
 });
 

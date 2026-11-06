@@ -116,6 +116,7 @@ export function FindingReviewPanel({ finding, opened, onToggle, onFinding, onRev
         : await api.saveFindingReview(finding.id, body);
       if (!alive.current || requestedAuthority !== authorityRevision()) return;
       draftBase.current = { ...saved };
+      if (draft.disposition === 'risk_revoked') setDraft(reviewDraft(saved));
       setReview(saved);
       setConflict(false);
       setAcknowledged(false);

@@ -203,6 +203,9 @@ try {
   await drawer.getByText('Risk acceptance revoked', { exact: true }).first().waitFor();
   await drawer.getByRole('paragraph').filter({ hasText: revokeReason }).waitFor();
   await drawer.getByRole('paragraph').filter({ hasText: acceptReason }).waitFor();
+  await drawer.getByRole('button', { name: 'Revoke risk acceptance', exact: true }).waitFor({ state: 'hidden' });
+  assert.equal(await drawer.getByRole('textbox', { name: 'Reason', exact: true }).inputValue(), '');
+  await drawer.getByRole('button', { name: 'Save review', exact: true }).waitFor();
   await drawer.getByText('Review history', { exact: true }).scrollIntoViewIfNeeded();
   await screenshot('risk-revoked-history');
   await closeDrawer();
@@ -215,6 +218,7 @@ try {
   assert.equal(await card.getByRole('button', { name: 'Apply', exact: true }).isEnabled(), true);
   assert.equal(await card.getByText('Remediation held by risk acceptance', { exact: true }).count(), 0);
   report.steps.push({ step: 'risk_revocation', status: 'revoked', disposition: 'unreviewed',
+    completed_form_cleared: true,
     ui_apply_enabled: true, proposal_records_unchanged: true, observation_sha256: observationHash,
     unapproved_control_proposals: originalProposals.filter(p => p.state === 'proposed').length,
     history_dispositions: revocation.history.map(event => event.disposition) });
