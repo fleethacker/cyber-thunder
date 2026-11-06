@@ -25,11 +25,13 @@ The `workstation` and `server` targets must already exist. Passive imports are a
 out of scope, but their scope flags, credentials, options and other inventory fields remain unchanged.
 Importing observations never authorizes access or changes. The target inventory determines `asset_type`.
 
-A permitted human actor is required. In verified mode, HTTPS API requests use the
+An authorized actor is required. In verified mode, HTTPS API requests use the
 authenticated principal and require both node `import` and `import` grants for
 every mapped target; `X-Actor` cannot replace that identity. Grants and original
-target generations are rechecked before publication. See [account access](ACCOUNT_ACCESS.md).
-Blank, machine, reserved policy identities and the generic `operator` fallback
+target generations are rechecked before publication. Import is not a human-only
+decision action: a deliberately granted workload principal may import, but this
+does not authorize it to approve or apply changes. See [account access](ACCOUNT_ACCESS.md).
+Blank, reserved machine/policy actor labels and the generic `operator` fallback
 are refused. The local CLI and `X-Actor` examples below are explicitly for
 loopback development/replay with scratch state; they are unverified attribution.
 Use authenticated API upload in verified mode; a typed local actor cannot bypass it.

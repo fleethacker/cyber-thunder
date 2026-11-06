@@ -50,14 +50,16 @@ upgrading. The existing periodic inventory scanner selects only in-scope targets
 4. Send authenticated `POST /api/v1/cluster/baseline` with optionally
    `{"target_id": "test-cluster"}`. The active survey uses
    `GET /api/v1/cluster/survey?target_id=test-cluster` and also requires current
-   scan authority and the corresponding account connection binding.
+   `discover` authority and the corresponding account connection binding.
+   Baseline collection uses `scan` authority and its scan credential binding.
    Omitting `target_id` selects `CT_BOOTSTRAP_CLUSTER_TARGET_ID`; the selected
    target must already exist and be authorized.
 
 In loopback development mode only, `X-Actor` supplies a typed, unverified
 attribution label. Verified mode uses signed OIDC/mesh identity or its browser
 session and role/resource grants; `X-Actor` cannot replace that principal.
-The existing human checks also reject unnamed and reserved machine/policy actors.
+Actor-name checks reject unnamed and reserved machine/policy labels; verified
+role and resource permissions determine which operations an account may perform.
 
 ## Execution and audit
 
