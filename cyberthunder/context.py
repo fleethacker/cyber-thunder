@@ -87,8 +87,10 @@ class AppContext:
             return None
 
     # -- helpers ---------------------------------------------------------------------
-    def authorize(self, action: str, *, actor: str | None = None, target=None):
+    def authorize(self, action: str, *, actor: str | None = None, target=None, step_up_continuation=None):
         if self.settings.auth_mode == "dev":
+            if step_up_continuation is not None:
+                raise PermissionError("transfer authentication mode changed")
             return None
         from cyberthunder.control.principal import current_principal, require_current
         from cyberthunder.inventory.host import persisted_target
@@ -110,7 +112,8 @@ class AppContext:
             else:
                 resource = target
             self.access.require(principal, action, resource)
-            require_step_up(self.settings, principal, action, clock=freshness_clock(self))
+            require_step_up(self.settings, principal, action, clock=freshness_clock(self), ctx=self,
+                            target=resource, continuation=step_up_continuation)
             return principal
         except StepUpRequired as exc:
             self.audit.append("authorization.denied", principal.actor,

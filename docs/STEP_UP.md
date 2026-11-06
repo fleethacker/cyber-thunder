@@ -1,9 +1,9 @@
 # Step-up authentication for risky decisions
 
 Verified mode requires recent signed authentication evidence for `approve`,
-`policy`, `kill.release` and every `admin` operation, including target and scope
-changes. Application roles, exact actor identity, current sessions and resource
-grants remain independent requirements. Workloads cannot approve by supplying a
+`policy`, `kill.release` and `admin` decisions, including target and scope
+changes and explicit transfer admission. Application roles, exact actor identity,
+current sessions and resource grants remain independent requirements. Workloads cannot approve by supplying a
 human-looking name, authentication method or ACR. The issuer must manage `ct_kind`.
 Development mode remains an explicitly unverified demonstration.
 
@@ -141,9 +141,9 @@ duties are separate controls. When integrating the separation-of-duties work,
 retain its existing authorizer calls: each individual approval will encounter
 this step-up guard, without changing quorum requirements or recorded decisions.
 Standalone gates and custom service contexts must wire this authorizer; the
-lower-level identity/role check alone is not the step-up policy. Delayed admin
-publication can lose freshness while work is running and is currently refused;
-the long-job integration issue below remains open.
+lower-level identity/role check alone is not the step-up policy. Explicitly
+admitted transfers use the bounded continuation interface below; all other
+admin decisions recheck authentication age.
 The bulk proposal handler preserves per-item outcomes: expiry during a batch
 returns status 401, the error code and a structured `step_up` challenge on the
 refused item. The browser keeps earlier results, prompts for deliberate
@@ -155,7 +155,7 @@ Parent integration must preserve the `AppContext.authorize` hook, API error mapp
 session assurance snapshot and client 401 distinction together. Rebuild the combined
 UI separately; this change does not commit generated assets or dependencies.
 
-## Independent review and long-job integration seam
+## Independent review and bounded transfer continuation
 
 Review base: `97bbfd2`, with parent bulk-result correction `554de9b` applied.
 The review reproduced and corrected three issues:
@@ -170,37 +170,60 @@ The review reproduced and corrected three issues:
   exchange its code before failing the final session check. It now fails before
   token endpoint I/O, while retaining the final post-exchange check.
 
-**Open: long-running admin jobs.** At this review base, content pulls call
-`authorize("admin")` at initiation, each file, and the downloader stop callback.
-Trusted-source publication calls it again through
+**Corrected: repeated step-up during an admitted transfer.** At the review base,
+content pulls called `authorize("admin")` at initiation, each file, and the downloader
+stop callback. Trusted-source publication called it again through
 `ingest/content/signatures.py:decide`. Vulnerability database update guards also
-use `admin`. An otherwise authorized operation therefore stops when the initiating
-authentication event crosses the configured age limit, even when its credential
-is still valid. A transfer at 56 kbps can reach this boundary before its first
-file completes. No guard has been disabled to hide this limitation.
+used `admin`. An otherwise authorized operation stopped when the initiating
+authentication event crossed the configured age limit, even when its credential
+was still valid. A transfer at 56 kbps can reach this boundary before its first
+file completes.
 
-The bounded resolution needs an explicit admission and continuation interface
-in the owning job services. Admission must require fresh assurance and current
-authorization, then bind an in-memory receipt to the exact initiating account,
-session, node, job ID, immutable request/file set, action, assurance configuration
-and a finite deadline. Only that job's continuation/publication guard may use
-the receipt. New scope, configuration, policy, override or approval decisions
-must always take the ordinary fresh-assurance path. A generic cached success for
-`admin`, or a copied HTTP route marker that bypasses all nested admin decisions,
-would be too broad.
+`admit_transfer` now requires fresh assurance and current node administration
+authorization for `content.pull` or `vulnerabilities.update`. Its process-local,
+immutable receipt binds the original principal, owning application context,
+operation, job ID, hash of the request/file set and transfer configuration,
+protected account-policy digest, assurance settings and security mode. Its
+deadline is the earlier of original credential expiry and one hour. The audit
+records the job, operation, intent hash and deadline; neither the receipt nor
+credentials are serialized into the job record.
 
-Continuation must recheck current signed identity/roles, account grants,
-session validity, kill/link state and source authenticity before I/O and
-publication. A changed policy/configuration or job intent must invalidate the
-admission, and stopped/pending jobs must remain terminal without automatic retry.
-The required content and vulnerability service wiring is outside this step-up
-review's write scope; the current repeated checks remain in place.
+Each continuation passes a fresh declaration to `AppContext.authorize` through
+the explicit `step_up_continuation` argument. The core verifies the receipt's
+bindings in addition to the normal current-principal/session, role and account
+grant checks. Only node-level `admin` continuation is accepted. No context-wide
+freshness bypass exists. Scope, configuration, policy, unsigned-content override
+and approval decisions continue using the ordinary fresh-assurance path.
 
-There is a separate credential lifetime limit: copied browser leases deliberately
+Content guards recheck the admission before each network attempt, download
+poll and trusted-source publication. Only a real live-download provenance
+receipt can use this continuation; it cannot authorize an unsigned-content
+override or offline import. Vulnerability update guards carry the same bounded
+admission through engine execution and generation publication. Existing kill,
+link, byte limits, source TLS and authenticity checks remain active. Policy,
+assurance configuration, request intent, credential or session changes stop the
+job. Completion/failure closes the admission; queued worker failures become
+terminal and never trigger an automatic retry. A process restart loses the
+admission and cannot resume it from saved job metadata.
+
+Transfer regressions cover real loopback HTTPS publication after the freshness
+window in synchronous and copied worker contexts; changed job, account, role,
+node, policy, mode and assurance settings; revocation before I/O and after
+download; and worker-start and persistence failures. Unsigned-content overrides
+and new administrative decisions still refuse stale assurance. Managed database
+tests use an isolated engine fixture and verify both publication and refusal.
+The JSON and SQLite backends exercise the same authorization boundaries.
+
+**Open: credential lifetime beyond the admitted job.** Copied browser leases deliberately
 retain the original token expiry and become invalid on refresh generation change
 or logout. An admission receipt alone cannot make a five-minute token authorize
 a longer job. Supporting that needs an independently reviewed, explicitly bounded
 per-job delegation/renewal design using actual newly validated signed credentials
-and current grants. Never extend `exp`, synthesize `auth_time`, renew an old
+and current grants. Configure the issuer's reviewed credential lifetime to cover
+the intended bounded transfer; the current API verifier accepts token lifetimes
+of at most one hour. A deployment with five-minute access tokens still cannot
+run a longer job under its original credential. Increasing
+`CT_STEP_UP_MAX_AGE_SECONDS` is not a fix for token expiry.
+Never extend `exp`, synthesize `auth_time`, renew an old
 principal silently, or substitute a shared privileged account. External CAC/PIV
 and real realm acceptance remain open.

@@ -501,14 +501,19 @@ class _Attestation(Mapping):
         return self.facts[key]
 
 
-def decide(ctx, evidence, actor, override_reason=None):
+def decide(ctx, evidence, actor, override_reason=None, *, step_up_continuation=None):
     from cyberthunder.control.principal import require_current
     if evidence["status"] == "trusted_https_source":
         from .fetch import _source_evidence
         evidence = _source_evidence(evidence)
         if required(ctx):
             require_current("admin", actor)
-            ctx.authorize("admin", actor=actor)
+            if step_up_continuation is not None:
+                from cyberthunder.security.step_up import require_transfer_operation
+                require_transfer_operation(step_up_continuation, "content.pull")
+                ctx.authorize("admin", actor=actor, step_up_continuation=step_up_continuation)
+            else:
+                ctx.authorize("admin", actor=actor)
         return dict(evidence)
     if evidence["status"] == "operator_attested":
         if type(evidence) is not _Attestation:
@@ -542,8 +547,8 @@ def decide(ctx, evidence, actor, override_reason=None):
 
 
 @contextmanager
-def receipt(ctx, actor, digests, evidence, override_reason=None, *, recheck=None):
-    token = _receipt.set((ctx, actor, frozenset(digests), evidence, override_reason, recheck))
+def receipt(ctx, actor, digests, evidence, override_reason=None, *, recheck=None, step_up_continuation=None):
+    token = _receipt.set((ctx, actor, frozenset(digests), evidence, override_reason, recheck, step_up_continuation))
     try:
         yield
     finally:
@@ -554,7 +559,7 @@ def acceptance(ctx, actor, digest, size):
     active = _receipt.get()
     if active is None:
         return decide(ctx, {"status": "unsigned", "operator_attested": False, "disa_signature": False}, actor)
-    owner, expected_actor, digests, evidence, reason, recheck = active
+    owner, expected_actor, digests, evidence, reason, recheck, continuation = active
     if owner is not ctx or actor != expected_actor or (digest, size) not in digests:
         _fail()
     # Recheck the current principal/session and policy, including on background threads.
@@ -568,7 +573,7 @@ def acceptance(ctx, actor, digest, size):
         source = _source_evidence(base)
         if (digest, size) != (source["sha256"], source["bytes"]):
             _fail()
-    return decide(ctx, base, actor, reason)
+    return decide(ctx, base, actor, reason, step_up_continuation=continuation)
 
 
 def document_text(doc):

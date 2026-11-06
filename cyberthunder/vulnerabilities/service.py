@@ -15,6 +15,7 @@ import uuid
 import zipfile
 from contextlib import ExitStack, contextmanager
 from contextvars import copy_context
+from cyberthunder.security.step_up import admit_transfer, authorize_transfer, transfer_continuation
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -120,8 +121,12 @@ class VulnerabilityService:
         self.store.write_json(self.state_path, state)
 
     def _guard(self, actor: str, *, online: bool = False, deadline: float | None = None,
-               stage: Path | None = None, action: str | None = "admin"):
-        if action is not None:
+               stage: Path | None = None, action: str | None = "admin", continuation=None):
+        if continuation is not None:
+            if action != "admin":
+                raise PermissionError("invalid update continuation")
+            authorize_transfer(self.ctx, actor=actor, continuation=continuation)
+        elif action is not None:
             authorize(self.ctx, action, actor=actor)
         self.ctx.killswitch.guard("vulnerabilities.manage", actor)
         if online and not Link(self.store, self.ctx.settings).connected:
@@ -415,6 +420,7 @@ class VulnerabilityService:
             raise VulnerabilityError("include_java and background must be booleans")
         self._guard(actor, online=True)
         lease = Lease(self.root / "operation.lock")
+        admission = None
         try:
             self._recover()
             if scheduled and not self.due_update():
@@ -430,6 +436,8 @@ class VulnerabilityService:
                         return None
                     include_java = self.settings()["include_java"]
                 self._guard(actor, online=True)
+                admission = admit_transfer(self.ctx, operation="vulnerabilities.update", job_id=job["id"],
+                    intent=self._update_intent(include_java), actor=actor)
                 self._audit("update", actor, {"job": job["id"], "include_java": include_java,
                                               "scheduled": scheduled})
                 self.store.write_json(self._job_path(job["id"]), job)
@@ -438,7 +446,7 @@ class VulnerabilityService:
             if background:
                 self.threads = [t for t in self.threads if t.is_alive()]
                 try:
-                    thread = threading.Thread(target=copy_context().run, args=(self._run_update, job, include_java, lease),
+                    thread = threading.Thread(target=copy_context().run, args=(self._run_update, job, include_java, lease, admission),
                                               name="vulnerability-update", daemon=True)
                     thread.start()
                     self.threads.append(thread)
@@ -446,11 +454,18 @@ class VulnerabilityService:
                     self._finish(job, "failed", error="Database update worker could not start")
                     raise VulnerabilityUnavailable("Database update worker could not start") from None
                 return copy.deepcopy(job)
-            self._run_update(job, include_java, lease)
+            self._run_update(job, include_java, lease, admission)
             return self.job(job["id"])
         except BaseException:
+            if admission is not None:
+                admission.close()
             lease.close()
             raise
+
+    def _update_intent(self, include_java):
+        return {"include_java": include_java, "settings": self.settings(), "timeout": self.timeout,
+                "binary": str(self._setting("trivy_binary", "trivy")),
+                "max_staging_bytes": self.max_staging_bytes, "max_unpacked_bytes": self.max_unpacked_bytes}
 
     def _finish(self, job: dict, state: str, error: str | None = None, generation: str | None = None):
         job = {**job, "state": state, "finished_at": now(), "error": error, "generation": generation}
@@ -462,11 +477,14 @@ class VulnerabilityService:
                                                      "generation": generation, "error": error},
                     outcome="ok" if state == "completed" else state)
 
-    def _run_update(self, job: dict, include_java: bool, lease: Lease):
+    def _run_update(self, job: dict, include_java: bool, lease: Lease, admission=None):
         stage = self.staging / job["id"]
         generation = None
+        def continuation():
+            return transfer_continuation(admission, operation="vulnerabilities.update", job_id=job["id"],
+                                         intent=self._update_intent(include_java))
         try:
-            self._guard(job["actor"], online=True)
+            self._guard(job["actor"], online=True, continuation=continuation())
             stage.mkdir()
             cache, home = stage / "cache", stage / "home"
             cache.mkdir()
@@ -474,7 +492,7 @@ class VulnerabilityService:
             config = home / "trivy.yaml"
             config.write_text("{}\n", encoding="utf-8", newline="\n")
             deadline = time.monotonic() + self.timeout
-            guard = lambda: self._guard(job["actor"], online=True, deadline=deadline, stage=stage)
+            guard = lambda: self._guard(job["actor"], online=True, deadline=deadline, stage=stage, continuation=continuation())
             guard()
             require_space(stage, self.max_staging_bytes)
             job = {**job, "state": "running"}
@@ -506,6 +524,8 @@ class VulnerabilityService:
             error = str(exc)[:256] if isinstance(exc, VulnerabilityError) else "Database update failed"
             self._finish(job, "failed", error=error)
         finally:
+            if admission is not None:
+                admission.close()
             try:
                 remove_tree(stage, self.staging)
             finally:

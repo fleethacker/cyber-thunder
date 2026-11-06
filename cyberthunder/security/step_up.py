@@ -1,7 +1,8 @@
 """Bounded authentication-event policy; application roles and resource grants are separate."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import hashlib
 import json
 import math
 import re
@@ -137,6 +138,101 @@ class StepUpRequired(PermissionError):
         return value
 
 
-def require_step_up(settings, principal, action: str, *, clock=None) -> None:
+def require_step_up(settings, principal, action: str, *, clock=None, ctx=None, target=None, continuation=None) -> None:
+    if continuation is not None and (action != "admin" or target is not None or type(continuation) is not _TransferContinuation):
+        raise PermissionError("invalid transfer continuation")
     if settings.auth_mode != "dev" and action in RISKY_ACTIONS:
-        StepUpPolicy.from_settings(settings).require(principal, now=clock.now() if clock is not None else None)
+        policy = StepUpPolicy.from_settings(settings)
+        now = clock.now() if clock is not None else time.time()
+        if continuation is not None:
+            continuation.require(ctx, principal, policy, now)
+        else:
+            policy.require(principal, now=now)
+
+
+_TRANSFERS = frozenset({"content.pull", "vulnerabilities.update"})
+
+
+def _intent_digest(intent):
+    raw = json.dumps(intent, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
+    if len(raw) > 4 * 1024 * 1024:
+        raise ValueError("transfer declaration is too large")
+    return hashlib.sha256(raw).hexdigest()
+
+
+@dataclass(frozen=True, eq=False, repr=False)
+class _TransferAdmission:
+    owner: object
+    principal: object
+    operation: str
+    job_id: str
+    intent: str
+    policy_digest: str
+    assurance: StepUpPolicy
+    mode: tuple
+    deadline: float
+    closed: object = field(default_factory=threading.Event)
+    lock: object = field(default_factory=threading.Lock)
+
+    def close(self):
+        with self.lock:
+            self.closed.set()
+
+
+@dataclass(frozen=True, repr=False)
+class _TransferContinuation:
+    admission: _TransferAdmission
+    operation: str
+    job_id: str
+    intent: str
+
+    def require(self, ctx, principal, policy, now):
+        receipt = self.admission
+        if type(receipt) is not _TransferAdmission:
+            raise PermissionError("invalid transfer admission")
+        with receipt.lock:
+            if (receipt.closed.is_set() or receipt.owner is not ctx or receipt.principal != principal
+                    or self.operation != receipt.operation or self.job_id != receipt.job_id
+                    or self.intent != receipt.intent or policy != receipt.assurance
+                    or receipt.mode != (ctx.settings.auth_mode, getattr(ctx.settings, "security_mode", "range"))
+                    or not math.isfinite(now) or now >= receipt.deadline
+                    or ctx.access._load()[1] != receipt.policy_digest):
+                raise PermissionError("transfer admission expired or changed")
+
+
+def admit_transfer(ctx, *, operation, job_id, intent, actor):
+    """Admit one explicit job; never persist this object or inherit a general admin bypass."""
+    from cyberthunder.control.principal import authorize
+    principal = authorize(ctx, "admin", actor=actor)
+    if getattr(ctx.settings, "auth_mode", "dev") == "dev":
+        return None
+    if operation not in _TRANSFERS or not isinstance(job_id, str) or not 1 <= len(job_id) <= 128:
+        raise ValueError("invalid transfer declaration")
+    policy = StepUpPolicy.from_settings(ctx.settings)
+    now = freshness_clock(ctx).now()
+    policy.require(principal, now=now)
+    receipt = _TransferAdmission(ctx, principal, operation, job_id, _intent_digest(intent), ctx.access._load()[1],
+        policy, (ctx.settings.auth_mode, getattr(ctx.settings, "security_mode", "range")),
+        min(principal.expires_at, now + 3600))
+    ctx.audit.append("authorization.transfer_admitted", principal.actor,
+        {"operation": operation, "job_id": job_id, "intent_sha256": receipt.intent,
+         "deadline": receipt.deadline, "step_up_max_age": policy.max_age})
+    return receipt
+
+
+def transfer_continuation(admission, *, operation, job_id, intent):
+    if admission is None:
+        return None
+    return _TransferContinuation(admission, operation, job_id, _intent_digest(intent))
+
+
+def require_transfer_operation(continuation, operation):
+    if type(continuation) is not _TransferContinuation or continuation.operation != operation:
+        raise PermissionError("invalid transfer operation")
+
+
+def authorize_transfer(ctx, *, continuation, actor):
+    if continuation is None:
+        from cyberthunder.control.principal import authorize
+        return authorize(ctx, "admin", actor=actor)
+    return ctx.authorize("admin", actor=actor, step_up_continuation=continuation)

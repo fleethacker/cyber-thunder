@@ -6,8 +6,9 @@ failure, quarantine, import and manifest is written to the audit log with the UR
 and actor, and nothing more.
 """
 from __future__ import annotations
-from contextvars import copy_context
+from contextvars import ContextVar, copy_context
 from cyberthunder.control.principal import authorize
+from cyberthunder.security.step_up import admit_transfer, authorize_transfer, transfer_continuation
 
 import copy
 import hashlib
@@ -40,6 +41,7 @@ log = logging.getLogger(__name__)
 LOCK_NAME = "manifest.lock.json"
 MANIFEST_NAME = "manifest.json"
 MAX_HEADS = 40
+_transfer_guard = ContextVar("content_transfer_guard", default=None)
 
 
 def _ingest_error(msg: str) -> Exception:
@@ -87,6 +89,9 @@ class ContentService:
         return self._client
 
     def _network_guard(self):
+        active = _transfer_guard.get()
+        if active is not None and active[0] is self:
+            active[1]()
         self.ingest.ctx.killswitch.guard("content.network", "content")
         if not self._link().connected:
             raise LinkDisconnected("network attempt blocked by link state")
@@ -327,25 +332,58 @@ class ContentService:
                           "estimate_seconds": None, "sha256": None, "delta": None, "datastream_path": None}
                          for r in items],
                "deltas": [], "error": None}
+        admission = admit_transfer(self.ctx, operation="content.pull", job_id=job["id"],
+                                   intent=self._transfer_intent(job, items), actor=actor)
         with self._job_lock:
             if self._running:
+                if admission is not None:
+                    admission.close()
                 raise _ingest_error(f"pull {self._running} is still running; wait for it to finish")
             self._running = job["id"]
-        self.store.save_job(job)
-        if not items:
-            job.update(state="done", started_at=now, finished_at=now)
+        try:
             self.store.save_job(job)
+        except BaseException:
+            if admission is not None:
+                admission.close()
             with self._job_lock:
                 self._running = None
+            raise
+        if not items:
+            if admission is not None:
+                admission.close()
+            job.update(state="done", started_at=now, finished_at=now)
+            try:
+                self.store.save_job(job)
+            finally:
+                with self._job_lock:
+                    self._running = None
             return job
         if background:
             snapshot = copy.deepcopy(job)          # the thread keeps mutating its own copy
-            t = threading.Thread(target=copy_context().run, args=(self._run_job, job, items, actor), name=f"content-{job['id']}",
-                                 daemon=True)
-            self.threads.append(t)
-            t.start()
+            try:
+                t = threading.Thread(target=copy_context().run, args=(self._run_job, job, items, actor, admission),
+                                     name=f"content-{job['id']}", daemon=True)
+                t.start()
+                self.threads.append(t)
+            except Exception:
+                if admission is not None:
+                    admission.close()
+                job.update(state="failed", finished_at=utcnow(), error="content worker could not start")
+                for item in job["files"]:
+                    item.update(state="failed", error="content worker could not start")
+                try:
+                    self.store.save_job(job)
+                finally:
+                    with self._job_lock:
+                        self._running = None
+                raise _ingest_error("content worker could not start") from None
             return snapshot
-        return self._run_job(job, items, actor)
+        return self._run_job(job, items, actor, admission)
+
+    def _transfer_intent(self, job, items):
+        return {"items": items, "pace": job["pace"], "all_matching": job["all_matching"],
+                "allowed_hosts": sorted(self.client.allowed_hosts), "allow_http": self.client.allow_http,
+                "max_bytes": self.max_bytes, "timeout": self.timeout}
 
     def wait(self, timeout: float | None = None) -> None:
         for t in list(self.threads):
@@ -357,10 +395,19 @@ class ContentService:
             raise KeyError(f"no pull job {job_id!r}")
         return j
 
-    def _run_job(self, job: dict, items: list[dict], actor: str) -> dict:
+    def _run_job(self, job: dict, items: list[dict], actor: str, admission=None) -> dict:
         lock = threading.Lock()
         last = [0.0]
         live_directory = None
+
+        def continuation():
+            return transfer_continuation(admission, operation="content.pull", job_id=job["id"],
+                                         intent=self._transfer_intent(job, items))
+
+        def reauthorize():
+            authorize_transfer(self.ctx, actor=actor, continuation=continuation())
+
+        guard_token = _transfer_guard.set((self, reauthorize))
 
         def save(force: bool = False) -> None:
             with lock:
@@ -380,7 +427,7 @@ class ContentService:
                 live_directory = tempfile.TemporaryDirectory(prefix="live-", dir=staging)
                 staging = Path(live_directory.name)
             for f, item in zip(job["files"], items):
-                authorize(self.ctx, "admin", actor=actor)
+                reauthorize()
                 if self.ctx.killswitch.is_engaged():
                     f.update(state="stopped", error="kill switch engaged")
                     job["state"] = "stopped"
@@ -410,7 +457,7 @@ class ContentService:
                         return None
                     polled[0] = now
                     try:
-                        authorize(self.ctx, "admin", actor=actor)
+                        reauthorize()
                     except PermissionError:
                         return "account authorization expired or was revoked"
                     if self.ctx.killswitch.is_engaged():
@@ -453,10 +500,12 @@ class ContentService:
                 try:
                     if trusted_live:
                         def source_check():
+                            reauthorize()
                             self._network_guard()
                             return fx.live_evidence(res, self.client)
                         evidence = source_check()
-                        with sig.receipt(self.ctx, actor, [(res.sha256, res.bytes)], evidence, recheck=source_check):
+                        with sig.receipt(self.ctx, actor, [(res.sha256, res.bytes)], evidence, recheck=source_check,
+                                         step_up_continuation=continuation()):
                             rec = self._accept(Path(res.path), entry, source="pulled", actor=actor, sha256=res.sha256,
                                                etag=res.etag, size=res.bytes)
                     else:
@@ -478,13 +527,21 @@ class ContentService:
         except Exception as e:  # noqa: BLE001 - the job record must say what happened
             log.exception("content pull %s failed", job["id"])
             job.update(state="failed", error=str(e))
+            for item in job["files"]:
+                if item["state"] in {"pending", "downloading", "verifying", "retrying"}:
+                    item.update(state="stopped", error="content job stopped before completion")
         finally:
+            _transfer_guard.reset(guard_token)
+            if admission is not None:
+                admission.close()
             job["finished_at"] = utcnow()
-            save(True)
-            with self._job_lock:
-                self._running = None
-            if live_directory is not None:
-                live_directory.cleanup()
+            try:
+                save(True)
+            finally:
+                with self._job_lock:
+                    self._running = None
+                if live_directory is not None:
+                    live_directory.cleanup()
         return job
 
     # -- accepting a verified file ----------------------------------------------------------------
