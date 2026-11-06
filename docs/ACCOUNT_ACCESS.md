@@ -27,7 +27,7 @@ Roles are additive, but their permissions are intersected with policy grants:
 | --- | --- |
 | `viewer` | `read`, `read.all`, `kill.engage` |
 | `analyst` | Viewer permissions plus `scan`, `discover`, `propose`, `explain`, `plan`, `import` |
-| `approver` | Viewer permissions plus `approve`, `deny`, `cancel`, `apply`, `rollback`, `verify`, `plan`, `review` |
+| `approver` | Viewer permissions plus `approve`, `deny`, `cancel`, `apply`, `rollback`, `verify`, `plan`, `review`, `risk.accept`, `maintenance.override` |
 | `admin` | Viewer permissions plus `admin`, `policy`, `kill.release` |
 | `auditor` | Viewer permissions plus `audit`, `export` |
 
@@ -157,8 +157,17 @@ The accepted actions are:
 
 ```text
 read read.all scan discover propose explain plan import approve deny cancel apply
-rollback verify review admin policy audit export kill.engage kill.release
+rollback verify review risk.accept maintenance.override admin policy audit export
+kill.engage kill.release
 ```
+
+`risk.accept` and `maintenance.override` require separate exact subject, target
+and environment grants. Group grants, wildcards, node grants and permissions on
+another account associated with the same person cannot supply either action.
+Both also require a verified human and fresh authentication. See
+[risk acceptance](RISK_ACCEPTANCE.md) and [maintenance windows](MAINTENANCE_WINDOWS.md)
+for their separate decision and execution boundaries. Neither permission grants
+ordinary approval, application or target-connection authority.
 
 Unknown fields/actions, duplicate JSON keys, duplicate selectors/grants/list
 values, invalid types and incompatible fields within a credential invalidate the
