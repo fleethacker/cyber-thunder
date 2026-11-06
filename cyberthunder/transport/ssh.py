@@ -1,11 +1,12 @@
 """SSH transport (paramiko). Credentials come from the environment or a key file, never from the inventory.
 
-Resolution order for a target:
+Resolution order for an unbound target:
   options.key_file                       -> private key path
   credential_ref that is an existing path -> private key path
   env CT_CRED_<credential_ref>            -> password  (ref must match [A-Za-z0-9_.-]{1,64})
   otherwise fail without attempting implicit agent or ~/.ssh key discovery
 A bare environment variable name is never read: a ref of PATH must not send $PATH to a host.
+Bound targets resolve only their selected credential_source and enforce their sudo permission.
 """
 from __future__ import annotations
 
@@ -13,10 +14,10 @@ import os
 import re
 import shlex
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .base import CommandResult, Transport, TransportError, sudo_wrap
-from .trust import (GuardedShell, TrustError, TrustEvents, boolean, configure_ssh_client, endpoint_host,
+from .trust import (GuardedShell, TrustError, TrustEvents, boolean, bound_account, configure_ssh_client, endpoint_host,
                     endpoint_port, security_mode as resolve_security_mode, sha256_pin)
 
 
@@ -37,7 +38,8 @@ class SSHTransport(TrustEvents, Transport):
                  key_filename: str | None = None, sudo: bool = True, connect_timeout: int = 20,
                  security_mode: str = "range", host_key_sha256: str | None = None,
                  known_hosts: str | None = None, allow_insecure_range: bool = False,
-                 interactive: bool = False, allow_agent: bool = False, guard=None, on_security_event=None):
+                 interactive: bool = False, allow_agent: bool = False, credential_bound: bool = False,
+                 guard=None, on_security_event=None):
         self._init_events(on_security_event)
         self.security_mode = resolve_security_mode(value=security_mode)
         self.host, self.port, self.username = endpoint_host(host), endpoint_port(port), username
@@ -47,6 +49,9 @@ class SSHTransport(TrustEvents, Transport):
         self.allow_insecure_range = boolean(allow_insecure_range, "allow_insecure_range")
         self.interactive = boolean(interactive, "interactive")
         self.allow_agent = boolean(allow_agent, "allow_agent")
+        self._credential_bound = boolean(credential_bound, "credential_bound")
+        if self._credential_bound and (self.interactive or self.allow_agent):
+            raise TrustError("transport:invalid_credential_binding", "Selected SSH accounts cannot use ambient authentication")
         if self.allow_agent and not self.interactive:
             raise TrustError("transport:interactive_required", "SSH agent use requires an explicit interactive invocation")
         if self.host_key_sha256 and known_hosts:
@@ -56,7 +61,7 @@ class SSHTransport(TrustEvents, Transport):
         if not (self.host_key_sha256 or known_hosts) and self.allow_insecure_range:
             self._event("transport:ssh_unverified", "Range exception: SSH host identity is unverified")
         self._guard = guard if guard is not None else lambda: None
-        self.sudo_default = sudo
+        self.sudo_default = boolean(sudo, "sudo") if self._credential_bound else sudo
         self.connect_timeout = connect_timeout
         self._client = None
 
@@ -67,8 +72,23 @@ class SSHTransport(TrustEvents, Transport):
         password = key = None
         ref = target.credential_ref
         options = target.options or {}
+        bound = bound_account(target)
         try:
-            if options.get("key_file"):
+            if bound:
+                source = options["credential_source"]
+                if source == "environment":
+                    if "key_file" in options or not ref:
+                        raise TrustError("transport:invalid_credential_binding", "Selected environment credential cannot include a key file")
+                    # Never probe the filesystem for a selected environment reference.
+                    password = credential_from_env(ref)
+                    if not password:
+                        raise TrustError("transport:credential_unavailable", "Selected SSH environment credential is unavailable")
+                else:
+                    key = options.get("key_file")
+                    if (ref is not None or not isinstance(key, str) or not key
+                            or not (PurePosixPath(key).is_absolute() or PureWindowsPath(key).is_absolute())):
+                        raise TrustError("transport:invalid_credential_binding", "Selected SSH key requires one explicit absolute path")
+            elif options.get("key_file"):
                 key = str(Path(options["key_file"]).expanduser())
             elif ref and Path(ref).expanduser().is_file():
                 key = str(Path(ref).expanduser())
@@ -81,7 +101,8 @@ class SSHTransport(TrustEvents, Transport):
                    key_filename=key, sudo=target.sudo, security_mode=resolve_security_mode(settings),
                    host_key_sha256=options.get("host_key_sha256"), known_hosts=options.get("known_hosts"),
                    allow_insecure_range=options.get("allow_insecure_range", False),
-                   interactive=interactive, allow_agent=options.get("allow_agent", False),
+                   interactive=False if bound else interactive, allow_agent=options.get("allow_agent", False),
+                   credential_bound=bound,
                    guard=guard, on_security_event=on_security_event)
 
     def connect_client(self, *, timeout=None, guard=None, allow_agent=None):
@@ -137,7 +158,13 @@ class SSHTransport(TrustEvents, Transport):
             self._client = self.connect_client()
         return self._client
 
+    def _check_sudo(self, requested: bool) -> None:
+        self._guard()
+        if self._credential_bound and requested and self.sudo_default is not True:
+            raise TrustError("transport:sudo_forbidden", "Selected SSH account does not permit sudo") from None
+
     def run(self, command: str, *, timeout: int = 120, sudo: bool = False) -> CommandResult:
+        self._check_sudo(sudo)
         if sudo:
             command = sudo_wrap(command)
         t0 = time.time()
@@ -175,6 +202,7 @@ class SSHTransport(TrustEvents, Transport):
             with client.open_sftp() as sftp, sftp.open(path, "rb") as fh:
                 data = fh.read()
         except PermissionError:
+            self._check_sudo(True)
             r = self.run(f"cat {shlex.quote(path)}", sudo=True)
             if not r.ok:
                 raise TransportError("SSH file read failed")
@@ -187,6 +215,7 @@ class SSHTransport(TrustEvents, Transport):
         return data
 
     def write_file(self, path: str, data: bytes, *, mode: int | None = None, sudo: bool = False) -> None:
+        self._check_sudo(sudo)
         tmp = f"/tmp/.ct-{os.getpid()}-{int(time.time()*1000)}"
         client = self._conn()
         self._guard()

@@ -106,6 +106,23 @@ def boolean(value, name: str) -> bool:
     return value
 
 
+def bound_account(target) -> bool:
+    """Validate the transport portion of a selected account's detached target.
+
+    This marker is not an authorization proof; policy selection and fresh
+    principal/target checks remain the caller's responsibility.
+    """
+    options = target.options or {}
+    bound = boolean(options.get("credential_bound", False), "credential_bound")
+    if bound and (not isinstance(target.username, str) or not target.username
+                  or type(target.sudo) is not bool
+                  or options.get("credential_source") not in ("environment", "key_file")
+                  or any(options.get(name) is not False
+                         for name in ("allow_agent", "look_for_keys", "interactive_auth"))):
+        raise TrustError("transport:invalid_credential_binding", "Selected account requires an explicit source and disabled ambient authentication")
+    return bound
+
+
 def endpoint_host(host: str) -> str:
     """Accept one DNS name or IP literal; URLs/userinfo cannot change the peer."""
     if not isinstance(host, str) or not host or len(host) > 253 or any(c in host for c in "/\\@[]%"):

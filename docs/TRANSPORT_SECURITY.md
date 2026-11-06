@@ -23,7 +23,7 @@ change is required for these options.
 | SSH `known_hosts` | Explicit path to a provisioned OpenSSH known_hosts file. Choose this or a fingerprint, not both. |
 | SSH `key_file` | Explicit private key path; `credential_ref` may also name an existing key file. |
 | SSH `allow_agent` | Boolean; only accepted when the caller also passes `interactive=True` to `from_target`. An inventory `interactive` option grants nothing. |
-| WinRM `transport` | `kerberos` by default in fleet, `ntlm` by default in range. Explicit NTLM is allowed over validated fleet HTTPS. |
+| WinRM `transport` | Unbound accounts default to `kerberos` in fleet and `ntlm` in range. Selected bound accounts require explicit `ntlm`; fleet still requires validated HTTPS. |
 | WinRM `ssl` | Boolean; fleet defaults to HTTPS/5986 when no port is specified. Custom HTTPS ports require `ssl: true`. |
 | WinRM `cert_validation` | `validate` or `ignore`; fleet accepts only `validate`. |
 | WinRM `ca_trust_path` | Explicit PEM CA bundle, required in fleet. Directories, empty/missing files, leaf-only certificates, and `legacy_requests` are rejected. |
@@ -98,6 +98,54 @@ They are never described as verified device identities. Secure range SSH using
 a pin/known_hosts and validated HTTPS with NTLM/Kerberos need no exception flag.
 The default range WinRM port/auth declarations remain 5985/NTLM, but starting an
 insecure connection now requires the explicit acknowledgement.
+
+## Selected account bindings
+
+The account-selection helper supplies a detached target with
+`credential_bound: true`, `credential_source: environment | key_file`, and
+`allow_agent: false`, `look_for_keys: false`, `interactive_auth: false`.
+SSH/WinRM validate these declarations and require an explicit username. The
+marker alone does not prove authorization; the parent must select the account
+through its policy and retain fresh principal/target checks.
+
+Bound SSH honors the source exactly. `environment` reads only
+`CT_CRED_<credential_ref>` and never checks whether the reference names an
+existing local file. A missing or empty selected variable fails without trying
+that file or an agent. `key_file` requires an explicit absolute
+`options.key_file` with no competing `credential_ref` and performs no shell,
+environment, or home-directory expansion. Conflicting or unknown sources fail
+closed. An interactive invocation cannot enable ambient authentication for a
+bound account. Unbound targets retain their documented legacy resolution order.
+
+For bound SSH accounts, `target.sudo: false` rejects `sudo=True` requests in
+`run`, `check_output`, and `write_file` before connection or remote staging.
+After an SFTP permission error, `read_file` checks the same bound permission
+before invoking its internal sudo fallback. The original internal authorization
+callback still runs; an application wrapper on public instance methods is not
+the only enforcement point. Accounts explicitly granted sudo keep the fallback,
+and ordinary operations without sudo remain available. This controls transport
+elevation requests; the selected remote account's actual OS privileges remain
+the deployment's responsibility.
+
+Bound WinRM requires `credential_source: environment`, `transport: ntlm`, and
+`target.sudo: false`. Missing selected secrets, a competing key file, another
+authentication transport, or absent explicit NTLM are refused. The fleet
+Kerberos default applies only to unbound connections and cannot provide ambient
+authentication for a bound account. Fleet NTLM remains subject to all HTTPS,
+CA, and DNS/IP validation requirements.
+
+Bound-account validation passed **87 focused tests** in 1.54 s using the shared
+runtime and checkout-specific `PYTHONPATH`:
+
+```powershell
+& 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts='' -q tests/transport/test_bound_accounts.py tests/transport/test_factory.py tests/transport/test_trust_guards.py tests/windows/test_winrm_transport.py tests/engine/test_dependencies_io.py::test_ssh_fixed_credentials_bounded_reads_and_guard tests/test_audit_and_control.py::TestSSHCredentialRef
+```
+
+Three additional in-memory interoperability checks loaded the actual account
+helper from commit `9effc98` and exercised `bind_target` followed by the transport
+factory for SSH environment, SSH key-file, and WinRM environment bindings. The
+environment case included an existing same-name local file. These checks opened
+no network connections and did not modify the helper or parent-owned files.
 
 ## Guard and event interfaces for parent integration
 

@@ -21,7 +21,7 @@ import re
 import time
 
 from .base import CommandResult, Transport, TransportError
-from .trust import (TrustError, TrustEvents, boolean, ca_context, endpoint_host, endpoint_port,
+from .trust import (TrustError, TrustEvents, boolean, bound_account, ca_context, endpoint_host, endpoint_port,
                     harden_winrm_session, security_mode as resolve_security_mode, trust_file)
 
 ENCODED_RE = re.compile(r"(?i)^\s*(powershell(?:\.exe)?)((?:\s+-(?!EncodedCommand\b)\w+)*)\s+-EncodedCommand\s+([A-Za-z0-9+/=]+)\s*$")
@@ -113,10 +113,16 @@ class WinRMTransport(TrustEvents, Transport):
         if not target.address:
             raise TransportError("WinRM target has no address")
         o = target.options or {}
+        bound = bound_account(target)
+        if bound and (o["credential_source"] != "environment" or o.get("transport") != "ntlm"
+                      or not target.credential_ref or "key_file" in o or target.sudo is not False):
+            raise TrustError("transport:invalid_credential_binding", "Selected WinRM account requires an explicit NTLM environment credential without sudo")
         password = None
         if target.credential_ref:
             from cyberthunder.transport.ssh import credential_from_env
             password = credential_from_env(target.credential_ref) if target.credential_ref else None
+        if bound and not password:
+            raise TrustError("transport:credential_unavailable", "Selected WinRM environment credential is unavailable")
         mode = resolve_security_mode(settings)
         auth = o.get("transport", "kerberos" if mode == "fleet" else "ntlm")
         if isinstance(auth, str):
