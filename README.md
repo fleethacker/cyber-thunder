@@ -253,6 +253,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/SEPARATION_OF_DUTIES.md](docs/SEPARATION_OF_DUTIES.md) | independent human approvals and CAT I quorum |
 | [docs/IDENTITY_PROVENANCE.md](docs/IDENTITY_PROVENANCE.md) | verified/legacy review attribution and saved report access |
 | [docs/PACKAGE_IDENTITY.md](docs/PACKAGE_IDENTITY.md) | native/container identity inputs, package preflight, one-worker sessions and acceptance limits |
+| [docs/CONTAINER_BUILD.md](docs/CONTAINER_BUILD.md) | portable container build, verified tool installation and unprivileged offline smoke limits |
 | [docs/COVERAGE.md](docs/COVERAGE.md) | implemented checks, benchmark denominators, executable fixes and runbooks |
 | [docs/CONFIDENCE.md](docs/CONFIDENCE.md) | evidence-strength grades, provenance, freshness and limits |
 | [docs/FINDING_REVIEW.md](docs/FINDING_REVIEW.md) | reasoned reviews, false positives, expiry, history and remediation guards |

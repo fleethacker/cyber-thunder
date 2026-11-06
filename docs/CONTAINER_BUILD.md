@@ -2,16 +2,18 @@
 
 The root `Dockerfile` builds the UI and installs Trivy and kubectl for the
 unprivileged application image. Its kubectl install uses an explicitly copied
-standard-library Python script and an ordinary `RUN` command. This works with
-the legacy Docker builder and BuildKit; no Dockerfile heredoc or buildx install
-is required. A legacy build previously reported success while silently skipping
+standard-library Python script and an ordinary `RUN` command. The legacy Docker
+builder has been exercised; BuildKit execution remains untested locally. No
+Dockerfile heredoc or buildx install is required. A legacy build previously reported success while silently skipping
 the heredoc body, leaving kubectl absent.
 
 The default kubectl version remains `v1.36.4`. `KUBECTL_VERSION` accepts stable
 `v1.MINOR.PATCH` release names (no prereleases, URLs, leading zeros or path
 components). Missing upstream releases fail the build. Explicit `TARGETARCH`
 accepts only `amd64` or `arm64`. BuildKit supplies it automatically after the
-stage's `ARG TARGETARCH` declaration. When the legacy builder leaves it empty,
+stage's `ARG TARGETARCH` declaration, as described in the
+[Dockerfile reference](https://docs.docker.com/reference/dockerfile/#automatic-platform-args-in-the-global-scope).
+When the legacy builder leaves it empty,
 the installer maps the running Linux machine's `x86_64`/`amd64` or
 `aarch64`/`arm64` architecture. Other native platforms and architectures fail.
 Cross builds require a matching target image and working execution/emulation;
