@@ -50,11 +50,22 @@ def expected_skips(platform: str) -> dict[str, str]:
         for backend in BACKENDS
     }
     if platform == "win32":
+        allowed.update({
+            "tests/security/test_access.py::test_fifo_is_rejected_without_opening_or_waiting":
+                "requires POSIX FIFO",
+            "tests/security/test_oidc.py::test_posix_private_permissions":
+                "POSIX ownership/mode enforcement; Windows requires deployment ACLs",
+            "tests/security/test_oidc.py::test_symlink_cache_and_directory_rejected":
+                "POSIX symlinks; Windows reparse handling has a separate fixture",
+        })
         for replacement in ("existing_fifo", "fifo_at_open", "symlink_at_open"):
             allowed[f"tests/engine/test_inventory_guard.py::test_fifo_or_link_replacement_refuses_promptly_and_releases_target_lock[{replacement}]"] = (
                 "POSIX FIFO and O_NOFOLLOW semantics"
             )
     if platform == "linux":
+        allowed["tests/security/test_oidc.py::test_windows_junction_cache_path_rejected"] = (
+            "Windows directory junction fixture"
+        )
         allowed.update({
             f"tests/test_dev.py::DevelopmentModeTests::{name}": UDS_REASON
             for name in UDS_TESTS

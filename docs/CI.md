@@ -61,6 +61,10 @@ The reviewed allowances at the initial baseline are:
 | --- | --- | ---: | --- |
 | Both | `tests/explain/test_service.py::test_real_local_model[json]` and `[sqlite]` | 2 | `set CT_TEST_LLM=1 to test against a local model server` |
 | Windows | `tests/engine/test_inventory_guard.py::test_fifo_or_link_replacement_refuses_promptly_and_releases_target_lock` for `existing_fifo`, `fifo_at_open`, and `symlink_at_open` | 3 | `POSIX FIFO and O_NOFOLLOW semantics` |
+| Windows | `tests/security/test_oidc.py::test_posix_private_permissions` | 1 | `POSIX ownership/mode enforcement; Windows requires deployment ACLs` |
+| Windows | `tests/security/test_access.py::test_fifo_is_rejected_without_opening_or_waiting` | 1 | `requires POSIX FIFO` |
+| Windows | `tests/security/test_oidc.py::test_symlink_cache_and_directory_rejected` | 1 | `POSIX symlinks; Windows reparse handling has a separate fixture` |
+| Linux | `tests/security/test_oidc.py::test_windows_junction_cache_path_rejected` | 1 | `Windows directory junction fixture` |
 | Linux | `tests/report/test_reports.py::test_commander_reproduce_command_runs_in_cmd` | 1 | `runs the command through cmd.exe` |
 | Linux | `tests/test_approval_io.py::test_deny_survives_windows_delete_handle[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |
 | Linux | `tests/state/test_file_read_sharing.py::test_deny_response_survives_windows_inventory_sharing[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |

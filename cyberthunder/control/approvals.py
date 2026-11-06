@@ -78,6 +78,7 @@ class Proposal:
     state: ProposalState = ProposalState.PROPOSED
     created_at: str = field(default_factory=utcnow)
     decided_by: str | None = None
+    decided_principal: dict | None = None  # verified account evidence; legacy decisions retain None
     decided_at: str | None = None
     decision_note: str | None = None
     before_state_ref: str | None = None   # snapshot/backup handle captured before apply
@@ -109,6 +110,7 @@ class ApprovalGate:
         self.ks = killswitch
         self.policy_path = Path(policy_path) if policy_path else None
         self.assessment_validator = None
+        self.authorizer = None
         self._items: dict[str, Proposal] = {}
         self._sig: tuple[int, int] | None = None
         self._tlock = threading.RLock()
@@ -189,6 +191,8 @@ class ApprovalGate:
         `one_live_per_finding`, a proposal that is still live for the same finding is returned instead of a
         second one being created; the check runs under the cross-process lock, so two workers proposing for
         the same finding at the same moment end up with one proposal between them."""
+        if self.authorizer:
+            self.authorizer("propose", target=kwargs.get("host"))
         with self._locked():
             if one_live_per_finding and kwargs.get("finding_id"):
                 live = [p for p in self._items.values()
@@ -197,6 +201,7 @@ class ApprovalGate:
                     return live[-1]
             p = Proposal(**kwargs)
             entry = {"ts": p.created_at, "state": p.state.value, "actor": actor, "note": None}
+            _add_principal(entry)
             if meta:
                 entry["meta"] = dict(meta)
             p.history.append(entry)
@@ -220,6 +225,8 @@ class ApprovalGate:
         if new not in HUMAN_ONLY:
             return actor
         if is_policy_actor(actor):
+            if self.authorizer:
+                raise PermissionError("standing approval requires a verifiable policy signature")
             if new is not ProposalState.APPROVED:
                 raise PermissionError("a standing policy may approve, never deny")
             if not policy_checked:
@@ -229,11 +236,29 @@ class ApprovalGate:
             return actor
         return require_human(actor)
 
+    def _authorize(self, action: str, actor: str, proposal: Proposal) -> None:
+        if self.authorizer:
+            self.authorizer(action, actor=actor, target=proposal.host)
+
     def _move(self, pid: str, new: ProposalState, actor: str, note: str | None = None, *,
               _policy_checked: bool = False, **details) -> Proposal:
         actor = normalize_actor(actor) or actor
         with self._locked():
             p = self._items[pid]          # state as it is on disk right now
+            if new in HUMAN_ONLY or new == ProposalState.CANCELLED:
+                self._authorize({ProposalState.APPROVED: "approve", ProposalState.DENIED: "deny",
+                                 ProposalState.CANCELLED: "cancel"}[new], actor, p)
+            elif self.authorizer:
+                from cyberthunder.control.principal import current_operation
+                action = {ProposalState.APPLYING: "apply", ProposalState.APPLIED: "apply",
+                          ProposalState.VERIFIED: "verify", ProposalState.ROLLED_BACK: "rollback",
+                          ProposalState.FAILED: "apply"}[new]
+                # Engine completion records may use its service label. The initiating
+                # verified account must still hold the operation's target permission.
+                if new != ProposalState.APPLYING and current_operation() in {"apply", "verify", "rollback"}:
+                    action = current_operation()
+                self.authorizer(action, target=p.host,
+                                actor=actor if new == ProposalState.APPLYING or not is_machine(actor) else None)
             if new not in TRANSITIONS[p.state]:
                 self.audit.append(f"proposal.{new.value}", actor, {"from": p.state.value, "note": note},
                                   subject=pid, outcome="rejected")
@@ -254,9 +279,14 @@ class ApprovalGate:
             q.state = new
             if new in HUMAN_ONLY:
                 q.decided_by, q.decided_at, q.decision_note = actor, utcnow(), note
+                evidence = {}
+                _add_principal(evidence)
+                q.decided_principal = evidence.get("principal")
             for k, v in details.items():
                 setattr(q, k, v)
-            q.history.append({"ts": utcnow(), "state": new.value, "actor": actor, "note": note})
+            entry = {"ts": utcnow(), "state": new.value, "actor": actor, "note": note}
+            _add_principal(entry)
+            q.history.append(entry)
             self._save([q if x.id == pid else x for x in self._items.values()])
             _copy_into(p, q)
             return p
@@ -266,6 +296,7 @@ class ApprovalGate:
         actor = normalize_actor(actor) or actor
         with self._locked():
             p = self._items[pid]
+            self._authorize("approve", actor, p)
             try:
                 self._check_actor(ProposalState.APPROVED, actor, False)
                 if assessment_id and is_policy_actor(actor):
@@ -296,6 +327,7 @@ class ApprovalGate:
             raise ValueError("an assessment receipt is required to review an approved change")
         with self._locked():
             p = self._items[pid]
+            self._authorize("review", actor, p)
             if p.state != ProposalState.APPROVED:
                 raise IllegalTransition("only an approved, not-yet-started proposal can be re-reviewed")
             if self.assessment_validator is None:
@@ -304,8 +336,10 @@ class ApprovalGate:
             self.audit.append("proposal.assessment_reviewed", actor, {"assessment": assessment}, subject=pid)
             q = Proposal.from_dict(p.to_dict())
             q.assessment = assessment
-            q.history.append({"ts": utcnow(), "state": q.state.value, "actor": actor,
-                              "note": "Dependency assessment reviewed", "assessment_id": assessment_id})
+            entry = {"ts": utcnow(), "state": q.state.value, "actor": actor,
+                     "note": "Dependency assessment reviewed", "assessment_id": assessment_id}
+            _add_principal(entry)
+            q.history.append(entry)
             self._save([q if x.id == pid else x for x in self._items.values()])
             _copy_into(p, q)
             return p
@@ -345,6 +379,13 @@ class ApprovalGate:
 
     def rolled_back(self, pid: str, actor: str = "agent", note: str | None = None) -> Proposal:
         return self._move(pid, ProposalState.ROLLED_BACK, actor, note)
+
+
+def _add_principal(entry: dict) -> None:
+    from cyberthunder.control.principal import current_principal
+    principal = current_principal()
+    if principal is not None and principal.verified:
+        entry["principal"] = principal.evidence()
 
 
 def _copy_into(dst: Proposal, src: Proposal) -> None:

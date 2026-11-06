@@ -32,6 +32,7 @@ class KillSwitch:
         self.state_file = self.dir / "killswitch.json"
         self.sentinel = self.dir / "KILL"
         self.audit = audit
+        self.authorizer = None
 
     def status(self) -> dict:
         st: dict = {"engaged": False, "by": None, "reason": None, "at": None, "via": None}
@@ -68,6 +69,10 @@ class KillSwitch:
         return data
 
     def release(self, actor: str, reason: str = "") -> dict:
+        if self.authorizer:
+            self.authorizer("kill.release", actor=actor)
+            if not reason.strip():
+                raise ValueError("a reason is required to release the kill switch")
         try:
             actor = require_human(actor)
         except PermissionError as e:

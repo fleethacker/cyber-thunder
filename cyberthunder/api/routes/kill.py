@@ -20,6 +20,10 @@ def kill_status(ctx=CtxDep) -> dict:
 
 
 def engage_actor(request: Request, x_actor: str | None = Header(default=None)) -> str:
+    from cyberthunder.control.principal import current_principal
+    principal = current_principal()
+    if principal is not None and principal.verified:
+        return principal.actor
     if not (x_actor or "").strip():
         host = request.client.host if request.client else "unknown address"
         return f"unidentified operator ({host})"

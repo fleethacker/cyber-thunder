@@ -44,8 +44,12 @@ class Target:
     last_scan: str | None = None
     notes: str = ""
     added_at: str = field(default_factory=utcnow)
+    environment: str = "default"
 
     def __post_init__(self) -> None:
+        if (not isinstance(self.environment, str) or not self.environment or len(self.environment) > 128
+                or self.environment != self.environment.strip() or any(ord(c) < 33 for c in self.environment)):
+            raise ValueError("environment must be a non-empty name without whitespace (128 characters at most)")
         if self.asset_type not in ASSET_TYPES:
             raise ValueError(f"unknown asset_type {self.asset_type!r}; expected one of {ASSET_TYPES}")
         if self.transport not in TRANSPORTS:

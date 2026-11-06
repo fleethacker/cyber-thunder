@@ -40,7 +40,8 @@ git config core.hooksPath .githooks
   [STATE.md](STATE.md)); `CT_STATE_BACKENDS=json python -m pytest -q` runs one backend while iterating.
 - Fixture-first testing. No network and no live hosts in tests. Fake transports with `FixtureTransport` or a
   simulated transport; capture real sessions with `RecordingTransport` on the range and commit the fixture.
-- Standard library first. Runtime dependencies are exactly those in `requirements.txt`; do not add any.
+- Standard library first. Runtime dependencies are declared in both `requirements.txt` and `pyproject.toml`.
+  Add a dependency only for a concrete requirement, with review, offline wheel support and tests.
   Test dependencies are in `requirements-dev.txt`.
 - Paths work on Windows and Linux: `pathlib`, `tempfile` in tests, `encoding="utf-8"`, `newline=""` for CSV.
 - Point `CT_STATE_DIR` at a temp directory before running anything that writes state.

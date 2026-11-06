@@ -41,7 +41,7 @@ from cyberthunder.state.json_files import JsonFilesBackend, read_json_file, writ
 log = logging.getLogger(__name__)
 
 # Runs that re-evaluate only part of the picture; they overlay the latest full scan instead of replacing it.
-PARTIAL_TRIGGERS = {"bulletin", "stig_delta", "verify", "cluster_vulnerabilities"}
+PARTIAL_TRIGGERS = {"bulletin", "stig_delta", "verify", "cluster_vulnerabilities", "transport_security"}
 
 
 def is_partial_run(run: dict) -> bool:

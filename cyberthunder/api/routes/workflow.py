@@ -5,6 +5,7 @@ targets that belong to it. Scan, explain, and propose stay read-only aside from 
 Apply and rollback only move fixes a person has already approved, and both stop when the kill switch is engaged.
 """
 from __future__ import annotations
+from cyberthunder.api.access import require_resource, require_all, visible
 
 from pathlib import Path
 
@@ -207,7 +208,7 @@ def _findings_from_results(ctx, results: dict) -> list[Finding]:
     found = ctx.store.load_findings(scan_id) if scan_id else ctx.store.load_findings()
     if target:
         found = [f for f in found if f.host == target]
-    return [f for f in found if f.is_open]
+    return [f for f in found if f.is_open and visible(ctx, f.host)]
 
 
 @router.post("/generate/explain")
@@ -217,6 +218,7 @@ def generate_explain(body: GenerateBody | None = None, ctx=CtxDep, actor: str = 
     if not body.results:
         raise ValueError("results are required")
     findings = _findings_from_results(ctx, body.results)
+    require_all(ctx, [f.host for f in findings], "explain")
     chosen, left = findings[:EXPLAIN_CAP], max(len(findings) - EXPLAIN_CAP, 0)
     explanations = []
     with feature("explain"):
@@ -231,6 +233,7 @@ def generate_propose(body: GenerateBody | None = None, ctx=CtxDep, actor: str = 
     if not body.results:
         raise ValueError("results are required")
     findings = _findings_from_results(ctx, body.results)[:PROPOSE_CAP]
+    require_all(ctx, [f.host for f in findings], "propose")
     proposals, skipped = [], []
     with feature("remediation engine"):
         for finding in findings:
@@ -298,6 +301,7 @@ def apply_checklists(body: ApplyChecklistsBody | None = None, ctx=CtxDep, actor:
     targets = _ids(body.targets, "targets")
     checklists = _ids(body.checklists, "checklists")
     for tid in targets:
+        require_resource(ctx, tid, "apply")
         _in_scope(ctx, tid)
     ctx.killswitch.guard("workflow.apply", actor)
     wanted = set(checklists)
@@ -336,6 +340,7 @@ def rollback_versions(body: RollbackBody | None = None, ctx=CtxDep, actor: str =
     version_list = _version_ids(body)
     versions = set(version_list)
     for tid in targets:
+        require_resource(ctx, tid, "rollback")
         _in_scope(ctx, tid)
     ctx.killswitch.guard("workflow.rollback", actor)
     results = {}
@@ -420,4 +425,5 @@ def post_target_report(body: TargetReportBody | None = None, ctx=CtxDep, actor: 
     target = (body.target or "").strip()
     if not target:
         raise ValueError("target is required")
+    require_resource(ctx, target, "export")
     return _build_report(ctx, target, actor)

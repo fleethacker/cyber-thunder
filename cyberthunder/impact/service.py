@@ -5,6 +5,7 @@ freshness(receipt), readiness(proposal_id, assessment_id=None). Reads never coll
 call a model, write state or append audit records. A fresh receipt is advisory only.
 """
 from __future__ import annotations
+from cyberthunder.control.principal import authorize, operation
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -122,6 +123,7 @@ class ImpactService:
 
     def _guard(self, proposal_id, actor, expected=None):
         require_human(actor)
+        authorize(self.ctx, "plan", actor=actor, target=self.ctx.gate.get(proposal_id).host)
         # guard() includes the entire operator-provided kill reason in its audit. Use
         # the same status check here and emit only our fixed error code in assess().
         if self.ctx.killswitch.is_engaged():
@@ -207,6 +209,7 @@ class ImpactService:
             # Reuse the bounded prompt; rejected output never enters a retry.
         return None, status
 
+    @operation("plan")
     def assess(self, proposal_id, *, actor, live=True):
         """Collect, assess and publish one immutable UUID receipt; never change a proposal."""
         actor = require_human(actor)

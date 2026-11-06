@@ -56,13 +56,19 @@ def _sse(rec: dict) -> str:
 
 async def audit_events(path: Path, after_seq: int, is_disconnected: Callable[[], Awaitable[bool]], *,
                        poll_s: float = POLL_S, keepalive_s: float = KEEPALIVE_S,
-                       max_seconds: float | None = None) -> AsyncIterator[str]:
+                       max_seconds: float | None = None, authorize=None) -> AsyncIterator[str]:
     """Replay records with seq > after_seq, then tail the file. Only whole lines are consumed, so a record
     being written while we read is picked up on the next poll."""
     offset = 0
     started = last_sent = time.monotonic()
     yield "retry: 2000\n\n"
     while True:
+        if authorize is not None:
+            try:
+                authorize()
+            except PermissionError:
+                yield 'event: session-expired\ndata: {"detail":"authorization no longer valid"}\n\n'
+                return
         if path.exists():
             size = path.stat().st_size
             if size < offset:          # file replaced (should never happen to an append-only log): start over
@@ -75,6 +81,11 @@ async def audit_events(path: Path, after_seq: int, is_disconnected: Callable[[],
                 if end >= 0:
                     offset += end + 1
                     for raw in data[: end + 1].splitlines():
+                        if authorize is not None:
+                            try:
+                                authorize()
+                            except PermissionError:
+                                return
                         raw = raw.strip()
                         if not raw:
                             continue
@@ -109,6 +120,8 @@ async def stream_audit(request: Request, ctx=CtxDep, after_seq: int | None = Que
             start = int(last_event_id) if last_event_id else 0
         except ValueError:
             start = 0
-    gen = audit_events(Path(ctx.audit.path), start, request.is_disconnected, max_seconds=max_seconds)
+    from cyberthunder.control.principal import authorize
+    gen = audit_events(Path(ctx.audit.path), start, request.is_disconnected, max_seconds=max_seconds,
+                       authorize=lambda: authorize(ctx, "audit"))
     return StreamingResponse(gen, media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

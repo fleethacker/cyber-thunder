@@ -10,11 +10,15 @@ from . import k3s
 
 
 def guard(target):
+    from cyberthunder.control.principal import current_principal
     from cyberthunder.config import Settings
     from cyberthunder.control.killswitch import KillSwitch
     from cyberthunder.inventory.targets import Inventory
 
     settings = Settings.from_env()
+    principal = current_principal()
+    if principal is not None and principal.verified:
+        raise ValueError("local Docker collection requires delegated runtime access; use an authorized node target")
     KillSwitch(settings.state_dir).guard("scan.k3d.read")
     current = Inventory.load(Path(settings.state_dir) / "targets.yaml").assert_in_scope(target.id)
     if current.to_dict() != target.to_dict() or not target.in_scope or target.transport != "kubeconfig":

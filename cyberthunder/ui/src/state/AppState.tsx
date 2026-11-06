@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, errorText, getActor, setActor as persistActor, subscribeAudit, type AuditStreamState } from '../api/client';
 import type { AuditRecord, AuditVerify, Status } from '../api/types';
+import { useIdentity } from './Identity';
 
 type Listener = (r: AuditRecord) => void;
 
@@ -23,10 +24,12 @@ const Ctx = createContext<AppStateValue | null>(null);
 const RECENT_MAX = 1000;
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
+  const { identity, can } = useIdentity();
   const [status, setStatus] = useState<Status | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [verify, setVerify] = useState<AuditVerify | null>(null);
-  const [actor, setActorState] = useState<string>(getActor());
+  const [localActor, setActorState] = useState<string>(getActor());
+  const actor = identity.mode === 'dev' ? localActor : identity.principal?.actor ?? '';
   const [stream, setStream] = useState<AuditStreamState>('connecting');
   const [recent, setRecent] = useState<AuditRecord[]>([]);
   const listeners = useRef(new Set<Listener>());
@@ -42,12 +45,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loadVerify = useCallback(async () => {
+    if (!can('audit')) return;
     try {
       setVerify(await api.auditVerify());
     } catch {
       /* the badge shows "unknown" */
     }
-  }, []);
+  }, [identity.permissions.join(','), identity.mode]);
 
   const refresh = useCallback(async () => {
     await Promise.all([loadStatus(), loadVerify()]);
@@ -62,6 +66,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   // single audit stream, started after the current head so we only see new records
   useEffect(() => {
+    if (!can('audit')) { setStream('closed'); return; }
     let stop: (() => void) | undefined;
     let cancelled = false;
     (async () => {
@@ -69,7 +74,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       try {
         after = (await api.auditVerify()).count;
       } catch {
-        after = 0;
+        setStream('closed');
+        return;
       }
       if (cancelled) return;
       stop = subscribeAudit(
@@ -94,7 +100,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       stop?.();
     };
-  }, [loadVerify, loadStatus]);
+  }, [loadVerify, loadStatus, identity.permissions.join(','), identity.mode]);
 
   useEffect(() => {
     const h = (e: Event) => setActorState((e as CustomEvent<string>).detail);
@@ -103,9 +109,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setActor = useCallback((name: string) => {
+    if (identity.mode !== 'dev') return;
     persistActor(name);
     setActorState(name.trim());
-  }, []);
+  }, [identity.mode]);
 
   const onAudit = useCallback((fn: Listener) => {
     listeners.current.add(fn);

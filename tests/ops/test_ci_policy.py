@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 30 and len(windows) == 5
+    assert len(linux) == 31 and len(windows) == 8
     assert sum(reason == UDS_REASON for reason in linux.values()) == len(UDS_TESTS) == 19
     assert sum(reason == SHARING_REASON for reason in linux.values()) == 8
     policy = RegressionPolicy(ROOT, "linux")

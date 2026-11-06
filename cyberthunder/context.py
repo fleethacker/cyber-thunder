@@ -29,6 +29,11 @@ class AppContext:
         self.killswitch = KillSwitch(self.store.root, self.audit)
         self.gate = ApprovalGate(self.store.proposals, self.audit, self.killswitch, policy_path=self.store.policy)
         self.inventory = Inventory.load(self.store.targets)
+        if self.settings.auth_mode != "dev":
+            from cyberthunder.control.access import AccessPolicy
+            self.access = AccessPolicy(self.store.root / "auth" / "access.json")
+            self.gate.authorizer = self.authorize
+            self.killswitch.authorizer = self.authorize
         from cyberthunder.adapters import load_all
         self.adapters = load_all()
         self.library = FixLibrary.from_adapters(self.adapters)
@@ -60,13 +65,103 @@ class AppContext:
             return None
 
     # -- helpers ---------------------------------------------------------------------
+    def authorize(self, action: str, *, actor: str | None = None, target=None):
+        if self.settings.auth_mode == "dev":
+            return None
+        from cyberthunder.control.principal import current_principal, require_current
+        from cyberthunder.inventory.host import persisted_target
+        principal = current_principal()
+        try:
+            principal = require_current(action, actor)
+            if isinstance(target, str):
+                resource = persisted_target(self.inventory, target,
+                    require_scope=action in {"scan", "discover", "plan", "apply", "rollback", "verify"})
+            elif target is not None and action != "admin":
+                resource = persisted_target(self.inventory, target.id,
+                    require_scope=action in {"scan", "discover", "plan", "apply", "rollback", "verify"})
+            else:
+                resource = target
+            self.access.require(principal, action, resource)
+            return principal
+        except (PermissionError, KeyError):
+            self.audit.append("authorization.denied", principal.actor if principal else "unverified",
+                {"action": action, "target": getattr(target, "id", target), "reason": "permission denied"},
+                outcome="rejected")
+            raise PermissionError("this account is not authorized for the requested operation and resource") from None
+
+    def may_access(self, target, action: str = "read") -> bool:
+        if self.settings.auth_mode == "dev":
+            return True
+        from cyberthunder.control.principal import require_current
+        from cyberthunder.inventory.host import persisted_target
+        try:
+            principal = require_current(action)
+            resource = persisted_target(self.inventory, target if isinstance(target, str) else target.id)
+            return self.access.allows(principal, action, resource)
+        except (PermissionError, KeyError):
+            return False
+
     def transport_for(self, target: Target) -> Transport:
-        return make_transport(target, self.settings)
+        if self.settings.security_mode == "fleet" and "cpe_alias" in (target.options or {}):
+            raise PermissionError("CPE aliases are limited to explicitly configured range validation")
+        if self.settings.auth_mode != "dev":
+            from cyberthunder.control.principal import current_operation, current_principal
+            from cyberthunder.inventory.host import persisted_target
+            from cyberthunder.security.credentials import bind_target
+            from cyberthunder.security.transport_guard import protect_transport
+            action = current_operation()
+            if action not in {"scan", "discover", "plan", "apply", "rollback", "verify"}:
+                raise PermissionError("target access requires an explicit authorized operation")
+            target = persisted_target(self.inventory, target.id, require_scope=True)
+            principal = self.authorize(action, target=target)
+            binding = self.access.credential(principal, action, target)
+            selected = bind_target(target, binding)
+            evidence = binding.evidence()
+            configuration = {k: v for k, v in target.to_dict().items() if k not in {"last_scan", "notes", "added_at"}}
+
+            def guard():
+                if current_principal() != principal:
+                    raise PermissionError("target connection belongs to another authenticated session")
+                current = persisted_target(self.inventory, target.id, require_scope=True)
+                self.authorize(action, target=current)
+                self.killswitch.guard("target.access", principal.actor)
+                now = {k: v for k, v in current.to_dict().items() if k not in {"last_scan", "notes", "added_at"}}
+                if now != configuration or self.access.credential(principal, action, current).evidence() != evidence:
+                    raise PermissionError("target or account authorization changed; reconnect using current permissions")
+
+            guard()
+            # Kubeconfig consumers require validation of embedded authentication providers as well.
+            if selected.transport == "kubeconfig":
+                raise PermissionError("account-specific Kubernetes configuration validation is required")
+            self.audit.append("credential.use", principal.actor, evidence, subject=target.id)
+            transport = make_transport(selected, self.settings, guard=guard,
+                on_security_event=lambda event: self.record_transport_event(target, event))
+            return protect_transport(transport, guard, sudo_allowed=binding.sudo)
+        return make_transport(target, self.settings,
+                              on_security_event=lambda event: self.record_transport_event(target, event))
+
+    def record_transport_event(self, target: Target, event) -> None:
+        from cyberthunder.control.principal import current_principal
+        from cyberthunder.findings.schema import Finding, Severity, Status, utcnow
+        principal = current_principal()
+        self.audit.append("transport.security", principal.actor if principal else "transport",
+                          {"target": target.id, **event.to_dict()}, subject=target.id,
+                          outcome="blocked" if event.severity == "high" else "warning")
+        finding = Finding(host=target.id, asset_type=target.asset_type, source="transport", rule_id=event.code,
+                          title=event.message, severity=Severity.parse(event.severity), status=Status.OPEN,
+                          evidence="Transport identity or connection policy: " + event.message)
+        sid = self.store.new_id("trust-")
+        self.store.save_scan_run({"id": sid, "trigger": "transport_security", "targets": [target.id],
+            "status": "done", "started_at": utcnow(), "coverage_incomplete": True})
+        self.store.save_findings(sid, [finding])
 
     def adapter_for(self, target: Target):
         return self.adapters.get(target.asset_type)
 
     def save_policy(self, policy: AutomationPolicy, actor: str) -> AutomationPolicy:
+        self.authorize("policy", actor=actor)
+        if self.settings.auth_mode != "dev" and policy.enabled:
+            raise PermissionError("standing approval requires a verifiable policy signature before it can be enabled")
         try:
             actor = require_human(actor)
             why = signer_problem(policy)
@@ -84,6 +179,7 @@ class AppContext:
         return policy
 
     def save_inventory(self, actor: str, action: str = "inventory.update", details: dict | None = None) -> None:
+        self.authorize("admin", actor=actor)
         self.inventory.save()
         self.audit.append(action, actor, details or {"targets": [t.id for t in self.inventory.all()]})
 

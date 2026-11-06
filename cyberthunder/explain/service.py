@@ -11,6 +11,7 @@ Backends (settings.llm_backend): "ollama" (POST {llm_url}/api/generate, format=j
 "openai" (POST {llm_url}/v1/chat/completions, any OpenAI-compatible local server), "template".
 """
 from __future__ import annotations
+from cyberthunder.control.principal import authorize
 
 import hashlib
 import json
@@ -147,6 +148,7 @@ class ExplainService:
 
     def explain(self, finding: Finding, *, force: bool = False) -> Explanation:
         """Return cached explanation unless force; otherwise call the backend, validate, cache, audit 'explain.generate'."""
+        authorize(self.ctx, "explain", target=finding.host)
         fp = finding_fingerprint(finding)
         if not force:
             cached = self.get(finding.id)
@@ -192,6 +194,7 @@ class ExplainService:
                               validated=attempts == 0, dropped_citations=dropped, fallback=True,
                               latency_s=latency, attempts=max(attempts, 1))
         exp.fingerprint = fp
+        authorize(self.ctx, "explain", target=finding.host)
         self.ctx.store.save_explanation(finding.id, exp.to_dict())
         details = {"finding_id": finding.id, "backend": exp.backend, "requested_backend": backend.name,
                    "model": model, "latency_s": latency, "validated": exp.validated, "fallback": exp.fallback,
@@ -237,6 +240,8 @@ class ExplainService:
     def precompute(self, findings: Iterable[Finding], *, background: bool = True) -> int:
         """Queue explanations for findings without one (open findings first, by severity). Returns count queued."""
         todo = self.plan_precompute(findings)
+        for finding in todo:
+            authorize(self.ctx, "explain", target=finding.host)
         if not background:
             for f in todo:
                 try:

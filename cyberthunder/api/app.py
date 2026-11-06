@@ -6,7 +6,7 @@ import importlib
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.responses import HTMLResponse
 
 from cyberthunder import PRODUCT, __version__
@@ -48,7 +48,11 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
                 log.debug("route module not present: %s", name)
                 continue
             raise
-        app.include_router(mod.router, prefix=API_PREFIX)
+        from cyberthunder.api.access import authorize_request
+        app.include_router(mod.router, prefix=API_PREFIX, dependencies=[Depends(authorize_request)])
+
+    from cyberthunder.api.auth import install_auth
+    install_auth(app, app.state.ctx)
 
     dist = Path(app.state.ctx.settings.ui_dist)
     if (dist / "index.html").exists():
@@ -64,4 +68,8 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
 def serve(host: str | None = None, port: int | None = None, ctx: AppContext | None = None) -> None:
     import uvicorn
     ctx = ctx or AppContext()
-    uvicorn.run(create_app(ctx), host=host or ctx.settings.host, port=port or ctx.settings.port, log_level="info")
+    from cyberthunder.api.auth import validate_bind
+    bind = host or ctx.settings.host
+    validate_bind(ctx.settings, bind)
+    uvicorn.run(create_app(ctx), host=bind, port=port or ctx.settings.port, log_level="info",
+                ssl_certfile=ctx.settings.tls_cert, ssl_keyfile=ctx.settings.tls_key, proxy_headers=False)

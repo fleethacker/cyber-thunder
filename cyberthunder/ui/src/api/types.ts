@@ -214,6 +214,7 @@ export interface Proposal {
   state: ProposalState;
   created_at: string;
   decided_by: string | null;
+  decided_principal?: { iss: string; sub: string; name: string; verified: boolean; roles: string[] } | null;
   decided_at: string | null;
   decision_note: string | null;
   before_state_ref: string | null;
@@ -295,6 +296,7 @@ export interface BulkResult { results: BulkItem[] }
 export interface Target {
   id: string;
   name: string;
+  environment?: string;
   asset_type: AssetType;
   transport: string;
   address: string | null;

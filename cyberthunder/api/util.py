@@ -40,6 +40,10 @@ MACHINE_PREFIXES = tuple(f"{a}:" for a in sorted(AGENT_ACTORS)) + ("policy:",)
 def require_actor(x_actor: str | None = Header(default=None)) -> str:
     """Mutating requests must name the human acting. Machine identities are refused here so they can never
     reach an approval, denial, kill switch or policy edge through the API."""
+    from cyberthunder.control.principal import current_principal
+    principal = current_principal()
+    if principal is not None and principal.verified:
+        return principal.actor
     if not (x_actor or "").strip():
         raise HTTPException(400, "X-Actor header is required: type your name in Settings before making changes")
     from cyberthunder.control.identity import require_human
@@ -109,7 +113,9 @@ def run_background(fn: Callable[[], Any], name: str, *, early_wait: float = 0.2)
             box["error"] = e
             log.warning("background task %s failed: %s", name, e)
 
-    t = threading.Thread(target=target, name=name, daemon=True)
+    from contextvars import copy_context
+    inherited = copy_context()
+    t = threading.Thread(target=inherited.run, args=(target,), name=name, daemon=True)
     with _threads_lock:
         _threads[:] = [x for x in _threads if x.is_alive()]
         _threads.append(t)
@@ -268,7 +274,10 @@ def proposal_plus(ctx: "AppContext", p: Proposal) -> dict:
 
 def get_proposal(ctx: "AppContext", pid: str) -> Proposal:
     try:
-        return ctx.gate.get(pid)
+        p = ctx.gate.get(pid)
+        from cyberthunder.api.access import require_resource
+        require_resource(ctx, p.host, "read")
+        return p
     except KeyError:
         raise KeyError(f"unknown proposal {pid!r}") from None
 
@@ -277,6 +286,8 @@ def get_finding(ctx: "AppContext", fid: str, scan_id: str | None = None) -> Find
     f = ctx.store.get_finding(fid, scan_id)
     if f is None:
         raise KeyError(f"unknown finding {fid!r}")
+    from cyberthunder.api.access import require_resource
+    require_resource(ctx, f.host, "read")
     return f
 
 
@@ -433,6 +444,8 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
     sid = scan_id or ctx.store.latest_scan_id()
     # The default view includes partial overlays; sid remains its baseline metadata anchor.
     all_f = ctx.store.load_findings(scan_id) if scan_id else ctx.store.load_findings()
+    from cyberthunder.api.access import visible
+    all_f = [f for f in all_f if visible(ctx, f.host)]
     # Filters and the summary count a verified fix as closed, so the open totals move when a fix lands.
     lifecycle = CurrentFindings.for_context(ctx)
     scanned = {f.id: f for f in all_f}

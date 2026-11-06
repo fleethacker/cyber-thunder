@@ -8,6 +8,8 @@ and marks the targets it has not reached 'stopped', and nothing is proposed afte
 ScanRun lives at store.scans/<id>/run.json; findings at findings.json; raw artifacts under raw/<target_id>/.
 """
 from __future__ import annotations
+from contextvars import copy_context
+from cyberthunder.control.principal import authorize, operation
 
 import logging
 import threading
@@ -85,6 +87,7 @@ class Scanner:
         self._lock = threading.Lock()
 
     # -- lifecycle ---------------------------------------------------------------------
+    @operation("scan")
     def start(self, target_ids: Iterable[str] | None = None, *, modules: Iterable[str] | None = None,
               rule_filter: list[str] | None = None, trigger: str = "manual", requested_by: str = "operator",
               background: bool = True) -> ScanRun:
@@ -93,8 +96,14 @@ class Scanner:
         self.ctx.killswitch.guard("scan.start", requested_by)
         if target_ids is None:
             ids = [t.id for t in self.ctx.inventory.all() if t.in_scope]
+            if getattr(self.ctx.settings, "auth_mode", "dev") != "dev":
+                ids = [tid for tid in ids if self.ctx.may_access(tid, "scan")]
+                if not ids:
+                    raise PermissionError("no targets are authorized for scanning by this account")
         else:
             ids = list(dict.fromkeys(target_ids))
+        for tid in ids:
+            authorize(self.ctx, "scan", actor=requested_by, target=tid)
         run = ScanRun(id=self.ctx.store.new_id("scan-"), targets=ids,
                       modules=list(modules) if modules else list(MODULES),
                       rule_filter=list(rule_filter) if rule_filter else None,
@@ -102,7 +111,8 @@ class Scanner:
         run.results = {tid: TargetScanResult(tid) for tid in ids}
         self._save(run)
         if background:
-            th = threading.Thread(target=self._run_quietly, args=(run,), name=f"scan-{run.id}", daemon=True)
+            inherited = copy_context()
+            th = threading.Thread(target=inherited.run, args=(self._run_quietly, run), name=f"scan-{run.id}", daemon=True)
             with self._lock:
                 self._threads[run.id] = th
             th.start()
@@ -151,11 +161,14 @@ class Scanner:
                 time.sleep(0.05)
 
     # -- execution ---------------------------------------------------------------------
+    @operation("scan")
     def run(self, run: ScanRun) -> ScanRun:
         """Execute synchronously: per target -> assert_in_scope -> transport -> adapter.collect -> run_detection
         -> persist. Audit: scan.start, scan.target (per target, with counts/errors), scan.finish."""
         ctx = self.ctx
         actor = run.requested_by
+        for tid in run.targets:
+            authorize(ctx, "scan", actor=actor, target=tid)
         run.status = "running"
         self._save(run)
         ctx.audit.append("scan.start", actor, {"targets": run.targets, "modules": run.modules,
@@ -275,6 +288,7 @@ class Scanner:
 
         try:
             target = ctx.inventory.assert_in_scope(tid)
+            authorize(ctx, "scan", actor=actor, target=target)
         except ScopeViolation as e:
             res.errors.append(str(e))
             ctx.audit.append("action.blocked", actor, {"action": "scan.collect", "target": tid, "scan_id": run.id,

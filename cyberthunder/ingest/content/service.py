@@ -6,6 +6,8 @@ failure, quarantine, import and manifest is written to the audit log with the UR
 and actor, and nothing more.
 """
 from __future__ import annotations
+from contextvars import copy_context
+from cyberthunder.control.principal import authorize
 
 import copy
 import json
@@ -188,6 +190,7 @@ class ContentService:
 
     def check_updates(self, actor: str, *, source: str = "live", include_automation: bool = False,
                       include_compilation: bool = False, products: Iterable[str] = ()) -> dict:
+        authorize(self.ctx, "admin", actor=actor)
         from cyberthunder.ingest.content.library import ContentLibrary
         library = ContentLibrary(self)
         live = (source or "live").lower() == "live"
@@ -302,6 +305,7 @@ class ContentService:
 
     def pull(self, actor: str, *, filenames: list[str] | None = None, all_matching: bool = False, pace: bool = False,
              background: bool = True) -> dict:
+        authorize(self.ctx, "admin", actor=actor)
         if pace and self._link().mode != "test":
             raise ValueError("pacing requires explicit link test mode")
         self._refuse_if_down("content.fetch", actor)
@@ -332,7 +336,7 @@ class ContentService:
             return job
         if background:
             snapshot = copy.deepcopy(job)          # the thread keeps mutating its own copy
-            t = threading.Thread(target=self._run_job, args=(job, items, actor), name=f"content-{job['id']}",
+            t = threading.Thread(target=copy_context().run, args=(self._run_job, job, items, actor), name=f"content-{job['id']}",
                                  daemon=True)
             self.threads.append(t)
             t.start()
@@ -365,6 +369,7 @@ class ContentService:
             save(True)
             staging = self.store.root / "incoming"
             for f, item in zip(job["files"], items):
+                authorize(self.ctx, "admin", actor=actor)
                 if self.ctx.killswitch.is_engaged():
                     f.update(state="stopped", error="kill switch engaged")
                     job["state"] = "stopped"
@@ -393,6 +398,10 @@ class ContentService:
                     if now - polled[0] < 0.5:
                         return None
                     polled[0] = now
+                    try:
+                        authorize(self.ctx, "admin", actor=actor)
+                    except PermissionError:
+                        return "account authorization expired or was revoked"
                     if self.ctx.killswitch.is_engaged():
                         return "kill switch engaged"
                     if job["pace"] and self._link().mode != "test":
@@ -639,7 +648,7 @@ class ContentService:
                 log.warning("content check on reconnect failed: %s", e)
                 out["error"] = str(e)
 
-        t = threading.Thread(target=run, name="content-reconnect", daemon=True)
+        t = threading.Thread(target=copy_context().run, args=(run,), name="content-reconnect", daemon=True)
         self.threads.append(t)
         t.start()
         out["content_check"] = "started"

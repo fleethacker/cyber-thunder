@@ -238,7 +238,9 @@ class AccessPolicy:
             tid = environment = None
             if target is not None:
                 tid, environment = _identifier(target.id), _identifier(getattr(target, "environment", "default"))
-                if getattr(target, "in_scope", None) is not True:
+                in_scope = getattr(target, "in_scope", None)
+                if type(in_scope) is not bool or (not in_scope and action in {
+                        "scan", "discover", "propose", "approve", "plan", "apply", "rollback", "verify"}):
                     raise ValueError("target is outside inventory scope")
             matched = []
             for entry in entries:

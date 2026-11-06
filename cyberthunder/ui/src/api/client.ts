@@ -1,4 +1,4 @@
-// Typed fetch wrapper for /api/v1. Every request carries X-Actor (the name typed in Settings).
+// Typed fetch wrapper for /api/v1. Verified sessions carry an opaque cookie and CSRF protection.
 // Errors come back as ApiError with the server's {detail} verbatim.
 import type {
   AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, ContentManifest, DeltaReport,
@@ -10,11 +10,14 @@ import type {
   VulnerabilityJob, VulnerabilitySettings, VulnerabilitySettingsInput, VulnerabilityStatus,
   HostRegistration, RuntimeContext, TargetReadiness, ScopeRangeInput, ScopeRangePreview, SavedScopeRanges,
 } from './types';
+import { sessionIdentity, sessionHeaders, sessionExpired } from './identity';
 
 export const API_BASE = '/api/v1';
 const ACTOR_KEY = 'ct.actor';
 
 export function getActor(): string {
+  const session = sessionIdentity();
+  if (session && session.mode !== 'dev') return session.principal?.actor ?? '';
   try {
     return localStorage.getItem(ACTOR_KEY) ?? '';
   } catch {
@@ -23,6 +26,7 @@ export function getActor(): string {
 }
 
 export function setActor(name: string): void {
+  if (sessionIdentity()?.mode !== 'dev' && sessionIdentity() !== null) return;
   try {
     localStorage.setItem(ACTOR_KEY, name.trim());
   } catch {
@@ -77,7 +81,7 @@ async function parseError(res: Response): Promise<ApiError> {
 }
 
 export async function request<T>(method: string, path: string, opts: { query?: Query; body?: unknown; form?: FormData } = {}): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = { Accept: 'application/json', ...sessionHeaders(method) };
   const actor = getActor();
   if (actor) headers['X-Actor'] = actor;
   let body: BodyInit | undefined;
@@ -92,6 +96,7 @@ export async function request<T>(method: string, path: string, opts: { query?: Q
   } catch (e) {
     throw new ApiError(0, `API unreachable: ${(e as Error).message}`);
   }
+  if (res.status === 401) sessionExpired();
   if (!res.ok) throw await parseError(res);
   const ct = res.headers.get('content-type') ?? '';
   if (ct.includes('application/json')) return (await res.json()) as T;
@@ -106,7 +111,7 @@ const del = <T>(p: string) => request<T>('DELETE', p);
 const enc = encodeURIComponent;
 
 async function vulnerabilityZip(path: 'import' | 'export', file?: File): Promise<Response> {
-  const headers: Record<string, string> = { Accept: path === 'export' ? 'application/zip' : 'application/json' };
+  const headers: Record<string, string> = { Accept: path === 'export' ? 'application/zip' : 'application/json', ...sessionHeaders('POST') };
   const actor = getActor();
   if (actor) headers['X-Actor'] = actor;
   if (file) headers['Content-Type'] = 'application/zip';
@@ -116,6 +121,7 @@ async function vulnerabilityZip(path: 'import' | 'export', file?: File): Promise
   } catch (e) {
     throw new ApiError(0, `API unreachable: ${(e as Error).message}`);
   }
+  if (res.status === 401) sessionExpired();
   if (!res.ok) throw await parseError(res);
   return res;
 }
@@ -294,6 +300,11 @@ export function subscribeAudit(
       } catch {
         /* ignore malformed event */
       }
+    });
+    es.addEventListener('session-expired', () => {
+      stopped = true;
+      es?.close();
+      sessionExpired();
     });
     es.onerror = () => {
       es?.close();
