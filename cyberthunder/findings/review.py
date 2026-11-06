@@ -15,7 +15,8 @@ from cyberthunder.audit.chain import AuditLog
 from cyberthunder.control.identity import require_human
 from cyberthunder.control.principal import Principal, authorize, current_principal, require_current
 from cyberthunder.findings.lifecycle import (
-    LifecycleReentry, ReviewConflict, finding_key, finding_lifecycle_lock, review_coordination_lock,
+    LifecycleReentry, ReviewConflict, finding_key, finding_lifecycle_lock, finding_lifecycle_locks,
+    review_coordination_lock,
 )
 from cyberthunder.findings.schema import Finding, findings_from_doc
 
@@ -462,10 +463,10 @@ def _publish_observation_once(store, scan_id: str, document: dict, *, kind: str)
             if fingerprint != event["evidence_fingerprint"]:
                 changed.append((identity, doc, event, fingerprint))
                 changed_ids.add(identity.id)
-        # Acquire in a stable order. Contention unwinds all locks before publication retries;
-        # unchanged or unrelated observations never require the held finding's lock.
-        for finding_id in sorted(changed_ids):
-            stack.enter_context(finding_lifecycle_lock(store.root, finding_id))
+        # The shared stripe mapping bounds descriptors even for large image results.
+        # Contention unwinds stripes and coordination before retrying fresh projections;
+        # unchanged observations need no stripe, while hash collisions may contend.
+        stack.enter_context(finding_lifecycle_locks(store.root, changed_ids))
         if not changed:
             # No review ledger needs updating, but all changed observation locks remain held
             # through the write even when there are no review documents at all.

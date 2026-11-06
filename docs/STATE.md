@@ -107,6 +107,46 @@ refused unless `--force` is given, which overwrites the copies and keeps what on
 `--to json` goes the other way. After migrating, set `CT_STATE_BACKEND` for every process that uses the
 directory: the API server, the CLI, and the container environment.
 
+## Finding publication lock protocol
+
+Finding review, remediation and scan publication use 256 fixed filesystem lock
+stripes under `finding_reviews/lifecycle-v2/`. A finding maps to the integer value
+of SHA-256 of its UTF-8 ID modulo 256. Every process uses the same mapping for
+single-finding operations and batch publication. A batch acquires each affected
+stripe once, in ascending order, and retains them through publication. Thus it
+holds at most 256 lifecycle lock descriptors plus one review-coordination lock,
+independent of finding count; database, audit and other runtime descriptors are
+additional. No OS descriptor limit is raised.
+
+Colliding identities conservatively exclude each other. Reviews and remediation
+can return a retryable conflict even for different findings on the same stripe.
+Publication retries within its existing deadline, releasing all locks before
+re-reading current observations and reviews. Same-thread reentry still fails
+immediately, including a collision with a different identity. Locks contain no
+cached authorization, review or observation decisions.
+
+Review takes a stripe, then review coordination, then its backend transaction.
+Publication takes coordination, then its deduplicated stripes, then a backend
+transaction if review invalidations require one. All filesystem acquisitions
+are nonblocking: contention unwinds before retrying, so these opposite orders
+do not wait on each other. Remediation holds its stripe across the final account,
+review and policy checks and execution, and releases it before verification or
+rescan publication. Account checks remain inside their existing critical sections.
+
+**Upgrade requires a coordinated stop and restart.** The previous per-finding
+lock protocol and v2 stripes do not exclude each other during remediation. Stop
+admitting work, drain all in-flight review/remediation/scan operations, and stop
+every API, CLI and worker process sharing the state directory before upgrading
+any of them. Do not perform a rolling or mixed-version upgrade; apply the same
+procedure for downgrade or a future mapping/count change. Old lock files may
+remain on disk and need no deletion. Do not delete active lock files.
+
+This bounds lock descriptors; it does not make staged findings, run metadata,
+review invalidations and audit records one atomic transaction. A failure can
+leave a findings document staged without its run being published, or pending
+audit/partial invalidation records. Existing read precedence and fail-closed
+review rules still apply. Retain such evidence when retrying or investigating.
+
 ## Application shutdown
 
 `AppContext.close(timeout=5)` stops registered producers, drains their workers and
