@@ -5,13 +5,16 @@ RUN npm ci
 COPY cyberthunder/ui/ ./
 RUN npm run build
 
-FROM aquasec/trivy:0.56.2 AS trivy
+FROM aquasec/trivy:0.71.1@sha256:53570e6911c2361ebe7995228088cf83a6b9b73e7f3cdca44bd8f8f425e80fa7 AS trivy
 
 FROM python:3.12-slim-bookworm
 ARG KUBECTL_VERSION=v1.36.4
 ARG TARGETARCH
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    CT_HOST=0.0.0.0 \
+    CT_PORT=8000 \
+    WEB_CONCURRENCY=1 \
     CT_STATE_DIR=/var/lib/cyberthunder \
     CT_LLM_BACKEND=template \
     HOME=/var/lib/cyberthunder \
@@ -46,4 +49,5 @@ RUN pip install --no-cache-dir . \
     && chown 10001:10001 /var/lib/cyberthunder
 USER 10001:10001
 EXPOSE 8000
-CMD ["uvicorn", "cyberthunder.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+ENTRYPOINT ["cyberthunder"]
+CMD ["serve"]
