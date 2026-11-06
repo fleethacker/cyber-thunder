@@ -3,6 +3,12 @@
 `.github/workflows/regression.yml` runs on pull requests and pushes to `main`.
 Each matrix job uses Python 3.12 and Node 22 on a hosted runner:
 
+The job deadline is 90 minutes, including dependency installation and the UI
+build. The account-access candidate's local Windows gate took 57 minutes
+38 seconds for 6,540 passes and 22 expected skips. This observed local duration
+does not predict hosted runner speed; the larger budget accommodates the growing
+suite without relaxing individual test deadlines, required checks or skip policy.
+
 | Runner | Pytest state backends | Collection |
 | --- | --- | --- |
 | `ubuntu-24.04` | JSON and SQLite in the same run | Every test module, including the three deployment modules |
