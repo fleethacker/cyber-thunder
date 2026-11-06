@@ -218,6 +218,11 @@ class Scanner:
         for tid in run.targets:
             authorize(ctx, "scan", actor=actor, target=tid)
         check_record(ctx, run, "scan")
+        if scheduled:
+            # This producer cannot establish complete benchmark/host coverage. Pin
+            # the omission policy before any observation or terminal run publication,
+            # including callers that supply a ScanRun directly rather than start().
+            run.coverage_incomplete = True
         run.status = "running"
         self._save(run)
         ctx.audit.append("scan.start", actor, {"targets": run.targets, "modules": run.modules,

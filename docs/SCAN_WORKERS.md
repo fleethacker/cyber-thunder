@@ -78,6 +78,35 @@ erase prior findings in the store's current view. Partial or stopped runs skip b
 rematching, automatic proposals, and explanation precomputation. A fully successful
 run follows the existing post-scan path, including catalog read-authority checks.
 
+### Omitted observations and unavailable hosts
+
+The store processes runs in observation order. A full run can remove older findings
+for its declared targets only when it is terminal (`done`, or a legacy absent status)
+and `coverage_incomplete` is not true. It then overlays actual observations by finding
+identity. Per-target failure statuses alone are **not** the omission safeguard.
+
+The opt-in scanner therefore pins `coverage_incomplete=true` before its first run
+publication, even for a caller-supplied `ScanRun` with a false coverage flag, and retains
+that value through findings and final run publication. A successful empty collection
+also cannot prove a complete benchmark assessment or remove omitted findings. Failed,
+timed-out, and unstarted targets produce no observations that can replace their older
+unresolved findings. Targets outside the new run are preserved as well.
+
+Scheduling metadata explicitly lists `unavailable_targets` and `partial_targets`, and
+records `omitted_observations=retain_without_revalidation`. Retained findings keep their
+original status, source run, collection time, and ownership; they are neither refreshed
+nor copied into the new run as new evidence. Unavailable and partial hosts do not
+advance `last_scan`. This preserves older evidence without silently declaring a host
+clean. Automatically adding a stale/unavailable badge to each retained finding in
+report/UI views requires changes outside this scan-owned boundary and remains deferred.
+
+The publication regression seeds a genuinely complete older full-run baseline, then
+checks failure, timeout, unstarted targets after a kill, and a successful empty full
+run on both backends. A local clock advances past the queued host's entire budget to
+prove that its fresh budget starts at execution. A separate barrier test mutates a
+request `ContextVar` in two overlapping workers: each sees its own value, and the
+caller retains its original value. No shared `Context` is entered concurrently.
+
 ## Remaining boundaries
 
 - A genuine whole-host wall-clock deadline needs cooperative cancellation and deadline
@@ -131,6 +160,7 @@ Only these repository files change:
 - `cyberthunder/scan_workers.py`
 - Scan-specific fields and validation in `cyberthunder/config.py`
 - `tests/scan_workers/test_workers.py`
+- `tests/scan_workers/test_publication.py`
 - `docs/SCAN_WORKERS.md`
 
 Run the scope below serially, with `CT_STATE_BACKENDS=json,sqlite`. No test worker
@@ -202,3 +232,22 @@ Machine-readable Windows proofs and the exact argument array are under
 Linux proofs are in the owned export's `proofs/` directory and are copied into that
 Windows proof directory for review. The source hashes bind the validated code/tests;
 this documentation's final measurement update happens after validation.
+
+### Focused publication review follow-up
+
+After the initial scoped validation, the omission-policy hardening and explicit
+unavailable/partial target metadata were checked with just this selection:
+
+```text
+python -m pytest tests/scan_workers/test_publication.py
+  tests/scan_workers/test_workers.py::test_collection_errors_cannot_publish_a_pass
+  tests/scan_workers/test_workers.py::test_default_and_environment_settings
+  tests/scan_workers/test_workers.py::test_context_shutdown_keeps_database_open_until_workers_and_publisher_finish
+```
+
+All 14 checks passed on Windows in 23.77 s and Linux in 19.23 s, exercising JSON and
+SQLite. Linux used the same supplied interpreter, `taskset -c 0`, and a fresh owned
+export at `/home/joshua/cyber-thunder-scan-publication-20261106-4bc812`. No full suite or
+500-host simulation was repeated for this follow-up. Proofs and source hashes are in
+`C:/Users/joshu/.codex/tmp/bounded-scan-publication-20261106-4bc812/`:
+`windows-publication.xml`, `linux-publication.xml`, and `source-hashes.json`.

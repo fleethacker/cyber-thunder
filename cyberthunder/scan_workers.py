@@ -300,7 +300,10 @@ def collect_run(scanner, run):
         counts = {status: sum(w.status == status for w in works)
                   for status in ("done", "partial", "error", "skipped", "timed_out", "stopped", "cancelled")}
         run.scheduling = {"max_workers": limit, "host_budget_s": budget,
-                          "budget_semantics": "collection_boundaries_with_drain", "outcomes": counts}
+                          "budget_semantics": "collection_boundaries_with_drain", "outcomes": counts,
+                          "unavailable_targets": [w.tid for w in works if w.collected is None],
+                          "partial_targets": [w.tid for w in works if w.status == "partial"],
+                          "omitted_observations": "retain_without_revalidation"}
         run.coverage_incomplete = True
         run.status = ("stopped" if counts["stopped"] else "cancelled" if counts["cancelled"] else
                       "done" if all(w.status == "done" for w in works) else
