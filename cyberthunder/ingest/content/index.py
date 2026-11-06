@@ -39,6 +39,7 @@ MAX_INDEX_BYTES = 4 * 1024 * 1024
 MAX_PAGE_BYTES = 8 * 1024 * 1024
 
 KINDS = ("manual_stig", "scap_benchmark", "srg", "automation", "compilation", "document", "tool", "other")
+SUPPORTED_KINDS = frozenset({"manual_stig", "scap_benchmark", "srg", "automation", "compilation"})
 
 _STRIP = dict.fromkeys(map(ord, "​‌‍⁠﻿�"), None)
 _VER = re.compile(r"_(?:V(\d+)R(\d+)|Y(\d{2})M(\d{2}))(?=[_.\- ]|$)")
@@ -70,10 +71,14 @@ class Entry:
     upload_date: str | None = None
     download_types: list[str] = field(default_factory=list)
     name: str | None = None             # DISA's own record name, e.g. File-0199
+    raw_position: int | None = None     # one-based position, including duplicate and malformed rows
+    publication_metadata: Any = None    # original publication row, never executable content
+    record_errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["version"] = list(self.version) if self.version else None
+        d.update(self.accounting())
         return d
 
     @classmethod
@@ -88,8 +93,34 @@ class Entry:
         return self.allowed_by(ALLOWED_HOSTS)
 
     def allowed_by(self, hosts=ALLOWED_HOSTS, allow_http: bool = False) -> bool:
-        scheme_ok = self.url.lower().startswith("https://") or (allow_http and self.url.lower().startswith("http://"))
-        return scheme_ok and self.host in hosts
+        try:
+            parts = urllib.parse.urlsplit(self.url)
+            port = parts.port
+            return (parts.scheme in (("https", "http") if allow_http else ("https",))
+                    and parts.hostname == self.host and self.host in hosts
+                    and parts.username is None and parts.password is None
+                    and not any(ord(c) < 32 or ord(c) == 127 for c in self.url)
+                    and (port is None or 0 < port <= 65535)
+                    and (self.host not in ALLOWED_HOSTS or port in (None, 443)))
+        except (ValueError, TypeError):
+            return False
+
+    @property
+    def format_supported(self) -> bool:
+        return self.kind in SUPPORTED_KINDS and not self.record_errors
+
+    def accounting(self, hosts=ALLOWED_HOSTS, allow_http: bool = False) -> dict:
+        reasons = list(self.record_errors)
+        if self.kind not in SUPPORTED_KINDS:
+            reasons.append(f"{self.kind.replace('_', ' ')} format is metadata only; ingestion is unsupported")
+        if not self.allowed_by(hosts, allow_http):
+            reasons.append("download URL is missing, invalid, or outside the content allow-list")
+        if self.sunset:
+            reasons.insert(0, "DISA marks this publication sunset; excluded from automatic selection")
+        classification = "sunset" if self.sunset else "unsupported" if reasons else "supported"
+        return {"classification": classification, "classification_reasons": reasons,
+                "format_supported": self.format_supported,
+                "download_eligible": classification == "supported"}
 
 
 # -- names --------------------------------------------------------------------------------------
@@ -152,30 +183,60 @@ def normalize_product(prefix: str) -> str:
     return re.sub(r"_LTS$", "", p, flags=re.I)
 
 
-def entry_from_record(rec: dict) -> Entry | None:
-    link = str(rec.get("DownloadLink") or "").strip()
-    if not link:
-        return None
-    parts = urllib.parse.urlsplit(link)
-    filename = urllib.parse.unquote(parts.path.rstrip("/").rsplit("/", 1)[-1]) or (parts.hostname or "item")
-    info = parse_filename(filename)
-    types = [clean_text(t) for t in re.split(r"[;,]", str(rec.get("RawDownloadType") or rec.get("DownloadType") or ""))]
+def entry_from_record(rec: Any, position: int | None = None) -> Entry:
+    """Represent every raw row, even when it cannot safely identify downloadable content."""
+    raw = rec
+    errors = []
+    if not isinstance(rec, dict):
+        errors.append("publication row is not an object")
+        rec = {}
+    for key in ("DownloadLink", "FileName", "UploadDate", "Name", "RawDownloadType", "DownloadType"):
+        if rec.get(key) is not None and not isinstance(rec[key], str):
+            errors.append(f"{key} must be text")
+    link = rec.get("DownloadLink") if isinstance(rec.get("DownloadLink"), str) else ""
+    if any(ord(c) < 32 or ord(c) == 127 for c in link):
+        errors.append("download URL contains control characters")
+    link = link.strip()
+    filename, host = "", ""
+    try:
+        parts = urllib.parse.urlsplit(link)
+        host = (parts.hostname or "").lower()
+        parts.port  # validate malformed ports without dropping the publication
+        filename = urllib.parse.unquote(parts.path.rsplit("/", 1)[-1])
+    except ValueError:
+        errors.append("malformed download URL")
+    if not filename or any(c in filename for c in ("/", "\\")) or any(ord(c) < 32 for c in filename):
+        errors.append("download URL has no safe filename")
+        filename = ""
+    try:
+        info = parse_filename(filename)
+    except (ValueError, OverflowError):
+        errors.append("malformed filename version")
+        info = parse_filename("")
+    type_text = next((rec[k] for k in ("RawDownloadType", "DownloadType")
+                      if isinstance(rec.get(k), str) and rec[k]), "")
+    types = [clean_text(t) for t in re.split(r"[;,]", type_text)]
     types = [t for t in types if t]
-    return Entry(filename=filename, url=link, host=(parts.hostname or "").lower(), title=clean_text(rec.get("FileName")),
+    return Entry(filename=filename, url=link, host=host, title=clean_text(rec.get("FileName")),
                  kind=info["kind"], product_key=info["product_key"], version=info["version"],
                  version_label=info["version_label"], sunset=any("sunset" in t.lower() for t in types),
                  upload_date=clean_text(rec.get("UploadDate")) or None, download_types=types,
-                 name=clean_text(rec.get("Name")) or None)
+                 name=clean_text(rec.get("Name")) or None, raw_position=position,
+                 publication_metadata=raw, record_errors=errors)
 
 
 def entries_from_records(records: list) -> list[Entry]:
-    out = []
-    for r in records:
-        if isinstance(r, dict):
-            e = entry_from_record(r)
-            if e is not None:
-                out.append(e)
-    return out
+    return [entry_from_record(r, i) for i, r in enumerate(records, 1)]
+
+
+def reconcile(entries: list[Entry], hosts=ALLOWED_HOSTS, allow_http: bool = False) -> dict:
+    """Legacy caches predate raw-row retention and cannot prove complete index accounting."""
+    complete = bool(entries) and [e.raw_position for e in entries] == list(range(1, len(entries) + 1))
+    counts = dict.fromkeys(("supported", "unsupported", "sunset"), 0)
+    for entry in entries:
+        counts[entry.accounting(hosts, allow_http)["classification"]] += 1
+    return {"raw_entries": len(entries) if complete else None, "represented_entries": len(entries),
+            "complete": complete, **counts}
 
 
 def records_of(doc: Any) -> list:
@@ -215,7 +276,8 @@ class IndexResult:
 
     def stats(self) -> dict:
         return {"classname": self.classname, "rediscovered": self.rediscovered, "wire_bytes": self.wire_bytes,
-                "bytes": self.bytes, "gzip": self.gzip, "seconds": self.seconds, "entries": len(self.entries)}
+                "bytes": self.bytes, "gzip": self.gzip, "seconds": self.seconds, "entries": len(self.entries),
+                "accounting": reconcile(self.entries)}
 
 
 def _body(classname: str) -> bytes:
@@ -231,9 +293,14 @@ def decode_body(raw: bytes, encoding: str | None, max_bytes: int) -> bytes:
     if enc not in ("gzip", "x-gzip", "deflate"):
         raise IndexFetchError(f"unsupported content encoding {enc!r}")
     d = zlib.decompressobj(16 + zlib.MAX_WBITS if "gzip" in enc else zlib.MAX_WBITS)
-    out = d.decompress(raw, max_bytes + 1)
+    try:
+        out = d.decompress(raw, max_bytes + 1)
+    except zlib.error as exc:
+        raise IndexFetchError("invalid compressed index response") from exc
     if len(out) > max_bytes or d.unconsumed_tail:
         raise IndexFetchError(f"index larger than {max_bytes} bytes once decompressed")
+    if not d.eof:
+        raise IndexFetchError("truncated compressed index response")
     return out
 
 
@@ -294,11 +361,16 @@ def fetch_index_result(client, *, timeout: float = 30.0, max_bytes: int = MAX_IN
         tried.append(cls)
         status, headers, body, wire = _call(client, cls, timeout=timeout, max_bytes=max_bytes)
         records = _parse(status, headers, body)
-        if records is not None:
+        if records:
             entries = entries_from_records(records)
-            return IndexResult(entries=entries, classname=cls, rediscovered=rediscovered, wire_bytes=wire,
-                               bytes=len(body), gzip="gzip" in headers.get("content-encoding", "").lower(),
-                               seconds=round(time.monotonic() - start, 3), url=APEX_URL)
+            # A changed envelope or an empty answer must never erase a usable saved catalog.
+            # Unsupported publications are legitimate; require only one identifiable publication.
+            if any(e.title and e.url and e.host and not e.record_errors for e in entries):
+                if on_discover is not None and rediscovered:
+                    on_discover(cls)  # remember only an id that actually returned a catalog
+                return IndexResult(entries=entries, classname=cls, rediscovered=rediscovered, wire_bytes=wire,
+                                   bytes=len(body), gzip="gzip" in headers.get("content-encoding", "").lower(),
+                                   seconds=round(time.monotonic() - start, 3), url=APEX_URL)
         if attempt:
             break
         found = discover_classname(client, timeout=timeout)
@@ -306,9 +378,7 @@ def fetch_index_result(client, *, timeout: float = 30.0, max_bytes: int = MAX_IN
         # single round trip either way.
         rediscovered = found != cls
         cls = found
-        if on_discover is not None and rediscovered:
-            on_discover(found)
-    raise IndexFetchError(f"the STIG index did not answer with a catalog (tried {', '.join(tried)})")
+    raise IndexFetchError(f"the STIG index did not answer with a nonempty usable catalog (tried {', '.join(tried)})")
 
 
 def fetch_index(opener, *, timeout: float = 30.0, max_bytes: int = MAX_INDEX_BYTES,

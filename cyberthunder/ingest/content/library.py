@@ -9,6 +9,7 @@ from cyberthunder.control.identity import require_human
 from cyberthunder.findings.schema import utcnow
 from cyberthunder.ingest import delta
 from cyberthunder.ingest.content.select import select
+from cyberthunder.ingest.content.index import reconcile
 
 CONTENT_KINDS = ("manual_stig", "srg", "scap_benchmark")
 
@@ -74,7 +75,7 @@ class ContentLibrary:
             if changes["revision"] != old["revision"]:
                 raise PreferenceConflict("Update selections changed in another session; reload before saving")
             entries, _ = self.service.catalog_entries()
-            known = {e.product_key for e in entries if e.kind in CONTENT_KINDS} | set(old["products"])
+            known = {e.product_key for e in entries if e.kind in CONTENT_KINDS and e.format_supported} | set(old["products"])
             if any(p not in known for p in products):
                 raise ValueError("an unknown product was selected; refresh the local catalog")
             new = {**changes, "products": sorted(set(products)), "kinds": sorted(set(kinds)),
@@ -103,14 +104,25 @@ class ContentLibrary:
             doc[key] = max(at, doc.get(key) or "")
             self.state.write_json(path, doc)
 
+    def record_index(self, status: str, error: str | None = None) -> None:
+        with self.state.files.lock("content-sync"):
+            path = self.root / "sync.json"
+            doc = self.state.read_json(path, {}) or self.sync_status([])
+            doc.update(live_index_status=status, last_index_attempt_at=utcnow(),
+                       last_index_error=error[:300] if error else None)
+            self.state.write_json(path, doc)
+
     def sync_status(self, records: list[dict]) -> dict:
         doc = self.state.read_json(self.root / "sync.json", {}) or {}
         cached = self.state.read_json(self.service.catalog_cache, {}) or {}
         last = self.service.store.last_check() or {}
-        live = cached.get("saved_at") if not doc and cached.get("source") == "live" else None
+        live = cached.get("saved_at") if not doc and cached.get("source") == "live" and cached.get("entries") else None
         if not doc and last.get("source") == "live":
             live = max(live or "", last.get("checked_at") or "") or None
         return {"last_attempt_at": doc.get("last_attempt_at") or live,
+                "live_index_status": doc.get("live_index_status") or ("available" if live else "unconfirmed"),
+                "last_index_attempt_at": doc.get("last_index_attempt_at"),
+                "last_index_error": doc.get("last_index_error"),
                 "last_attempt_status": doc.get("last_attempt_status") or ("success" if live else None),
                 "last_error": doc.get("last_error"),
                 "last_successful_check_at": doc.get("last_successful_check_at") or live,
@@ -148,7 +160,7 @@ class ContentLibrary:
                              allow_http=self.service.client.allow_http)
         groups = {}
         for e in entries:
-            if not e.product_key or e.kind not in CONTENT_KINDS:
+            if not e.product_key or e.kind not in CONTENT_KINDS or not e.format_supported:
                 continue
             group = groups.setdefault(e.product_key, {"product_key": e.product_key, "title": e.product_key.replace("_", " "),
                                                        "available": [], "held": [], "kinds": set()})
@@ -187,8 +199,13 @@ class ContentLibrary:
                    (r.get("receipt_source") or r.get("filename") not in downloaded_names)]
         if imports:
             sync["last_import_at"] = max(sync["last_import_at"] or "", *imports)
+        publications = [{**e.to_dict(), **e.accounting(self.service.client.allowed_hosts, self.service.client.allow_http),
+                         "publication_id": f"row-{i}"} for i, e in enumerate(entries, 1)]
         return {"catalog": {"source": source, "saved_at": cache.get("saved_at") if source == "live" else None,
-                            "total_entries": len(entries)}, "sync": sync, "preferences": prefs,
+                            "total_entries": len(entries),
+                            "accounting": reconcile(entries, self.service.client.allowed_hosts, self.service.client.allow_http),
+                            "live_status": sync["live_index_status"], "live_error": sync["last_index_error"]},
+                "publications": publications, "sync": sync, "preferences": prefs,
                 "products": [groups[key] for key in sorted(groups)], "selection": selected.to_dict(),
                 "held": held, "catalogs": catalogs, "catalog_errors": errors,
                 "jobs": self.service.store.jobs()[:20], "connected": self.service._link().connected,

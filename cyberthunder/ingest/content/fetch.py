@@ -260,6 +260,8 @@ def download(opener: ContentClient | Any, entry: Entry | dict, dest_dir: str | P
     client = as_client(opener)
     if isinstance(entry, dict):
         entry = Entry.from_dict(entry) if "host" in entry else _entry_from_item(entry)
+    if not entry.format_supported:
+        raise ContentError("unsupported publication format; metadata only")
     url = entry.url
     client.check_url(url)
     dest_dir = Path(dest_dir)

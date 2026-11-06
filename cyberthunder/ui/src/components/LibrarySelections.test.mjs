@@ -14,7 +14,7 @@ async function setup(t, options = {}) {
       if (fail) throw new ApiError(409, 'Selections changed elsewhere');
       library = { ...library, preferences: { ...body, revision: body.revision + 1 } };
       return library.preferences;
-    } } }, '../lib/format': format, '../lib/contentTasks': tasks, './LibraryTables': tableStubs, './common': ui,
+    } } }, '../lib/format': format, '../lib/contentTasks': tasks, './LibraryTables': { ...tableStubs, PublicationsTable: 'PublicationsTable' }, './common': ui,
   }).LibrarySelections, props);
   t.after(() => panel.unmount()); await panel.settle();
   return { ...panel, props, calls, dirty, table: () => panel.find((node) => node.type === 'LibraryTable'),
@@ -28,7 +28,8 @@ test('browse shows the full returned catalog and separates maintenance from loca
   assert.equal(panel.control('Maintain Local Reference').props.checked, false);
   assert.ok(panel.nodes().some((node) => node.type === 'Text' && text(node).includes('V2R1')));
   assert.ok(panel.nodes().some((node) => node.type === 'Text' && text(node).includes('V1R1')));
-  assert.ok(panel.nodes().some((node) => node.type === 'Text' && text(node).includes('not a guarantee of every cyber.mil')));
+  assert.ok(panel.nodes().some((node) => node.type === 'Text' && text(node).includes('other formats and malformed rows')));
+  assert.equal(panel.find((node) => node.type === 'PublicationsTable').props.library, panel.props.library);
   assert.deepEqual(panel.calls, []);
 });
 

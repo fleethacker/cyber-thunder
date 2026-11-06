@@ -115,13 +115,14 @@ class ContentService:
         return Path(p) if p else ix.BUNDLED_SNAPSHOT
 
     def _save_catalog(self, entries: list[ix.Entry], source: str, stats: dict | None = None) -> None:
-        self.store.state.write_json(self.catalog_cache, {"saved_at": utcnow(), "source": source, "stats": stats or {},
+        self.store.state.write_json(self.catalog_cache, {"schema_version": 2, "saved_at": utcnow(), "source": source,
+                                                         "stats": stats or {}, "accounting": ix.reconcile(entries),
                                                          "entries": [e.to_dict() for e in entries]})
 
     def catalog_entries(self) -> tuple[list[ix.Entry], str]:
         """The newest index this node has seen: the last live check, else the bundled snapshot."""
         doc = self.store.state.read_json(self.catalog_cache)
-        if doc and isinstance(doc.get("entries"), list):
+        if doc and isinstance(doc.get("entries"), list) and doc["entries"]:
             return [ix.Entry.from_dict(e) for e in doc["entries"]], str(doc.get("source") or "cache")
         return ix.load_snapshot(self._snapshot_path()), "snapshot"
 
@@ -221,12 +222,16 @@ class ContentService:
             try:
                 res = self._fetch_live()
             except (ix.IndexFetchError, ContentNetworkError) as e:
+                from cyberthunder.ingest.content.library import ContentLibrary
+                ContentLibrary(self).record_index("unavailable", str(e))
                 self.audit.append("content.check", actor, {"url": url, "seconds": round(time.monotonic() - t0, 3),
                                                            "error": str(e)[:300]}, outcome="failed")
-                raise _ingest_error(f"index check failed: {e}") from None
+                raise _ingest_error(f"live index unavailable: {e}. Saved catalog and snapshot checks remain available") from None
             entries = res.entries
             stats = res.stats()
             self._save_catalog(entries, "live", stats)
+            from cyberthunder.ingest.content.library import ContentLibrary
+            ContentLibrary(self).record_index("available")
         else:
             path = self._snapshot_path()
             entries = ix.load_snapshot(path)
@@ -241,6 +246,7 @@ class ContentService:
         wire = int(stats.get("wire_bytes") or 0)
         report = {"checked_at": utcnow(), "checked_by": actor, "source": source, "url": url,
                   "index_entries": len(entries), "index_bytes": int(stats.get("bytes") or 0), "index_wire_bytes": wire,
+                  "accounting": ix.reconcile(entries, self.client.allowed_hosts, self.client.allow_http),
                   "gzip": bool(stats.get("gzip")), "seconds": stats.get("seconds"),
                   "classname": stats.get("classname"), "rediscovered": bool(stats.get("rediscovered")),
                   "index_estimate_seconds": transfer_seconds(wire, link) if wire else None,
@@ -283,6 +289,8 @@ class ContentService:
             e = by_name.get(n) or by_disk.get(n)
             if e is None:
                 raise _ingest_error(f"{n} is not in the STIG index this node holds; run a check first")
+            if not e.format_supported:
+                raise _ingest_error(f"{n} is an unsupported publication; metadata only")
             if not e.allowed_by(self.client.allowed_hosts, self.client.allow_http):
                 raise _ingest_error(f"{n} is hosted on {e.host}, which is not on the content allow-list")
             row = dict(known.get(e.filename) or {})
