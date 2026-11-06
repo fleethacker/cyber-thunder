@@ -9,6 +9,21 @@ import paramiko
 import pytest
 
 
+def generated_key_material(algorithm):
+    from cryptography.hazmat.primitives import serialization as ser
+    from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
+
+    if algorithm.startswith("rsa"):
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    elif algorithm.startswith("ecdsa"):
+        key = ec.generate_private_key(ec.SECP256R1())
+    else:
+        key = ed25519.Ed25519PrivateKey.generate()
+    form = ser.PrivateFormat.TraditionalOpenSSL if algorithm.endswith("pem") else ser.PrivateFormat.OpenSSH
+    return (key.private_bytes(ser.Encoding.PEM, form, ser.NoEncryption()),
+            key.public_key().public_bytes(ser.Encoding.OpenSSH, ser.PublicFormat.OpenSSH))
+
+
 @pytest.fixture(autouse=True)
 def loopback_network_only(monkeypatch):
     connect, connect_ex, resolve = socket.socket.connect, socket.socket.connect_ex, socket.getaddrinfo
@@ -52,9 +67,9 @@ def private_key_file(tmp_path, generated_ssh_keys):
 @pytest.fixture
 def publickey_peer(generated_ssh_keys):
     @contextmanager
-    def start(*, username="reader", accepted=None):
+    def start(*, username="reader", accepted=None, partial=False, auth_delay=0):
         stop = threading.Event()
-        peer = SimpleNamespace(auth=[], commands=[], failures=[])
+        peer = SimpleNamespace(auth=[], interactive=[], commands=[], failures=[])
         accepted = accepted or generated_ssh_keys[0]
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
@@ -64,12 +79,18 @@ def publickey_peer(generated_ssh_keys):
 
         class Server(paramiko.ServerInterface):
             def get_allowed_auths(self, user):
-                return "publickey"
+                return "publickey,keyboard-interactive" if partial else "publickey"
 
             def check_auth_publickey(self, user, key):
                 peer.auth.append((user, key.asbytes()))
-                return (paramiko.AUTH_SUCCESSFUL if user == username and key.asbytes() == accepted.asbytes()
+                stop.wait(auth_delay)
+                success = paramiko.AUTH_PARTIALLY_SUCCESSFUL if partial else paramiko.AUTH_SUCCESSFUL
+                return (success if user == username and key.asbytes() == accepted.asbytes()
                         else paramiko.AUTH_FAILED)
+
+            def check_auth_interactive(self, user, submethods):
+                peer.interactive.append(user)
+                return paramiko.AUTH_SUCCESSFUL
 
             def check_channel_request(self, kind, chanid):
                 return paramiko.OPEN_SUCCEEDED

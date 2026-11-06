@@ -99,7 +99,11 @@ def test_range_requires_explicit_exception_and_never_claims_verified(ssh_keys, s
 @pytest.mark.parametrize("credential", ["password", "key", "interactive_agent"])
 def test_no_implicit_keys_and_agent_only_explicit_interactive(monkeypatch, tmp_path, ssh_keys, credential):
     calls = []
-    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda _self, *args, **kw: calls.append(kw))
+    def connect(_self, *args, **kw):
+        strategy = kw.get("auth_strategy")
+        calls.append({**kw, "key_public": strategy.pkey.asbytes() if strategy is not None else None})
+
+    monkeypatch.setattr(paramiko.SSHClient, "connect", connect)
     monkeypatch.setattr(paramiko.SSHClient, "load_system_host_keys", lambda *args: pytest.fail("implicit host trust"))
     key = tmp_path / "explicit_key"
     ssh_keys[1].write_private_key_file(str(key))
@@ -113,7 +117,7 @@ def test_no_implicit_keys_and_agent_only_explicit_interactive(monkeypatch, tmp_p
     assert calls[0]["auth_timeout"] == calls[0]["banner_timeout"] == calls[0]["channel_timeout"] == 20
     if credential == "key":
         assert calls[0]["key_filename"] is None
-        assert calls[0]["pkey"].asbytes() == ssh_keys[1].asbytes()
+        assert calls[0]["key_public"] == ssh_keys[1].asbytes()
 
 
 def test_no_credential_fails_before_network(monkeypatch):

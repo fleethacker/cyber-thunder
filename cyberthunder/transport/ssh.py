@@ -185,14 +185,18 @@ class SSHTransport(TrustEvents, Transport):
                     limit = min(limit, lease.remaining())
                 password = lease.secret.reveal() if lease is not None else self._password
                 pkey = None
+                key_auth = None
                 failure = None
                 try:
                     if self._key is not None:
-                        from cyberthunder.security.ssh_keys import SSHKeyError, load_private_key
+                        from cyberthunder.security.ssh_keys import SSHKeyError, SelectedKeyAuth, load_private_key
                         try:
                             pkey = load_private_key(self._key)
                         except SSHKeyError:
+                            failure = "key"
+                        if failure == "key":
                             raise TrustError("transport:ssh_key_unavailable", "SSH private key is unavailable or unsafe") from None
+                        key_auth = SelectedKeyAuth(self.username, pkey)
                     # Resolution and its audit/authorization callbacks can take
                     # time or cancel the caller's separate bounded probe.
                     check()
@@ -203,16 +207,19 @@ class SSHTransport(TrustEvents, Transport):
                         if limit <= 0:
                             raise TimeoutError("SSH connection deadline expired")
                     try:
-                        client.connect(self.host, port=self.port, username=self.username, password=password,
-                                       key_filename=None, pkey=pkey, timeout=limit, banner_timeout=limit,
+                        client.connect(self.host, port=self.port, username=self.username,
+                                       key_filename=None, timeout=limit, banner_timeout=limit,
                                        auth_timeout=limit, channel_timeout=limit, look_for_keys=False,
-                                       allow_agent=use_agent)
+                                       allow_agent=use_agent,
+                                       **({"auth_strategy": key_auth} if key_auth is not None else {"password": password}))
                     except paramiko.BadHostKeyException:
                         failure = "host_key"
                     except paramiko.AuthenticationException:
                         failure = "authentication"
-                    except TrustError:
-                        raise
+                    except TrustError as exc:
+                        # Preserve the public trust diagnostic, not provider
+                        # traceback frames holding the selected private key.
+                        failure = (exc.code, str(exc))
                     except Exception:
                         failure = "connection"
                 finally:
@@ -227,7 +234,12 @@ class SSHTransport(TrustEvents, Transport):
                         handler = getattr(client.get_transport(), "auth_handler", None)
                         if handler is not None and hasattr(handler, "private_key"):
                             handler.private_key = None
+                    if key_auth is not None:
+                        key_auth.pkey = None
                     pkey = None
+                    key_auth = None
+                if isinstance(failure, tuple):
+                    raise TrustError(*failure) from None
                 if failure == "host_key":
                     self._event("discovery:identity_changed", "SSH host key differs from provisioned known_hosts", "high")
                     raise TrustError("discovery:identity_changed", "SSH host key does not match provisioned known_hosts") from None

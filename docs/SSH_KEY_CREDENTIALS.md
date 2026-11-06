@@ -35,8 +35,18 @@ ownership or permissions policy:
 
 The parser consumes only the returned snapshot, using in-memory streams. It
 supports the provider's unencrypted RSA and ECDSA PEM/OpenSSH keys and Ed25519
-OpenSSH keys; older providers' existing DSS parser is used only if present.
-Paramiko receives `pkey` and no filename. It cannot reopen a replaced file or
+OpenSSH keys; older providers' existing DSS PEM parser is used only if present.
+One matching BEGIN/END envelope and canonical base64 are required. Whitespace
+outside the envelope is allowed within the total size limit; extra keys, other
+prefix/trailing text and inconsistent headers are rejected. OpenSSH input must
+declare exactly one unencrypted key and no KDF options. The existing cryptography
+dependency validates the complete OpenSSH binary structure, public/private key
+agreement and padding before Paramiko consumes the same checked bytes.
+
+Paramiko receives an explicit authentication strategy containing the parsed
+in-memory key and no filename. The strategy makes one public-key attempt and
+requires completed authentication. Partial success cannot trigger password or
+keyboard-interactive fallback. It cannot reopen a replaced file or
 automatically load an adjacent `-cert.pub` file. Replacement after a completed
 checked read cannot change that connection's key; the next connection performs
 a fresh read. Replacement or mutation detected during the read rejects the
@@ -45,7 +55,10 @@ connection. No password or passphrase is supplied to the parser.
 Authorization and deadline checks run before and after loading and after
 connection. Host pins and provisioned known-hosts verification retain their
 existing behavior. The private-key reference held by Paramiko's authentication
-handler is dropped after the authentication attempt, including failure.
+handler and authentication strategy is dropped after the authentication attempt,
+including failure. Loader failures are raised outside secret-bearing frames;
+host-trust failures preserve their public code/message without retaining the
+provider traceback and private-key arguments.
 
 An unsafe, unavailable, malformed, oversized or encrypted key fails before
 network connection with `transport:ssh_key_unavailable` and the fixed message
@@ -85,6 +98,10 @@ Everyone-write DACL on Windows and mode `0666` on Linux. The corrected transport
 rejects both before authentication. Real loopback regressions also prove that
 protected keys still authenticate, wrong host pins prevent authentication, and
 replacement after the checked read cannot substitute a different key.
+The independent review adds real RSA, ECDSA and Ed25519 authentication, malformed
+envelope/header regressions, partial-authentication rejection, traceback retention
+checks and cleanup after rejection, timeout, revocation and deadline expiry.
+See [SSH key review](SSH_KEY_REVIEW.md) for findings and the evidence contract.
 
 The existing `tests/transport/test_ssh_trust.py` key fixture now writes a
 generated private key with private permissions and asserts the supplied public

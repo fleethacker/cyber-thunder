@@ -13,12 +13,13 @@ from cyberthunder.inventory.targets import Target
 from cyberthunder.transport.base import TransportError
 from cyberthunder.transport.ssh import SSHTransport
 from cyberthunder.transport.trust import TrustError, key_fingerprint
-from tests.ssh_key_support import (generated_ssh_keys, loopback_network_only,  # noqa: F401
+from tests.ssh_key_support import (generated_key_material, generated_ssh_keys, loopback_network_only,  # noqa: F401
                                    private_key_file, publickey_peer)
 
 
 WINDOWS = pytest.mark.skipif(os.name != "nt", reason="requires native Windows SID/DACL and file sharing")
 POSIX = pytest.mark.skipif(os.name != "posix", reason="requires native POSIX ownership, modes and descriptor traversal")
+FORMATS = ["rsa-pem", "rsa-openssh", "ecdsa-pem", "ecdsa-openssh", "ed25519"]
 
 
 def selected(path, *, guard=None):
@@ -109,24 +110,14 @@ def test_wrong_host_pin_prevents_key_authentication(private_key_file, publickey_
         assert not peer.auth and not peer.commands
 
 
-@pytest.mark.parametrize("algorithm", ["rsa-pem", "rsa-openssh", "ecdsa-pem", "ecdsa-openssh", "ed25519"])
+@pytest.mark.parametrize("algorithm", FORMATS)
 def test_supported_key_formats_use_checked_bytes(tmp_path, algorithm, monkeypatch):
-    from cryptography.hazmat.primitives import serialization as ser
-    from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
     from cyberthunder.security.ssh_keys import load_private_key
-    if algorithm.startswith("rsa"):
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    elif algorithm.startswith("ecdsa"):
-        key = ec.generate_private_key(ec.SECP256R1())
-    else:
-        key = ed25519.Ed25519PrivateKey.generate()
-    form = ser.PrivateFormat.TraditionalOpenSSL if algorithm.endswith("pem") else ser.PrivateFormat.OpenSSH
-    raw = key.private_bytes(ser.Encoding.PEM, form, ser.NoEncryption())
+    raw, expected = generated_key_material(algorithm)
     path = tmp_path / "selected"
     path.write_bytes(raw)
     path.chmod(0o600)
     parsed = load_private_key(str(path))
-    expected = key.public_key().public_bytes(ser.Encoding.OpenSSH, ser.PublicFormat.OpenSSH)
     assert f"{parsed.get_name()} {parsed.get_base64()}".encode() == expected
     assert parsed.can_sign() and parsed.public_blob is None
 
@@ -156,11 +147,14 @@ def test_snapshot_never_reopens_key_or_adjacent_certificate(private_key_file, ge
     monkeypatch.setattr(paramiko.SSHClient, "_key_from_filepath", forbidden)
     monkeypatch.setattr(paramiko, "Agent", forbidden)
     monkeypatch.setattr(paramiko.PKey, "load_certificate", forbidden)
-    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda *args, **kwargs: calls.append(kwargs))
+    def connect(*args, **kwargs):
+        calls.append({**kwargs, "key_public": kwargs["auth_strategy"].pkey.asbytes()})
+
+    monkeypatch.setattr(paramiko.SSHClient, "connect", connect)
     with selected(private_key_file).connect_client(allow_agent=True):
         pass
-    assert calls[0]["pkey"].asbytes() == generated_ssh_keys[0].asbytes()
-    assert calls[0]["key_filename"] is None and calls[0]["password"] is None
+    assert calls[0]["key_public"] == generated_ssh_keys[0].asbytes()
+    assert calls[0]["key_filename"] is None and calls[0].get("password") is None
     assert calls[0]["allow_agent"] is False and calls[0]["look_for_keys"] is False
 
 
@@ -183,7 +177,7 @@ def test_real_snapshot_replacement_uses_checked_key(private_key_file, generated_
 
 def test_reconnect_checks_file_again(private_key_file, monkeypatch):
     calls = []
-    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda *a, **kw: calls.append(kw["pkey"].asbytes()))
+    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda *a, **kw: calls.append(kw["auth_strategy"].pkey.asbytes()))
     tr = selected(private_key_file)
     with tr.connect_client():
         pass
@@ -233,7 +227,7 @@ def test_provider_errors_are_sanitized(private_key_file, monkeypatch, caplog):
     diagnostic = "".join(traceback.format_exception(error.value)) + caplog.text
     assert error.value.code == "transport:ssh_key_unavailable"
     assert "private-key-canary-provider" not in diagnostic and str(private_key_file) not in diagnostic
-    assert error.value.__context__.__context__ is None
+    assert error.value.__context__ is None
 
 
 @POSIX
@@ -421,7 +415,7 @@ def test_account_action_keys_and_sudo_stay_separate(state_dir, tmp_path, generat
     opened, commands = [], []
 
     def connect(client, *args, **kwargs):
-        opened.append((kwargs["username"], kwargs["pkey"].asbytes(), kwargs["key_filename"], kwargs["allow_agent"]))
+        opened.append((kwargs["username"], kwargs["auth_strategy"].pkey.asbytes(), kwargs["key_filename"], kwargs["allow_agent"]))
 
     def execute(client, command, **kwargs):
         commands.append(command)
@@ -461,3 +455,187 @@ def test_account_action_keys_and_sudo_stay_separate(state_dir, tmp_path, generat
         assert path.read_text().splitlines()[1] not in emitted
     events = [json.loads(line) for line in ctx.audit.path.read_text().splitlines()]
     assert {row["details"]["username"] for row in events if row["action"] == "credential.use"} == {"reader", "changer"}
+
+
+@pytest.mark.parametrize("algorithm", FORMATS)
+@pytest.mark.parametrize("ambiguity", ["prefix", "trailer", "bundle", "missing-end", "wrong-end", "header-suffix", "binary-trailer"])
+def test_review_rejects_ambiguous_key_material(private_key_file, algorithm, ambiguity, monkeypatch):
+    import base64
+
+    raw, _ = generated_key_material(algorithm)
+    lines = raw.splitlines()
+    if ambiguity == "prefix":
+        raw = b"ignored prefix\n" + raw
+    elif ambiguity == "trailer":
+        raw += b"ignored trailer\n"
+    elif ambiguity == "bundle":
+        raw += raw
+    elif ambiguity == "missing-end":
+        raw = b"\n".join(lines[:-1]) + b"\n"
+    elif ambiguity == "wrong-end":
+        raw = raw.replace(lines[-1], b"-----END OTHER PRIVATE KEY-----")
+    elif ambiguity == "header-suffix":
+        raw = raw.replace(lines[0], lines[0] + b"unexpected")
+    else:
+        payload = base64.b64decode(b"".join(lines[1:-1])) + b"ignored-binary-trailer"
+        raw = b"\n".join((lines[0], base64.b64encode(payload), lines[-1], b""))
+    private_key_file.write_bytes(raw)
+    rejected(private_key_file, monkeypatch)
+
+
+@pytest.mark.parametrize("algorithm", ["rsa-openssh", "ecdsa-openssh", "ed25519"])
+@pytest.mark.parametrize("header", ["zero-keys", "two-keys", "kdf-options", "public-mismatch"])
+def test_review_rejects_inconsistent_openssh_header(private_key_file, algorithm, header, monkeypatch):
+    import base64
+    import struct
+
+    raw, _ = generated_key_material(algorithm)
+    lines = raw.splitlines()
+    payload = bytearray(base64.b64decode(b"".join(lines[1:-1])))
+    # Magic, two length-prefixed "none" strings, empty KDF options, count.
+    if header in {"zero-keys", "two-keys"}:
+        payload[35:39] = struct.pack(">I", 0 if header == "zero-keys" else 2)
+    elif header == "kdf-options":
+        payload[31:35] = struct.pack(">I", 1) + b"x"
+    else:
+        public_length = struct.unpack_from(">I", payload, 39)[0]
+        payload[43 + public_length - 1] ^= 1
+    private_key_file.write_bytes(b"\n".join((lines[0], base64.b64encode(payload), lines[-1], b"")))
+    rejected(private_key_file, monkeypatch)
+
+
+def test_review_failed_parser_traceback_does_not_retain_private_bytes(private_key_file, monkeypatch):
+    from cyberthunder.security.ssh_keys import SSHKeyError, load_private_key
+
+    def broken(stream, *args, **kwargs):
+        raise RuntimeError(stream.getvalue())
+
+    monkeypatch.setattr(paramiko.RSAKey, "from_private_key", broken)
+    with pytest.raises(SSHKeyError) as caught:
+        load_private_key(str(private_key_file))
+    assert caught.value.__context__ is None
+    frames = list(traceback.walk_tb(caught.value.__traceback__))
+    for frame, _ in frames:
+        if frame.f_code.co_filename.endswith("ssh_keys.py"):
+            retained = any(isinstance(value, (bytes, io.StringIO, paramiko.PKey)) or
+                           isinstance(value, str) and "PRIVATE KEY-----" in value
+                           for value in frame.f_locals.values())
+            assert not retained, "loader diagnostic retains private material"
+
+
+def test_review_host_failure_traceback_releases_key(private_key_file, publickey_peer, monkeypatch):
+    import gc
+    import weakref
+    from cyberthunder.security import ssh_keys
+
+    original, keys = ssh_keys.load_private_key, []
+
+    def record(filename):
+        key = original(filename)
+        keys.append(weakref.ref(key))
+        return key
+
+    monkeypatch.setattr(ssh_keys, "load_private_key", record)
+    with publickey_peer() as peer, selected(private_key_file) as tr:
+        tr.port = peer.port
+        with pytest.raises(TrustError, match="provisioned pin") as caught:
+            tr.connect_client()
+        assert caught.value.__context__ is None
+        assert not peer.auth
+    gc.collect()
+    assert len(keys) == 1 and keys[0]() is None, "host trust failure retains the private key"
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_review_partial_auth_never_returns_client_or_uses_interactive(private_key_file, generated_ssh_keys,
+                                                                    publickey_peer, partial):
+    # A rejected key and an accepted first factor both fail without another method.
+    accepted = generated_ssh_keys[0 if partial else 1]
+    with publickey_peer(accepted=accepted, partial=partial) as peer, selected(private_key_file) as tr:
+        tr.port = peer.port
+        tr.host_key_sha256 = key_fingerprint(generated_ssh_keys[1])
+        with pytest.raises(TransportError, match="connection or authentication failed"):
+            tr.connect_client()
+        assert len(peer.auth) == 1
+        assert not peer.interactive and not peer.commands
+
+
+@pytest.mark.parametrize("algorithm", FORMATS)
+def test_review_real_loopback_supported_formats(private_key_file, algorithm, publickey_peer, generated_ssh_keys):
+    from cyberthunder.security.ssh_keys import load_private_key
+
+    raw, expected = generated_key_material(algorithm)
+    private_key_file.write_bytes(raw)
+    key = load_private_key(str(private_key_file))
+    assert f"{key.get_name()} {key.get_base64()}".encode() == expected
+    with publickey_peer(accepted=key) as peer, selected(private_key_file) as tr:
+        tr.port = peer.port
+        tr.host_key_sha256 = key_fingerprint(generated_ssh_keys[1])
+        assert tr.run("format-check").stdout == "isolated-key-ok\n"
+        assert peer.auth == [("reader", key.asbytes())]
+        assert tr._client.get_transport().auth_handler.private_key is None
+
+
+@pytest.mark.parametrize("size", [32 * 1024, 32 * 1024 + 1])
+def test_review_exact_size_boundary(private_key_file, size, monkeypatch):
+    from cyberthunder.security.ssh_keys import load_private_key
+
+    raw = private_key_file.read_bytes()
+    private_key_file.write_bytes(raw + b"\n" * (size - len(raw)))
+    if size == 32 * 1024:
+        assert load_private_key(str(private_key_file)).can_sign()
+    else:
+        rejected(private_key_file, monkeypatch)
+
+
+@pytest.mark.parametrize("failure", ["rejected", "partial", "timeout", "revoked", "deadline"])
+def test_review_failed_attempt_closes_client_and_releases_key(private_key_file, generated_ssh_keys,
+                                                             publickey_peer, monkeypatch, failure):
+    import gc
+    import weakref
+    from cyberthunder.security import ssh_keys
+
+    original, close = ssh_keys.load_private_key, paramiko.SSHClient.close
+    keys, cleaned, revoked = [], [], []
+    deadline = time.monotonic() + 30
+
+    def record(filename):
+        key = original(filename)
+        keys.append(weakref.ref(key))
+        if failure == "revoked":
+            revoked.append(True)
+        if failure == "deadline":
+            from cyberthunder.transport import ssh
+            monkeypatch.setattr(ssh, "time", SimpleNamespace(monotonic=lambda: deadline + 1))
+        return key
+
+    def guarded():
+        if revoked:
+            raise PermissionError("revoked")
+
+    def tracked_close(client):
+        remote = client.get_transport()
+        handler = getattr(remote, "auth_handler", None)
+        cleared = handler is None or handler.private_key is None
+        close(client)
+        cleaned.append(cleared and (remote is None or not remote.is_active()))
+
+    monkeypatch.setattr(ssh_keys, "load_private_key", record)
+    monkeypatch.setattr(paramiko.SSHClient, "close", tracked_close)
+    accepted = generated_ssh_keys[1 if failure == "rejected" else 0]
+    with publickey_peer(accepted=accepted, partial=failure == "partial",
+                       auth_delay=1 if failure == "timeout" else 0) as peer:
+        tr = selected(private_key_file, guard=guarded)
+        tr.port = peer.port
+        tr.host_key_sha256 = key_fingerprint(generated_ssh_keys[1])
+        expected = PermissionError if failure == "revoked" else TimeoutError if failure == "deadline" else TransportError
+        with pytest.raises(expected) as caught:
+            tr.connect_client(timeout=0.2 if failure == "timeout" else None,
+                              deadline=deadline if failure == "deadline" else None)
+        assert caught.value.__context__ is None
+        assert not peer.interactive and not peer.commands
+        if failure in {"revoked", "deadline"}:
+            assert not peer.auth
+    gc.collect()
+    assert cleaned and all(cleaned), "failed connection retained an active client or handler key"
+    assert len(keys) == 1 and keys[0]() is None, "failed connection traceback retained the key"
