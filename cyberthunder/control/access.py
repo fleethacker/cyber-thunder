@@ -7,6 +7,7 @@ import math
 import os
 import stat
 import time
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -20,6 +21,7 @@ MAX_ENTRIES = 256
 MAX_GRANTS = 2048
 MAX_ITEMS = 128
 MAX_DEPTH = 12
+MAX_PATH_PARTS = 128
 # Deliberately enumerated independently of roles: new actions require review here.
 ACTIONS = frozenset({"read", "scan", "discover", "propose", "explain", "plan", "import",
                      "approve", "deny", "cancel", "apply", "rollback", "verify", "review",
@@ -103,7 +105,77 @@ def _depth(raw):
 def _signature(info):
     # Windows Python can report different ctime meanings for path and fd stats.
     # Compare ctime only between observations obtained through the same interface.
-    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns
+    return (_node_identity(info), info.st_nlink, info.st_size, info.st_mtime_ns)
+
+
+def _node_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400),
+            getattr(info, "st_reparse_tag", 0))
+
+
+def _check_node(info, *, directory=False):
+    if (stat.S_ISLNK(info.st_mode)
+            or getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            or getattr(info, "st_reparse_tag", 0)):
+        raise ValueError("policy path redirects")
+    if directory:
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError("policy parent is not a directory")
+    elif (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+          or not 0 <= info.st_size <= MAX_POLICY_BYTES):
+        raise ValueError("invalid policy file")
+    if os.name == "posix":
+        if info.st_uid not in {0, os.geteuid()}:
+            raise ValueError("untrusted policy owner")
+        if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            # Root-owned sticky ancestors (e.g. /tmp) protect each trusted-owned
+            # child against replacement by another user. Never exempt the file.
+            if not (directory and info.st_uid == 0 and info.st_mode & stat.S_ISVTX):
+                raise ValueError("policy path is writable by other accounts")
+    # Windows st_uid/mode do not describe DACL ownership or effective permissions.
+    # Deployment must restrict write/delete/ACL rights on the file and all parents.
+
+
+def _parents(path):
+    if not path.is_absolute() or ".." in path.parts or len(path.parts) > MAX_PATH_PARTS:
+        raise ValueError("policy requires a bounded absolute path")
+    parents = []
+    # Do not resolve(): that would erase evidence of a redirected component.
+    for parent in reversed(path.parents):
+        info = parent.lstat()
+        _check_node(info, directory=True)
+        parents.append((parent, _node_identity(info)))
+    return tuple(parents)
+
+
+@contextmanager
+def _open_policy(path, parents):
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    with ExitStack() as stack:
+        if os.name == "posix":
+            # Anchor traversal to checked descriptors so swapping a pathname
+            # cannot redirect a later component between lstat and open.
+            directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
+            parent_fd = None
+            for parent, identity in parents:
+                fd = os.open(parent if parent_fd is None else parent.name, directory_flags, dir_fd=parent_fd)
+                stack.callback(os.close, fd)
+                info = os.fstat(fd)
+                _check_node(info, directory=True)
+                if _node_identity(info) != identity:
+                    raise ValueError("policy parent replaced while opening")
+                parent_fd = fd
+            fd = os.open(path.name, flags, dir_fd=parent_fd)
+        else:
+            fd = os.open(path, flags)
+        try:
+            stream = os.fdopen(fd, "rb")
+        except BaseException:
+            os.close(fd)
+            raise
+        with stream:
+            yield stream
 
 
 @dataclass(frozen=True)
@@ -208,22 +280,25 @@ class AccessPolicy:
 
     def _load(self):
         try:
+            parents = _parents(self.path)
             before = self.path.lstat()
-            if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_POLICY_BYTES:
-                raise ValueError("invalid policy file")
-            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
-            with os.fdopen(os.open(self.path, flags), "rb") as stream:
+            _check_node(before)
+            with _open_policy(self.path, parents) as stream:
                 opened = os.fstat(stream.fileno())
-                if not stat.S_ISREG(opened.st_mode) or _signature(before) != _signature(opened):
+                _check_node(opened)
+                if _signature(before) != _signature(opened):
                     raise ValueError("policy replaced while opening")
                 raw = stream.read(MAX_POLICY_BYTES + 1)
                 read = os.fstat(stream.fileno())
+                _check_node(read)
                 if (len(raw) > MAX_POLICY_BYTES or _signature(opened) != _signature(read)
                         or opened.st_ctime_ns != read.st_ctime_ns):
                     raise ValueError("policy changed while reading")
             entries = _parse(raw)
             after = self.path.lstat()
-            if _signature(opened) != _signature(after) or before.st_ctime_ns != after.st_ctime_ns:
+            _check_node(after)
+            if (_signature(opened) != _signature(after) or before.st_ctime_ns != after.st_ctime_ns
+                    or parents != _parents(self.path)):
                 raise ValueError("policy replaced during decision")
             return entries, hashlib.sha256(raw).hexdigest()
         except (OSError, ValueError, TypeError, RecursionError):

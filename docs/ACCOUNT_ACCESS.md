@@ -27,8 +27,8 @@ Integration contract (implementation in this branch):
   `look_for_keys=False`, and `interactive_auth=False`. The transport MUST honor
   this source, never reinterpret an environment reference as an existing local
   filename, and fail on missing credentials. It MUST enforce `sudo=False` on
-  execution and file-read fallback. The base transport does not yet meet all
-  these requirements; transport integration is owned separately.
+  execution and file-read fallback. The integrated SSH transport enforces these
+  declarations; the application operation guard remains independently required.
 - WinRM bindings use an explicit username and environment reference with NTLM.
   Ambient Kerberos is excluded. TLS/host trust remains an independent transport
   requirement. Kubeconfig bindings require an absolute path and explicit context;
@@ -103,8 +103,12 @@ explicitly grants all values in that resource dimension; `["*", "A"]` is invalid
 Wildcard subjects, groups, issuers and actions are invalid. Selector names cannot
 contain `*`, `?`, `[` or `]`. Empty names, control characters and surrounding
 whitespace are invalid. IDs/environments in runtime targets have the same rules.
-`in_scope` must also be exactly true. The parent supplies a fresh persisted Target;
-the policy does not refresh inventory or trust a caller-provided environment.
+`in_scope` must be an actual boolean. Out-of-scope targets cannot be scanned,
+discovered, proposed, approved, planned, applied, rolled back or verified; other
+actions still require an explicit matching grant. This preserves the parent
+checkpoint's scope predicate, including metadata visibility. The parent supplies
+a fresh persisted Target; the policy does not refresh inventory or trust a
+caller-provided environment.
 
 These action names are accepted in `node_actions` and resource `actions`:
 
@@ -192,23 +196,58 @@ entry, 2,048 grants total and 128 values per action/resource list. Text fields a
 bounded to 512 characters; credential references/paths allow 2,048. Principal
 groups are bounded to 64 and must be an array/tuple of distinct exact names.
 
-Every public decision reads a regular file through a descriptor and compares
-file identity, size and timestamps before/after reading and parsing. Symlinks,
-directories and nonregular files are denied. Replacement or modification during
-the read is denied; the next call can accept a complete new file. Windows path
-and descriptor ctime values are compared only within the same stat interface.
+Every public decision reads one regular, single-link file through a descriptor.
+The path must be absolute, have no `..` components, and contain no more than 128
+components. The loader inspects every ancestor with `lstat`, without resolving
+away links. Symlinks, Windows reparse points/tags (including junctions),
+non-directory ancestors, multiply linked files, and nonregular final files are
+denied. Descriptor checks repeat the final-file type, link count and protection
+checks. The loader compares device/inode identity, type/mode, link count,
+owner/group, relevant reparse metadata, size and modification time across the
+path and open descriptor. It checks descriptor ctime before/after the read and
+path ctime before/after parsing; Windows ctime meanings can differ between those
+interfaces. Ancestor identity and security metadata must also remain stable.
+Detected replacement or modification denies the decision; the next call can
+accept a complete new file. Directory timestamps/link counts are not identity
+checks, since unrelated sibling activity changes them.
 There is no mtime authorization cache, retry to old content, or last-good policy.
 `visible_targets` performs an independent read decision for each target; it is
 not a transactional inventory snapshot.
+
+On POSIX, the file and every ancestor must be owned by root or the process's
+effective UID. The file cannot have group- or world-write permission, including
+when a sticky bit is set. Parent directories likewise cannot be group- or
+world-writable, except root-owned sticky ancestors such as `/tmp`, where each
+subsequent component must still be trusted-owned. No exception applies to the
+policy file itself. Ordinary `0600`/`0644` policy files are accepted when the
+ownership and parent checks pass. Descriptor-relative traversal with
+`O_DIRECTORY` and `O_NOFOLLOW` anchors each component to its checked parent;
+the final open also uses `O_NOFOLLOW` and `O_NONBLOCK`. Every directory descriptor
+is closed on success or failure. This assumes a local filesystem with ordinary
+POSIX ownership/mode enforcement; it does not independently evaluate richer
+platform-specific ACL models.
+
+On Windows, mode bits and `st_uid` do **not** verify a security descriptor, DACL,
+owner SID, inherited permissions, or effective account rights. This loader checks
+file shape, link count, reparse metadata and observed identity stability; it does
+not retrieve or certify Windows ACLs. Deployment must protect the policy and
+all ancestor directories against unauthorized writes, replacement/deletion, and
+changes to permissions or ownership. Validate the effective ACL for the actual
+service identity and untrusted local accounts, including inherited entries.
+Windows ACL validation remains an external acceptance requirement; a passing
+load is not proof of restrictive ACLs or immunity to an attacker allowed to
+rewrite the path. See [Microsoft's file security and access-rights model](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)
+and [reparse-point behavior](https://learn.microsoft.com/en-us/windows/win32/fileio/reparse-points).
 
 Provision the policy and its parent directory using server OS permissions. A
 local administrator writes a complete UTF-8 JSON temporary file in the same
 directory, flushes it and atomically replaces `access.json`. Preserve restrictive
 ownership/ACLs. A truncated write, absent policy or invalid replacement denies
 all subsequent decisions until repaired. This phase exposes no ACL editing API.
-The loader is designed for a trusted local filesystem; it does not attest OS
-ownership/ACLs, protect against a host administrator modifying process memory,
-or promise atomicity with a remote operation after the decision returns.
+The loader is designed for a local filesystem; the POSIX checks above do not
+protect against the service identity or a host administrator modifying process
+memory or intentionally rewriting trusted policy. No atomicity with a remote
+operation after the decision returns is promised.
 
 The parent integration sequence is:
 
@@ -262,7 +301,7 @@ $env:PYTHONPATH = (Get-Location).Path
 python -m pytest tests/security/test_access.py tests/security/test_credential_binding.py
 ```
 
-Result: 136 passed, 1 skipped (POSIX FIFO test on Windows). These tests use fake
+Initial account-selection result: 136 passed, 1 skipped (POSIX FIFO test on Windows). These tests use fake
 verified principals and isolated files. They cover exact account/group selection,
 independent node/resource permissions, explicit visibility, unknown actions,
 wildcard boundaries, invalid schema, size/depth limits, same-mtime revocation,
@@ -437,3 +476,45 @@ live cluster was used. Existing PyYAML and cryptography runtimes are used; no
 dependency manifest or global config changes are included. Parent context,
 cluster-service and adapter wiring, Windows DACL provisioning, live TLS/RBAC
 acceptance and the full integration gate remain parent-owned.
+### Protected-file validation
+
+The file-trust follow-up is based on parent checkpoint `0749705`, retaining its
+exact `_matching` scope predicate. Only `control/access.py`, this document, and
+the new `tests/security/test_access_file_trust.py` are changed. The parent working
+tree was read but not edited.
+
+Windows Python 3.12.10 with pytest 9.2.0: **156 passed, 12 skipped** (9.20 s).
+
+```powershell
+$env:PYTHONPATH = 'C:/Users/joshu/.codex/worktrees/transport-trust/cyber-thunder'
+& 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts='' -q -rs tests/security/test_access.py tests/security/test_access_file_trust.py tests/security/test_credential_binding.py
+```
+
+The exact Windows skip reasons are:
+
+- One existing test: `requires POSIX FIFO`.
+- Eleven new cases: `requires POSIX owner/mode and descriptor-relative filesystem semantics`.
+
+Ubuntu WSL Python 3.14.4 with pytest 9.2.0: **167 passed, 1 skipped** (3.03 s).
+The pure-Python pytest installation from the shared environment was reused,
+with plugin autoload disabled; filesystem operations and temporary policies ran
+on native Linux under `/tmp`. No runtime package installation was needed.
+
+```powershell
+wsl -d Ubuntu -- env PYTHONPATH=/mnt/c/Users/joshu/.codex/worktrees/transport-trust/cyber-thunder:/mnt/c/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Lib/site-packages PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -o addopts= -q -rs -p no:cacheprovider tests/security/test_access.py tests/security/test_access_file_trust.py tests/security/test_credential_binding.py
+```
+
+The exact Linux skip reason is `requires Windows NTFS junction support` (one
+test). Windows exercised the real junction case; both platforms exercised real
+symlinks and hard links. No symlink capability skips occurred in these runs.
+
+Adversarial coverage includes file/parent/grandparent redirection, reparse-tag
+metadata even without symlink mode, a hard link added during parsing, replacement
+of a parent containing the same policy file, descriptor metadata mismatch,
+POSIX writable files/directories, an untrusted-owner metadata fixture, a
+permission change during parsing, and a real POSIX parent-to-symlink swap during
+opening with descriptor cleanup checked. Existing malformed/changed/FIFO tests
+remain in the focused commands. The owner fixture does not claim a privileged
+cross-user `chown` test, and the Windows tests do not establish DACL protection.
+Deployment ACL review, hostile privileged-writer scenarios, the complete
+application gate, and external per-user login acceptance remain separate work.
