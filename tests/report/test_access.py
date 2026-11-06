@@ -154,7 +154,7 @@ def test_each_historical_contributor_requires_export_before_render(node, policy,
     bind_inputs(node, monkeypatch)
     node.settings.auth_mode = "oidc"
     if source == "run":
-        policy.allowed.remove("sw-01")
+        policy.allowed.remove("rhel-01" if kind == "checklist" else "sw-01")
     elif source == "finding":
         load = node.store.load_findings
 

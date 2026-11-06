@@ -36,7 +36,7 @@ def attack_ids(f: Finding) -> list[str]:
     return [c for c in f.citations if RE_ATTACK.fullmatch(c)]
 
 
-def resolve_scan(ctx: "AppContext", scan_id: str | None) -> tuple[str, dict, list[Finding]]:
+def resolve_scan(ctx: "AppContext", scan_id: str | None, *, target: str | None = None) -> tuple[str, dict, list[Finding]]:
     """Return (anchor scan_id, run dict, findings), or a no-scan instruction.
 
     An omitted scan_id reads the current picture, including partial overlays. The id and run still
@@ -46,18 +46,24 @@ def resolve_scan(ctx: "AppContext", scan_id: str | None) -> tuple[str, dict, lis
     if not sid:
         raise ReportError("no scan runs on this node; run a scan first (cyberthunder scan)")
     run = ctx.store.load_scan_run(sid) or {}
-    access.scan(ctx, run)
+    access.scan(ctx, run, target=target)
     findings = ctx.store.load_findings(scan_id) if scan_id else ctx.store.load_findings()
+    if target is not None:
+        findings = [f for f in findings if f.host == target]
+        # A target view must not expose the anchor run's other hosts or totals.
+        run = {"id": sid, "targets": [target], "authorization_scopes": [
+            s for s in (run.get("authorization_scopes") or [])
+            if isinstance(s, dict) and s.get("target_id") == target]}
     access.observations(ctx, findings)
     if not run and not findings:
         raise ReportError(f"scan {sid!r} not found under {ctx.store.scans_dir}")
     return sid, run, findings
 
 
-def latest_proposals(ctx: "AppContext") -> dict[str, Proposal]:
+def latest_proposals(ctx: "AppContext", *, associations=None) -> dict[str, Proposal]:
     """Newest proposal per finding id (a finding can be re-proposed after a denial or rollback)."""
     out: dict[str, Proposal] = {}
-    for p in sorted(access.proposals(ctx), key=lambda p: p.created_at):
+    for p in sorted(access.proposals(ctx, associations=associations), key=lambda p: p.created_at):
         out[p.finding_id] = p
     return out
 

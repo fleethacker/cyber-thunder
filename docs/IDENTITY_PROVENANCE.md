@@ -127,9 +127,10 @@ commander report.
   original ownership, then pass `authorization_scopes=...` to `history.save`.
   A new save without classified ownership is intentionally refused in verified
   mode. Merely authorizing today's inventory target does not close the ID-reuse gap.
-- Target-scoped checklists currently authorize the complete selected scan and
-  proposal inputs. This is conservative and can require grants beyond the selected
-  host. There is no automatic historical-record migration.
+- Explicit-host checklists select that host before authorizing scan ownership and
+  observations. Proposals and rollback evidence are restricted to matching
+  finding/host associations. All-environment reports retain all-contributor checks.
+  There is no automatic historical-record migration.
 - Range answer-key scoring refuses unclassified key files in verified mode.
   Classified keys carry `authorization_scopes` covering their `target` and optional
   `sim_target`. Orphan rollback audit records need their own ownership scope;

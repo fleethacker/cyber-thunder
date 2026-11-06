@@ -151,7 +151,7 @@ def _synthesise(host: str, findings: list[Finding], props: dict[str, Proposal], 
 
 
 def build_checklist(ctx: "AppContext", scan_id: str | None = None, host: str | None = None) -> dict:
-    sid, _run, findings = resolve_scan(ctx, scan_id)
+    sid, _run, findings = resolve_scan(ctx, scan_id, target=host)
     hosts = sorted({f.host for f in findings})
     if host is None:
         if len(hosts) > 1:
@@ -162,8 +162,9 @@ def build_checklist(ctx: "AppContext", scan_id: str | None = None, host: str | N
     mine = [f for f in findings if f.host == host]
     if not mine:
         raise ReportError(f"no findings for host {host!r} in scan {sid}; hosts: {', '.join(hosts)}")
-    props = latest_proposals(ctx)
-    lifecycle = access.lifecycle(ctx)
+    associations = {(f.id, f.host) for f in mine}
+    props = latest_proposals(ctx, associations=associations)
+    lifecycle = access.lifecycle(ctx, associations=associations)
     found = _find_input(ctx.store.scans_dir / sid / "raw", host)
     if found:
         _path, doc = found

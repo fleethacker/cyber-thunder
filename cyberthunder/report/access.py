@@ -69,15 +69,22 @@ def visible(ctx, scopes, *, targets=None):
         return False
 
 
-def proposals(ctx):
-    items = list(ctx.gate.list())
+def proposals(ctx, *, associations=None):
+    items = [p for p in ctx.gate.list()
+             if associations is None or (p.finding_id, p.host) in associations]
     for proposal in items:
         artifact(ctx, getattr(proposal, "authorization_scope", None), targets=[proposal.host])
     return items
 
 
-def scan(ctx, run):
-    artifact(ctx, run.get("authorization_scopes"), targets=run.get("targets") or [])
+def scan(ctx, run, *, target=None):
+    scopes = run.get("authorization_scopes")
+    targets = run.get("targets") or []
+    if target is not None:
+        scopes = ([s for s in scopes if isinstance(s, dict) and s.get("target_id") == target]
+                  if isinstance(scopes, list) and target in targets else [])
+        targets = [target]
+    artifact(ctx, scopes, targets=targets)
 
 
 def audit(ctx):
@@ -85,14 +92,20 @@ def audit(ctx):
     authorize(ctx, "audit")
 
 
-def lifecycle(ctx):
+def lifecycle(ctx, *, associations=None):
     from cyberthunder.findings.current import CurrentFindings
-    if not verified_mode(ctx):
+    if not verified_mode(ctx) and associations is None:
         return CurrentFindings.for_context(ctx)
-    items = proposals(ctx)
+    items = proposals(ctx, associations=associations)
     audit(ctx)
     records = list(ctx.audit.records())
     by_id = {p.id: p for p in items}
+    if associations is not None:
+        # Keep matching orphan rollback evidence as well as selected proposals.
+        # Other targets must not contribute either facts or ownership requirements.
+        records = [r for r in records if r.get("subject") in by_id or
+                   ((r.get("details") or {}).get("finding_id"),
+                    (r.get("details") or {}).get("target_id")) in associations]
     for record in records:
         if record.get("action") not in {"remediation.rollback", "remediation.rollback_mutation"}:
             continue
