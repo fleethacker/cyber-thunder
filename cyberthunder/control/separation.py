@@ -9,12 +9,15 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 
 from cyberthunder.audit.chain import file_lock
+from cyberthunder.control.access import ApprovalIdentitySource, person_identifier
 from cyberthunder.control.identity import is_machine, normalize_actor, require_human
 from cyberthunder.control.principal import current_principal, require_current
 
 RULESET = "cat-i-two-person-v1"
+PERSON_RULESET = "cat-i-person-association-v1"
 RESERVED_FIELDS = frozenset({"proposed_by", "proposed_principal", "required_approvals",
                              "approval_requirements", "approvals"})
 PAYLOAD_FIELDS = ("id", "finding_id", "host", "title", "fix_ref", "fix_preview", "rollback_plan", "risk",
@@ -120,6 +123,84 @@ def payload_digest(proposal) -> str:
     return digest({name: getattr(proposal, name) for name in PAYLOAD_FIELDS})
 
 
+def _policy(gate) -> ApprovalIdentitySource:
+    callback = getattr(gate, "separation_policy", None)
+    if not callable(callback):
+        raise PermissionError("protected approval identity policy wiring is unavailable")
+    source = callback()
+    if (not isinstance(source, ApprovalIdentitySource) or type(source.policy_version) is not int
+            or source.policy_version not in {1, 2}):
+        raise PermissionError("protected approval identity policy is unavailable")
+    return source
+
+
+def person_bound(requirements) -> bool:
+    return (isinstance(requirements, dict) and type(requirements.get("version")) is int
+            and requirements["version"] == 2 and requirements.get("ruleset") == PERSON_RULESET)
+
+
+def _person_key(evidence, association, basis):
+    """Check a recorded association without consulting today's policy or login."""
+    account = identity(evidence, verified=True, human=True)
+    if (not isinstance(basis, dict)
+            or set(basis) != {"mode", "policy_version", "version", "namespace", "revision", "policy_sha256"}
+            or basis["mode"] != "person" or type(basis["policy_version"]) is not int or basis["policy_version"] != 2
+            or type(basis["version"]) is not int or basis["version"] != 1
+            or type(basis["revision"]) is not int or not 1 <= basis["revision"] <= 2**53 - 1
+            or not isinstance(basis["policy_sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", basis["policy_sha256"]) is None
+            or not isinstance(association, dict)
+            or set(association) != {"issuer", "subject", "person_id", "source"}
+            or (association["issuer"], association["subject"]) != account
+            or digest(association["source"]) != digest(basis)):
+        raise PermissionError("recorded person association is unavailable or inconsistent")
+    return person_identifier(basis["namespace"]), person_identifier(association["person_id"])
+
+
+def check_current_policy(gate, proposal, evidence=None):
+    """Re-read policy at an operation boundary; never used to authenticate old receipts."""
+    requirements = proposal.approval_requirements
+    if requirements["mode"] != "verified":
+        return None
+    source = _policy(gate)
+    if not person_bound(requirements):
+        if source.policy_version != 1:
+            raise PermissionError("account-only approvals cannot become person-bound; create a new proposal")
+        return None
+    if digest(source.basis) != digest(requirements["identity_basis"]):
+        raise PermissionError("person association policy changed; create a new proposal")
+    recorded = [(proposal.proposed_principal, requirements["proposer_association"])]
+    recorded.extend((v["principal"], v["person_association"]) for v in proposal.approvals)
+    for principal, association in recorded:
+        account = identity(principal, verified=True, human=True)
+        if digest(source.association(*account)) != digest(association):
+            raise PermissionError("person association changed; create a new proposal")
+    if evidence is not None:
+        return source.association(*identity(evidence, verified=True, human=True))
+    return None
+
+
+def participation(gate, proposal, evidence):
+    """Return this vote's source-bound association after excluding proposer/duplicates."""
+    requirements = proposal.approval_requirements
+    association = check_current_policy(gate, proposal, evidence)
+    if person_bound(requirements):
+        basis = requirements["identity_basis"]
+        candidate = _person_key(evidence, association, basis)
+        proposer = _person_key(proposal.proposed_principal, requirements["proposer_association"], basis)
+        seen = {_person_key(v["principal"], v["person_association"], basis) for v in proposal.approvals}
+    else:
+        verified = requirements["mode"] == "verified"
+        candidate = identity(evidence, verified=verified, human=True)
+        proposer = identity(proposal.proposed_principal, verified=verified)
+        seen = {identity(v["principal"], verified=verified, human=True) for v in proposal.approvals}
+    if candidate == proposer:
+        raise PermissionError("the proposer cannot approve their own change")
+    if candidate in seen:
+        raise PermissionError("this person or account has already approved the proposal")
+    return association
+
+
 def initialize(gate, proposal, actor: str) -> str:
     actor, evidence = actor_evidence(gate, "propose", actor)
     proposal.proposed_by, proposal.proposed_principal = actor, evidence
@@ -130,6 +211,12 @@ def initialize(gate, proposal, actor: str) -> str:
         "source": source, "required_approvals": proposal.required_approvals,
         "payload_sha256": payload_digest(proposal),
     }
+    if verified_mode(gate):
+        policy = _policy(gate)
+        if policy.policy_version == 2:
+            association = policy.association(*identity(evidence, verified=True, human=True))
+            proposal.approval_requirements.update(version=2, ruleset=PERSON_RULESET,
+                                                 identity_basis=policy.basis, proposer_association=association)
     return actor
 
 
@@ -178,37 +265,46 @@ def _validate_lifecycle(proposal, records) -> None:
             raise PermissionError("final decision differs from its audited approval")
 
 
-def validate(gate, proposal, *, quorum: bool = False) -> dict:
-    """Check the immutable creation record, current facts, and each persisted vote."""
+def validate_history(gate, proposal, *, quorum: bool = False) -> dict:
+    """Check audit-bound receipts only. This never establishes current permission or mappings."""
     requirements = proposal.approval_requirements
     if not isinstance(requirements, dict):
         raise PermissionError("legacy proposal has no separation requirements; create a new proposal")
-    verified = verified_mode(gate, proposal)
-    if requirements.get("mode") != ("verified" if verified else "unverified_dev"):
-        raise PermissionError("unverified proposal cannot become a verified decision; create a new proposal")
-    if verified and gate.authorizer is None:
-        raise PermissionError("verified approvals require target authorization wiring")
+    if requirements.get("mode") not in {"verified", "unverified_dev"}:
+        raise PermissionError("invalid recorded approval mode")
+    verified = requirements["mode"] == "verified"
     records = _audit_records(gate, proposal.id)
     creations = [r["details"].get("proposal", {}) for r in records
                  if r.get("action") == "proposal.create" and r.get("outcome") == "ok"]
-    if len(creations) != 1 or digest(creations[0].get("approval_requirements")) != digest(requirements):
+    if (len(creations) != 1 or digest(creations[0].get("approval_requirements")) != digest(requirements)
+            or any(creations[0].get(name) != getattr(proposal, name) for name in PAYLOAD_FIELDS)):
         raise PermissionError("proposal requirements differ from the creation record")
     try:
         _validate_lifecycle(proposal, records)
         source = requirements["source"]
-        if (requirements["version"] != 1 or requirements["ruleset"] != RULESET
+        bound = person_bound(requirements)
+        if (type(requirements["version"]) is not int
+                or not (bound and verified or requirements["version"] == 1 and requirements["ruleset"] == RULESET)
                 or type(proposal.required_approvals) is not int
                 or proposal.required_approvals != requirements["required_approvals"]
                 or proposal.required_approvals != required_count(source["severity"])
-                or requirements["payload_sha256"] != payload_digest(proposal)
-                or _source(gate, proposal) != source):
+                or requirements["payload_sha256"] != payload_digest(proposal)):
             raise PermissionError("proposal requirements or payload changed; create a new proposal")
         proposer = identity(proposal.proposed_principal, verified=verified)
+        if bound:
+            proposer = _person_key(proposal.proposed_principal, requirements["proposer_association"],
+                                   requirements["identity_basis"])
+        elif "identity_basis" in requirements or "proposer_association" in requirements:
+            raise PermissionError("account-only requirements cannot carry person associations")
         seen = set()
         if not isinstance(proposal.approvals, list) or len(proposal.approvals) > proposal.required_approvals:
             raise PermissionError("invalid approval count")
         for vote in proposal.approvals:
             person = identity(vote["principal"], verified=verified, human=True)
+            if bound:
+                person = _person_key(vote["principal"], vote["person_association"], requirements["identity_basis"])
+            elif "person_association" in vote:
+                raise PermissionError("account-only votes cannot carry person associations")
             if person == proposer or person in seen:
                 raise PermissionError("approvals must be distinct people other than the proposer")
             seen.add(person)
@@ -226,3 +322,17 @@ def validate(gate, proposal, *, quorum: bool = False) -> dict:
         return requirements
     except (KeyError, TypeError, ValueError):
         raise PermissionError("proposal separation evidence is incomplete or invalid") from None
+
+
+def validate(gate, proposal, *, quorum: bool = False) -> dict:
+    """Validate historical evidence, then current facts and protected association policy."""
+    requirements = validate_history(gate, proposal, quorum=quorum)
+    verified = verified_mode(gate, proposal)
+    if requirements["mode"] != ("verified" if verified else "unverified_dev"):
+        raise PermissionError("unverified proposal cannot become a verified decision; create a new proposal")
+    if verified and gate.authorizer is None:
+        raise PermissionError("verified approvals require target authorization wiring")
+    if _source(gate, proposal) != requirements["source"]:
+        raise PermissionError("proposal requirements or payload changed; create a new proposal")
+    check_current_policy(gate, proposal)
+    return requirements

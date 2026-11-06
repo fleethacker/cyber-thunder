@@ -59,6 +59,7 @@ def verified_app(state_dir, monkeypatch):
     path.chmod(0o600)
     ctx.access = AccessPolicy(path)
     ctx.gate.authorizer = ctx.authorize
+    ctx.gate.separation_policy = ctx.access.approval_identity_source
     ctx.killswitch.authorizer = ctx.authorize
     ctx.library.add(FixEntry("fixture:setting", "Test change", "linux", ["test-rule"], payload="reviewed setting"))
     proposals = {}

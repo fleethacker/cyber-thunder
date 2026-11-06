@@ -122,6 +122,7 @@ class ApprovalGate:
         self.resource_scope = None
         self.artifact_authorizer = None
         self.separation_source = None
+        self.separation_policy = None
         self.unverified_separation = unverified_separation  # Explicit local test mode, not verified identity.
         self._items: dict[str, Proposal] = {}
         self._sig: tuple[int, int] | None = None
@@ -224,7 +225,11 @@ class ApprovalGate:
             if self.resource_scope is not None:
                 p.authorization_scope = self.resource_scope(p.host)
             if protected:
-                actor = separation.initialize(self, p, actor)
+                try:
+                    actor = separation.initialize(self, p, actor)
+                except PermissionError as exc:
+                    self.audit.append("proposal.create", actor, {"reason": str(exc)}, subject=p.id, outcome="rejected")
+                    raise
                 meta = {**(meta or {}), "severity": p.approval_requirements["source"]["severity"],
                         "fix_sha256": p.approval_requirements["source"]["fix_sha256"]}
             entry = {"ts": p.created_at, "state": p.state.value, "actor": actor, "note": None}
@@ -232,6 +237,13 @@ class ApprovalGate:
             if meta:
                 entry["meta"] = dict(meta)
             p.history.append(entry)
+            if protected:
+                try:
+                    self._authorize("propose", actor, p)
+                    separation.check_current_policy(self, p)
+                except PermissionError as exc:
+                    self.audit.append("proposal.create", actor, {"reason": str(exc)}, subject=p.id, outcome="rejected")
+                    raise
             self.audit.append("proposal.create", actor, {"proposal": p.to_dict(), "meta": dict(meta or {})}, subject=p.id)
             self._save([*self._items.values(), p])
             self._items[p.id] = p
@@ -363,13 +375,7 @@ class ApprovalGate:
             if p.state != ProposalState.PROPOSED:
                 raise IllegalTransition(f"{p.state.value} -> approved not allowed for {p.id}")
             requirements = separation.validate(self, p)
-            verified = requirements["mode"] == "verified"
-            person = separation.identity(evidence, verified=verified, human=True)
-            if person == separation.identity(p.proposed_principal, verified=verified):
-                raise PermissionError("the proposer cannot approve their own change")
-            if any(person == separation.identity(v["principal"], verified=verified, human=True)
-                   for v in p.approvals):
-                raise PermissionError("this person has already approved the proposal")
+            person_association = separation.participation(self, p, evidence)
             assessment = self._assessment(p.id, assessment_id, assessment_note)
             association = separation.assessment_association(assessment)
             if p.approvals and association != separation.assessment_association(p.assessment):
@@ -381,6 +387,8 @@ class ApprovalGate:
             self._authorize("approve", actor, p)
             if separation.actor_evidence(self, "approve", actor, p)[1] != evidence:
                 raise PermissionError("approval identity changed during the decision")
+            if separation.participation(self, p, evidence) != person_association:
+                raise PermissionError("person association changed during the decision")
         except Exception as exc:
             self.audit.append("proposal.approved", actor, {"from": p.state.value,
                               "reason": str(exc) if isinstance(exc, (PermissionError, IllegalTransition))
@@ -390,6 +398,8 @@ class ApprovalGate:
                 "note": note, "requirements_sha256": separation.digest(requirements),
                 "payload_sha256": requirements["payload_sha256"], "assessment": deepcopy(assessment),
                 "assessment_sha256": separation.digest(association)}
+        if person_association is not None:
+            vote["person_association"] = deepcopy(person_association)
         q = Proposal.from_dict(p.to_dict())
         q.approvals.append(vote)
         q.assessment = deepcopy(assessment)
@@ -401,6 +411,8 @@ class ApprovalGate:
         entry = {"ts": vote["approved_at"], "state": q.state.value, "actor": actor, "note": note,
                  "principal": deepcopy(evidence), "approval_id": vote["id"],
                  "approvals_received": len(q.approvals), "required_approvals": q.required_approvals}
+        if person_association is not None:
+            entry["person_association"] = deepcopy(person_association)
         q.history.append(entry)
         self.audit.append("proposal.approved" if complete else "proposal.approval_recorded", actor,
                           {"from": p.state.value, "state": q.state.value, "approval": deepcopy(vote),
@@ -432,6 +444,8 @@ class ApprovalGate:
             separation.validate(self, p, quorum=True)
         # Revocation during receipt/source reads must stop this operation too.
         self._authorize("apply", actor, p)
+        if separation.enforced(self, p):
+            separation.check_current_policy(self, p)
 
     def validate_apply(self, pid: str, actor: str) -> None:
         """Re-read authority immediately before mutation, after before-state IO."""

@@ -220,10 +220,19 @@ export interface ApprovalAssessment {
 export interface ProposalApproval {
   id: string; actor: string; principal: RecordedPrincipalEvidence; approved_at: string; note: string | null;
   requirements_sha256: string; payload_sha256: string; assessment: ApprovalAssessment; assessment_sha256: string;
+  person_association?: PersonAssociation;
+}
+export interface PersonIdentityBasis {
+  mode: 'person'; policy_version: 2; version: 1; namespace: string; revision: number; policy_sha256: string;
+}
+export interface PersonAssociation {
+  issuer: string; subject: string; person_id: string; source: PersonIdentityBasis;
 }
 export interface ApprovalRequirements {
   version: number; ruleset: string; mode: 'verified' | 'unverified_dev'; required_approvals: number;
   payload_sha256: string; source: { severity: Severity; finding_id: string; finding_sha256: string; fix_sha256: string };
+  identity_basis?: PersonIdentityBasis;
+  proposer_association?: PersonAssociation;
 }
 
 export interface Proposal {

@@ -45,6 +45,7 @@ def browser_api(state_dir, configured, provider, monkeypatch):
     path.chmod(0o600)
     ctx.access = AccessPolicy(path)
     ctx.gate.authorizer = ctx.authorize
+    ctx.gate.separation_policy = ctx.access.approval_identity_source
     ctx.killswitch.authorizer = ctx.authorize
     proposer = Principal(ISSUER, "fixture-proposer", "Fixture proposer", kind="human", roles=("analyst",),
                          expires_at=time.time() + 300)

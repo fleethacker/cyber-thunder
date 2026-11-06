@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createModuleLoader } from '../lib/moduleTestSupport.mjs';
-import { protectedProposal, session, vote } from '../lib/approvalTestSupport.mjs';
+import { personProposal, personVote, protectedProposal, session, vote } from '../lib/approvalTestSupport.mjs';
 
 const require = createRequire(import.meta.url);
 const { MantineProvider } = require('@mantine/core');
@@ -21,7 +21,8 @@ function render(p, identity = session('reviewer-2')) {
 
 test('partial view states counts, remaining approvals and the actual proposed state', () => {
   const html = render(protectedProposal({ approvals: [vote()] }));
-  assert.match(plain(html), /1 of 2 distinct human approvals recorded/);
+  assert.match(plain(html), /1 of 2 distinct account approvals recorded/);
+  assert.match(plain(html), /Separate accounts may belong to the same person/);
   assert.match(plain(html), /1 remaining\. Server state: proposed/);
   assert.doesNotMatch(plain(html), /Server state: approved/);
   for (const value of ['Proposed by Reviewer proposer', 'Approval recorded by Reviewer reviewer-1',
@@ -33,9 +34,23 @@ test('partial view states counts, remaining approvals and the actual proposed st
 
 test('proposer and duplicate denial explanations are rendered with progress', () => {
   const p = protectedProposal({ approvals: [vote()] });
-  assert.match(plain(render(p, session('proposer'))), /You proposed this change\. Another person must approve it/);
-  assert.match(plain(render(p, session())), /Your approval is already recorded\. A different person/);
+  assert.match(plain(render(p, session('proposer'))), /You proposed this change\. Another account must approve it/);
+  assert.match(plain(render(p, session())), /Your approval is already recorded\. A different account/);
   assert.match(plain(render({ ...p, state: 'approved', approvals: [vote(), vote('reviewer-2')] })), /2 of 2.*0 remaining\. Server state: approved/);
+});
+
+test('mapped-person view retains acting account and recorded policy source without claiming current mapping', () => {
+  const p = personProposal({ approvals: [personVote(), personVote('admin-alias', 'reviewer-1')] });
+  p.approvals[0].person_association.secret = 'PRIVATE-ASSOCIATION-EXTRA';
+  const text = plain(render(p));
+  assert.match(text, /1 of 2 distinct mapped-person approvals recorded/);
+  assert.match(text, /Mapped-person quorum uses protected account associations/);
+  assert.match(text, /does not establish your person association/);
+  assert.match(text, /Recorded person association: operators\/reviewer-1/);
+  assert.match(text, /Acting account: https:\/\/identity.example \/ admin-alias/);
+  assert.ok(text.includes('a'.repeat(64)));
+  assert.ok(!text.includes('PRIVATE-ASSOCIATION-EXTRA'));
+  assert.doesNotMatch(text, /legacy proposal/);
 });
 
 test('provenance allowlists public fields and labels local decisions explicitly', () => {

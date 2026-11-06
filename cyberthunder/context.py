@@ -54,6 +54,7 @@ class AppContext:
         if self.settings.auth_mode != "dev":
             from cyberthunder.control.access import AccessPolicy
             self.access = AccessPolicy(self.store.root / "auth" / "access.json")
+            self.gate.separation_policy = self.access.approval_identity_source
             self.gate.authorizer = self.authorize
             self.killswitch.authorizer = self.authorize
         from cyberthunder.adapters import load_all

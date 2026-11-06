@@ -1,24 +1,44 @@
 import { sessionIdentity, type SessionIdentity } from '../api/identity';
-import type { Proposal, RecordedPrincipalEvidence } from '../api/types';
+import type { PersonAssociation, PersonIdentityBasis, Proposal, RecordedPrincipalEvidence } from '../api/types';
 
 const key = (issuer?: string, subject?: string) => issuer && subject ? JSON.stringify([issuer, subject]) : null;
 const recordedKey = (evidence?: RecordedPrincipalEvidence | null) => key(evidence?.iss, evidence?.sub);
+const opaque = (value?: string) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
+const validBasis = (b?: PersonIdentityBasis) => b?.mode === 'person' && b.policy_version === 2 && b.version === 1
+  && opaque(b.namespace) && Number.isSafeInteger(b.revision) && b.revision > 0
+  && typeof b.policy_sha256 === 'string' && /^[0-9a-f]{64}$/.test(b.policy_sha256);
+function mappedKey(e: RecordedPrincipalEvidence | null | undefined, a?: PersonAssociation, b?: PersonIdentityBasis) {
+  if (!validBasis(b) || !validBasis(a?.source) || !opaque(a?.person_id)
+      || !e || e.verified !== true || e.kind !== 'human' || !['oidc', 'mesh'].includes(e.via)
+      || key(a?.issuer, a?.subject) !== recordedKey(e)
+      || a?.source.namespace !== b?.namespace || a?.source.revision !== b?.revision
+      || a?.source.policy_sha256 !== b?.policy_sha256) return null;
+  return key(b?.namespace, a?.person_id);
+}
 
 /** Presentation of server records only; neither counts nor browser checks authorize a change. */
 export function approvalProgress(p: Proposal) {
   const protectedRecord = p.approval_requirements != null || p.required_approvals != null || !!p.approvals?.length;
   const mode = p.approval_requirements?.mode;
-  const required = Number.isInteger(p.required_approvals) && p.required_approvals! > 0
+  const r = p.approval_requirements;
+  const basis = r?.version === 2 && r.ruleset === 'cat-i-person-association-v1' && mode === 'verified'
+    && validBasis(r.identity_basis) ? 'person'
+    : r?.version === 1 && r.ruleset === 'cat-i-two-person-v1' && !r.identity_basis && !r.proposer_association
+      ? mode === 'unverified_dev' ? 'local' : mode === 'verified' ? 'account' : 'unavailable' : 'unavailable';
+  const proposer = basis === 'person' ? mappedKey(p.proposed_principal, r?.proposer_association, r?.identity_basis)
+    : recordedKey(p.proposed_principal);
+  const required = basis !== 'unavailable' && proposer && Number.isInteger(p.required_approvals) && p.required_approvals! > 0
     && p.required_approvals === p.approval_requirements?.required_approvals ? p.required_approvals! : null;
   const people = new Set<string>();
   for (const vote of p.approvals ?? []) {
-    const e = vote.principal, person = recordedKey(e);
+    const e = vote.principal, person = basis === 'person' ? mappedKey(e, vote.person_association, r?.identity_basis)
+      : vote.person_association ? null : recordedKey(e);
     const qualified = mode === 'verified' ? e?.verified === true && e.kind === 'human' && ['oidc', 'mesh'].includes(e.via)
       : mode === 'unverified_dev' && e?.verified === false && e.via === 'dev';
-    if (qualified && person && person !== recordedKey(p.proposed_principal) && !vote.actor?.startsWith('policy:')) people.add(person);
+    if (required && qualified && person && person !== proposer && !vote.actor?.startsWith('policy:')) people.add(person);
   }
   return { protected: protectedRecord, required, collected: people.size,
-    remaining: required === null ? null : Math.max(0, required - people.size), mode };
+    remaining: required === null ? null : Math.max(0, required - people.size), mode, basis };
 }
 
 export function approvalBlockReason(p: Proposal, actor = '', identity: SessionIdentity | null = sessionIdentity()): string | null {
@@ -40,9 +60,10 @@ export function approvalBlockReason(p: Proposal, actor = '', identity: SessionId
     if (identity && identity.mode !== 'dev') return 'An unverified development proposal cannot become a verified approval. Create a new proposal.';
     person = key('local-development', actor.trim().toLowerCase());
   }
-  if (person && person === recordedKey(p.proposed_principal)) return 'You proposed this change. Another person must approve it.';
+  const reviewer = progress.basis === 'person' ? 'mapped person' : 'account';
+  if (person && person === recordedKey(p.proposed_principal)) return `You proposed this change. Another ${reviewer} must approve it.`;
   if (person && p.approvals?.some(vote => recordedKey(vote.principal) === person)) {
-    return 'Your approval is already recorded. A different person must provide any remaining approval.';
+    return `Your approval is already recorded. A different ${reviewer} must provide any remaining approval.`;
   }
   if (progress.remaining === 0) return 'The recorded count is complete, but the server still reports proposed. Refresh before deciding.';
   return null;

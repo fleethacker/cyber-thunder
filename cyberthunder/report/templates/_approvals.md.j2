@@ -7,12 +7,14 @@
 
 Proposer: {{ p.proposer_identity.text | md_cell }}
 
+{{ p.proposer_association_text | md_cell }}
+
 {{ p.validation_text }}. {{ p.limitation }}
 
 | Receipt | Recorded reviewer | Approved at | Note |
 |---|---|---|---|
 {% for vote in p.approval_identities %}
-| {{ (vote.id or "Not recorded") | md_cell }} | {{ vote.identity.text | md_cell }} | {{ (vote.approved_at or "Not recorded") | md_cell }} | {{ (vote.note or "—") | md_cell }} |
+| {{ (vote.id or "Not recorded") | md_cell }} | {{ vote.identity.text | md_cell }}; {{ vote.association_text | md_cell }} | {{ (vote.approved_at or "Not recorded") | md_cell }} | {{ (vote.note or "—") | md_cell }} |
 {% else %}
 | — | {{ p.approver_text | md_cell }} | — | — |
 {% endfor %}

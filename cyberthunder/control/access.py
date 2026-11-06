@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import stat
 import time
 from contextlib import ExitStack, contextmanager
@@ -203,27 +204,88 @@ class _Entry:
     selector: str
     node_actions: tuple[str, ...]
     grants: tuple[_Grant, ...]
+    person_id: str | None = None
 
     @property
     def identity(self):
         return self.issuer, self.kind, self.selector
 
 
+def person_identifier(value):
+    """An opaque policy identifier, never a name, email or identity claim."""
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value) is None:
+        raise ValueError("invalid person association identifier")
+    return value
+
+
+@dataclass(frozen=True)
+class ApprovalIdentitySource:
+    """One protected file observation; associations confer no account permissions."""
+
+    policy_version: int
+    policy_sha256: str
+    namespace: str | None = None
+    revision: int | None = None
+    mappings: tuple[tuple[str, str, str], ...] = ()
+
+    @property
+    def basis(self):
+        if self.policy_version == 1:
+            return {"mode": "account", "policy_version": 1}
+        return {"mode": "person", "policy_version": 2, "version": 1,
+                "namespace": self.namespace, "revision": self.revision,
+                "policy_sha256": self.policy_sha256}
+
+    def association(self, issuer, subject):
+        matches = [person for iss, sub, person in self.mappings if (iss, sub) == (issuer, subject)]
+        if self.policy_version != 2 or len(matches) != 1:
+            raise AccessDenied("an exact protected person association is required")
+        return {"issuer": issuer, "subject": subject, "person_id": matches[0], "source": self.basis}
+
+
+@dataclass(frozen=True)
+class _Policy:
+    entries: tuple[_Entry, ...]
+    version: int
+    namespace: str | None
+    revision: int | None
+
+
 def _parse(raw):
     _depth(raw)
     document = json.loads(raw.decode("utf-8"), object_pairs_hook=_object, parse_constant=_constant)
-    _fields(document, {"version", "entries"})
-    if type(document["version"]) is not int or document["version"] != 1:
+    _fields(document, {"version", "entries"}, {"approval_identity"})
+    version = document["version"]
+    if type(version) is not int or version not in {1, 2}:
         raise ValueError("unsupported policy version")
+    namespace = revision = None
+    if version == 1:
+        if "approval_identity" in document:
+            raise ValueError("person association requires policy version 2")
+    else:
+        config = document.get("approval_identity")
+        _fields(config, {"mode", "version", "namespace", "revision"})
+        if config["mode"] != "person" or type(config["version"]) is not int or config["version"] != 1:
+            raise ValueError("unsupported person association mode")
+        namespace = person_identifier(config["namespace"])
+        revision = config["revision"]
+        if type(revision) is not int or not 1 <= revision <= 2**53 - 1:
+            raise ValueError("invalid person association revision")
     rows = document["entries"]
     if not isinstance(rows, list) or len(rows) > MAX_ENTRIES:
         raise ValueError("invalid policy entries")
     entries, selectors, total = [], set(), 0
     for row in rows:
-        _fields(row, {"issuer", "node_actions", "grants"}, {"subject", "group"})
+        _fields(row, {"issuer", "node_actions", "grants"},
+                {"subject", "group", "person_id"} if version == 2 else {"subject", "group"})
         if ("subject" in row) == ("group" in row):
             raise ValueError("one account selector is required")
         kind = "subject" if "subject" in row else "group"
+        person_id = None
+        if "person_id" in row:
+            if kind != "subject":
+                raise ValueError("groups cannot identify a person")
+            person_id = person_identifier(row["person_id"])
         issuer, selector = _text(row["issuer"]), _identifier(row[kind])
         if "*" in issuer:
             raise ValueError("issuer must be exact")
@@ -258,8 +320,8 @@ def _parse(raw):
                 _fields(c, {"username", "credential_ref", "sudo", "options"})
                 credential = CredentialBinding(**c)
             grants.append(_Grant(actions, targets, environments, credential))
-        entries.append(_Entry(issuer, kind, selector, node_actions, tuple(grants)))
-    return tuple(entries)
+        entries.append(_Entry(issuer, kind, selector, node_actions, tuple(grants), person_id))
+    return _Policy(tuple(entries), version, namespace, revision)
 
 
 def _principal(principal):
@@ -285,7 +347,7 @@ class AccessPolicy:
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
-    def _load(self):
+    def _read(self):
         try:
             parents = _parents(self.path)
             before = self.path.lstat()
@@ -301,15 +363,25 @@ class AccessPolicy:
                 if (len(raw) > MAX_POLICY_BYTES or _signature(opened) != _signature(read)
                         or opened.st_ctime_ns != read.st_ctime_ns):
                     raise ValueError("policy changed while reading")
-                entries = _parse(raw)
+                policy = _parse(raw)
                 after = self.path.lstat()
                 _check_node(after)
                 if (_signature(opened) != _signature(after) or before.st_ctime_ns != after.st_ctime_ns
                         or parents != _parents(self.path)):
                     raise ValueError("policy replaced during decision")
-                return entries, hashlib.sha256(raw).hexdigest()
+                return policy, hashlib.sha256(raw).hexdigest()
         except (OSError, ValueError, TypeError, RecursionError):
             raise AccessDenied("access policy is unavailable or invalid") from None
+
+    def _load(self):
+        policy, digest = self._read()
+        return policy.entries, digest
+
+    def approval_identity_source(self) -> ApprovalIdentitySource:
+        policy, digest = self._read()
+        return ApprovalIdentitySource(policy.version, digest, policy.namespace, policy.revision,
+                                      tuple((e.issuer, e.selector, e.person_id) for e in policy.entries
+                                            if e.kind == "subject" and e.person_id is not None))
 
     def _matching(self, principal, action, target):
         entries, digest = self._load()

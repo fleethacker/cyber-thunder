@@ -18,6 +18,18 @@ export const protectedProposal = (changes = {}) => ({ ...proposal('proposed', 'c
     payload_sha256: 'payload-digest', source: { severity: 'high', finding_id: 'finding',
       finding_sha256: 'finding-digest', fix_sha256: 'fix-digest' } }, approvals: [], ...changes });
 
+export const personBasis = () => ({ mode: 'person', policy_version: 2, version: 1,
+  namespace: 'operators', revision: 1, policy_sha256: 'a'.repeat(64) });
+export const association = (subject, id = subject) => ({ issuer: principal(subject).iss, subject,
+  person_id: id, source: personBasis() });
+export const personVote = (subject = 'reviewer-1', id = subject) => vote(subject, { person_association: association(subject, id) });
+export const personProposal = (changes = {}) => {
+  const p = protectedProposal();
+  Object.assign(p.approval_requirements, { version: 2, ruleset: 'cat-i-person-association-v1',
+    identity_basis: personBasis(), proposer_association: association('proposer') });
+  return { ...p, ...changes };
+};
+
 export function approvalFixture(identity = null) {
   const load = createModuleLoader();
   load(new URL('../api/identity.ts', import.meta.url)).setSessionIdentity(identity);

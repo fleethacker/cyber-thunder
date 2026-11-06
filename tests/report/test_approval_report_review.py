@@ -100,6 +100,11 @@ def test_disputed_receipts_never_become_validated_identity_from_metadata(account
     assert result["approvals"] == proposal.approvals
     assert result["validation"]["status"] == "not_established"
     assert not result["quorum_evidence_checked"]
+    if change == "source":
+        assert result["historical_validation"]["status"] == "checked"
+        assert result["historical_quorum_evidence_checked"]
+        assert all(vote["identity"]["verified"] for vote in result["approval_identities"])
+        return  # Today's fix cannot relabel an intact audited decision as a forged identity.
     assert not result["proposer_identity"]["verified"]
     assert all(not vote["identity"]["verified"] for vote in result["approval_identities"])
     assert "Verified at decision" not in result["text"]
