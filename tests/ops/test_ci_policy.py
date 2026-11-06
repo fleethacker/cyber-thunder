@@ -209,6 +209,8 @@ def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     native_review = {node: reason for node, reason in linux.items()
                      if node.startswith("tests/security/test_windows_file_trust_review.py::")}
     assert len(native_review) == 17
+    assert all(node.count("::") == 1 for node in native_acl | native_review)
+    assert "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[parent-2]" in native_acl
     assert set(native_review.values()) == {"native Windows security descriptors and file sharing"}
     assert not any(node.startswith("tests/security/test_windows_file_trust_review.py::") for node in windows)
     assert sum(reason == UDS_REASON for reason in linux.values()) == len(UDS_TESTS) == 19
