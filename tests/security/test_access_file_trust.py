@@ -26,7 +26,8 @@ def principal():
 def policy_file(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": 1, "entries": [{"issuer": "https://id.example", "subject": "alice",
-                    "node_actions": ["read"], "grants": [{"actions": sorted(access.ACTIONS), "target_ids": ["host-a"]}]}]}),
+                    "node_actions": ["read"], "grants": [{"actions": sorted(access.ACTIONS - access.NODE_ONLY_ACTIONS),
+                                                           "target_ids": ["host-a"]}]}]}),
                     encoding="utf-8")
     if os.name == "posix":
         path.chmod(0o600)
@@ -57,11 +58,53 @@ def test_trusted_file_content_digest_and_scope_predicate_preserved(tmp_path):
     assert entries and digest == hashlib.sha256(policy.path.read_bytes()).hexdigest()
     target = SimpleNamespace(id="host-a", environment="default", in_scope=False)
     restricted = {"scan", "discover", "propose", "approve", "plan", "apply", "rollback", "verify"}
-    for action in access.ACTIONS:
+    for action in access.ACTIONS - access.NODE_ONLY_ACTIONS:
         assert policy.allows(principal(), action, target) is (action not in restricted)
     for flag in (None, 0, 1, "false"):
         target.in_scope = flag
         assert not policy.allows(principal(), "read", target)
+
+
+@pytest.mark.parametrize("node_action", ["read", "read.all"])
+def test_global_history_requires_its_exact_node_action(tmp_path, node_action):
+    policy = policy_file(tmp_path / "access.json")
+    document = json.loads(policy.path.read_text())
+    document["entries"][0].update(node_actions=[node_action], grants=[])
+    policy.path.write_text(json.dumps(document))
+    assert policy.allows(principal(), node_action)
+    other = "read.all" if node_action == "read" else "read"
+    assert not policy.allows(principal(), other)
+    target = SimpleNamespace(id="host-a", environment="A", in_scope=True)
+    for action in ("read", "read.all", "export"):
+        assert not policy.allows(principal(), action, target)
+    assert not policy.allows(principal(), "export")
+
+
+@pytest.mark.parametrize("actions", [["read.all"], ["read", "read.all"]])
+def test_read_all_in_resource_grant_invalidates_policy(tmp_path, actions):
+    policy = policy_file(tmp_path / "access.json")
+    document = json.loads(policy.path.read_text())
+    document["entries"][0]["grants"].append({"actions": actions, "environments": ["*"]})
+    policy.path.write_text(json.dumps(document))
+    rejected(policy)
+
+
+def test_read_all_does_not_expand_targeted_read_or_export(tmp_path):
+    policy = policy_file(tmp_path / "access.json")
+    document = json.loads(policy.path.read_text())
+    document["entries"][0].update(node_actions=["read.all"], grants=[
+        {"actions": ["read", "export"], "target_ids": ["host-a"], "environments": ["A"]}])
+    policy.path.write_text(json.dumps(document))
+    assert policy.allows(principal(), "read.all")
+    a = SimpleNamespace(id="host-a", environment="A", in_scope=True)
+    b = SimpleNamespace(id="host-b", environment="B", in_scope=True)
+    moved = SimpleNamespace(id="host-a", environment="B", in_scope=True)
+    for action in ("read", "export"):
+        assert policy.allows(principal(), action, a)
+        assert not policy.allows(principal(), action, b)
+        assert not policy.allows(principal(), action, moved)
+    assert not policy.allows(principal(), "read.all", a)
+    assert policy.visible_targets(principal(), [a, b, moved]) == [a]
 
 
 @pytest.mark.parametrize("kind", ["relative", "traversal"])

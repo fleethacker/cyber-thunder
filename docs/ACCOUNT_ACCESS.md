@@ -110,10 +110,10 @@ checkpoint's scope predicate, including metadata visibility. The parent supplies
 a fresh persisted Target; the policy does not refresh inventory or trust a
 caller-provided environment.
 
-These action names are accepted in `node_actions` and resource `actions`:
+These action names are accepted; `read.all` is allowed only in `node_actions`:
 
 ```text
-read scan discover propose explain plan import approve deny cancel apply
+read read.all scan discover propose explain plan import approve deny cancel apply
 rollback verify review admin policy audit export kill.engage kill.release
 ```
 
@@ -124,6 +124,18 @@ permission, and a node grant never confers target permission. Listing a target
 requires `read` on that target; `scan` or `approve` alone does not imply visibility.
 An `admin` role does not bypass any resource or account grant. The policy itself
 does not enforce roles; the parent must intersect both decisions.
+
+`read.all` is an explicit global grant for unfiltered node-wide history and
+metadata that may span environments, including historical records outside the
+principal's current target visibility. Grant it only through
+`"node_actions": ["read.all"]`; it is evaluated with `target=None`. A resource
+grant containing `read.all` invalidates the entire policy, including when mixed
+with valid actions or an environment wildcard. Ordinary node `read` does not
+imply `read.all`, and `read.all` does not imply ordinary node `read`, node
+`export`, or any per-target permission. Targeted `read` and `export` still require
+their exact matching resource grants. Target listing remains filtered by
+per-target `read`. The parent owns role intersections and which unfiltered API
+routes require this action; this policy addition does not change API routing.
 
 Unknown/missing fields, wrong types, duplicate JSON keys, duplicate list values,
 duplicate `(issuer, selector kind, selector value)` entries and duplicate grants
@@ -518,3 +530,13 @@ remain in the focused commands. The owner fixture does not claim a privileged
 cross-user `chown` test, and the Windows tests do not establish DACL protection.
 Deployment ACL review, hostile privileged-writer scenarios, the complete
 application gate, and external per-user login acceptance remain separate work.
+
+The subsequent `read.all` addition passed the same three-suite Windows command:
+**161 passed, 12 skipped** (4.78 s), with the unchanged platform skip reasons
+above. Focused Linux checks for exact node-action separation, invalid resource
+grants, targeted read/export preservation, and the retained scope predicate
+passed **6 tests** (30 deselected, 1.63 s):
+
+```powershell
+wsl -d Ubuntu -- env PYTHONPATH=/mnt/c/Users/joshu/.codex/worktrees/transport-trust/cyber-thunder:/mnt/c/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Lib/site-packages PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -o addopts= -q -rs -p no:cacheprovider tests/security/test_access_file_trust.py -k 'global_history or read_all or trusted_file_content'
+```

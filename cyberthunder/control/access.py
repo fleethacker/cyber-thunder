@@ -23,9 +23,10 @@ MAX_ITEMS = 128
 MAX_DEPTH = 12
 MAX_PATH_PARTS = 128
 # Deliberately enumerated independently of roles: new actions require review here.
-ACTIONS = frozenset({"read", "scan", "discover", "propose", "explain", "plan", "import",
+ACTIONS = frozenset({"read", "read.all", "scan", "discover", "propose", "explain", "plan", "import",
                      "approve", "deny", "cancel", "apply", "rollback", "verify", "review",
                      "admin", "policy", "audit", "export", "kill.engage", "kill.release"})
+NODE_ONLY_ACTIONS = frozenset({"read.all"})
 
 
 class AccessDenied(PermissionError):
@@ -239,6 +240,8 @@ def _parse(raw):
             if "target_ids" not in g and "environments" not in g:
                 raise ValueError("resource selector is required")
             actions = _strings(g["actions"], actions=True)
+            if NODE_ONLY_ACTIONS.intersection(actions):
+                raise ValueError("node-only actions cannot appear in resource grants")
             targets = _strings(g["target_ids"], scope=True) if "target_ids" in g else None
             environments = _strings(g["environments"], scope=True) if "environments" in g else None
             signature = actions, targets, environments
