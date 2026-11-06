@@ -8,6 +8,13 @@ from cyberthunder.client.store import TokenStore
 from tests.security.test_oidc import certificates, signing_keys
 
 
+@pytest.fixture(autouse=True)
+def no_actual_user_token_store(monkeypatch):
+    def forbidden():
+        pytest.fail("client tests must select an isolated token store")
+    monkeypatch.setattr("cyberthunder.client.store.user_root", forbidden)
+
+
 @pytest.fixture
 def profile_factory(tmp_path):
     def make(origin="https://identity.example.test", **changes):

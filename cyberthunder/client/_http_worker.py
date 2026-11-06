@@ -26,7 +26,7 @@ def main():
         raise ValueError()
     request = json.loads(raw)
     target = urlsplit(request["url"])
-    if (target.scheme != "https" or not target.hostname or target.username or target.password
+    if (target.scheme != "https" or not target.hostname or target.username is not None or target.password is not None
             or target.fragment or request["method"] not in {"GET", "POST"}):
         raise ValueError()
     context = ssl.create_default_context()

@@ -3,7 +3,7 @@ import time
 import pytest
 
 from cyberthunder.client.errors import ClientError
-from cyberthunder.client.http import Transport, require_api
+from cyberthunder.client.http import TIMEOUT, Transport, require_api
 from tests.security.test_oidc import https_server
 
 
@@ -75,7 +75,9 @@ def test_real_connection_timeout_remains_poll_backoff_signal(profile_factory):
             started = time.monotonic()
             with pytest.raises(ClientError, match="request_timeout"):
                 Transport(profile).request("token_endpoint", payload={"client_id": "fixture"})
-            assert time.monotonic() - started < 6
+            # The isolated worker includes interpreter/TLS startup before its
+            # three-second socket timer; enforce the parent request deadline.
+            assert time.monotonic() - started < TIMEOUT + 2
         finally:
             stopped.set()
             worker.join(timeout=6)

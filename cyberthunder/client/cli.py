@@ -64,9 +64,11 @@ def cmd_client(args):
         return 2
 
 
+def argument_error(_message):
+    raise ClientError("invalid_client_arguments")
+
+
 def register_cli(subparsers):
-    def argument_error(_message):
-        raise ClientError("invalid_client_arguments")
     auth = subparsers.add_parser("auth", help="human device login, online status and local/provider logout")
     auth.error = argument_error
     auth.add_argument("--profile", required=True, help="absolute protected non-secret client profile")

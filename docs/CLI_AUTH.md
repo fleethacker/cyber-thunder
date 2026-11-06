@@ -114,7 +114,13 @@ An interprocess lock serializes refresh and API use. Refresh tokens must rotate;
 a missing, reused or uncertain rotated token clears the local session. A persisted
 refresh-in-progress marker prevents replay after a crash. Atomic publication,
 flushes and logout generations prevent a concurrent login from restoring a cleared
-session. Crash recovery does not promise secure erasure of disk remnants or provider
+session. Pending login checks that generation before each device-token redemption,
+holding the store lock through the bounded request, API identity check and local
+publication. Polling waits release the lock. A completed logout prevents further
+redemption by that pending login. If another request holds the lock for more than
+five seconds, logout returns a busy error; it has not cleared the session and must
+be retried explicitly. An already issued device grant is not remotely cancelled by
+this local tombstone. Crash recovery does not promise secure erasure of disk remnants or provider
 revocation of a token issued just before a crash. See
 [public-client refresh protections](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14).
 
@@ -159,7 +165,11 @@ be valid and bound to the proposal. See [Separation of duties](SEPARATION_OF_DUT
 
 All results use JSON stdout. Error messages omit provider descriptions, exception
 text and echoed credentials while retaining safe HTTP status and bounded step-up
-challenges. No mutating request is automatically retried after an ambiguous failure.
+challenges. Known bearer strings are also redacted from challenge values; arbitrary
+encoded or split representations from a malicious configured server are not a
+general data-loss-prevention guarantee. Malformed options before `auth` or `api`
+use the same safe error response as their subcommands. No mutating request is
+automatically retried after an ambiguous failure.
 
 | Exit | Meaning |
 | --- | --- |

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 
 class ClientError(Exception):
@@ -50,6 +51,11 @@ def decode(raw: bytes, maximum=65536):
         return result
     def constant(_):
         raise ValueError()
+    def number(value):
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError()
+        return parsed
     try:
         depth = 0
         quoted = escape = False
@@ -69,7 +75,7 @@ def decode(raw: bytes, maximum=65536):
                     raise ValueError()
             elif char in (93, 125):
                 depth -= 1
-        result = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
+        result = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant, parse_float=number)
         if not isinstance(result, dict):
             raise ValueError()
         return result

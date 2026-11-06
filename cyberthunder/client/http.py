@@ -11,7 +11,7 @@ import subprocess
 import sys
 from urllib.parse import urlencode
 
-from .errors import ClientError, decode
+from .errors import ClientError, decode, redact
 
 TIMEOUT = 10
 _ROUTE = re.compile(r"/(?:whoami|targets|findings(?:/[A-Za-z0-9_-]{1,128})?|scans(?:/[A-Za-z0-9_-]{1,128})?|proposals(?:/[A-Za-z0-9_-]{1,128}(?:/(?:plan|impact|approve|deny|cancel|review-impact|apply|verify|rollback))?)?)\Z")
@@ -70,7 +70,7 @@ class Transport:
             raise ClientError("https_request_failed", outcome=4, source=kind) from None
 
 
-def require_api(response):
+def require_api(response, *, credentials=()):
     if 200 <= response.status < 300:
         return response.body
     code = {400: "invalid_request", 401: "authentication_required", 403: "forbidden", 404: "not_found",
@@ -88,4 +88,5 @@ def require_api(response):
             code = "insufficient_user_authentication"
         except (TypeError, ValueError, KeyError):
             raise ClientError("api_response_invalid") from None
-    raise ClientError(code, outcome=3, source="api", status=response.status, challenge=challenge)
+    raise ClientError(code, outcome=3, source="api", status=response.status,
+                      challenge=redact(challenge, *credentials))

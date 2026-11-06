@@ -19,7 +19,7 @@ def endpoint(value):
                 or " " in value):
             raise ValueError()
         parsed = urlsplit(value)
-        if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None or parsed.password is not None
                 or parsed.port == 0 or any(p in {".", "..", ""} for p in parsed.path.split('/')[1:])):
             raise ValueError()
         try:

@@ -34,7 +34,8 @@ class ClientAuth:
         return self._wall
 
     def _identity(self, access, *, timeout=10):
-        value = require_api(self.http.request("api", method="GET", route="/whoami", credential=access, timeout=timeout))
+        value = require_api(self.http.request("api", method="GET", route="/whoami", credential=access, timeout=timeout),
+                            credentials=(access,))
         p = value.get("principal")
         if (value.get("mode") not in {"oidc", "mesh"} or value.get("verified") is not True or not isinstance(p, dict)
                 or p.get("verified") is not True or p.get("kind") != "human" or p.get("via") not in {"oidc", "mesh"}
@@ -97,6 +98,13 @@ class ClientAuth:
             raise ClientError("client_store_invalid")
         return session
 
+    def _pending(self, generation):
+        # The caller holds the same lock used by logout and publication.
+        record = self.store.load()
+        if record["generation"] != generation or record["phase"] != "empty":
+            raise ClientError("login_cancelled", outcome=3)
+        return record
+
     def login(self, display):
         with self.store.locked():
             record = self.store.load()
@@ -106,8 +114,8 @@ class ClientAuth:
             record["observed_at"] = self.now(record)
             self.store.save(record)
             generation = record["generation"]
-        begun = time.monotonic()
-        response = self.http.request("device_authorization_endpoint", payload={"client_id": self.profile["client_id"], "scope": self.profile["scope"]})
+            begun = time.monotonic()
+            response = self.http.request("device_authorization_endpoint", payload={"client_id": self.profile["client_id"], "scope": self.profile["scope"]})
         data = response.body
         interval, expires = data.get("interval", 5), data.get("expires_in")
         if (response.status != 200 or "error" in data or not secret(data.get("device_code"), 8192)
@@ -119,6 +127,8 @@ class ClientAuth:
         deadline = begun + min(expires, 900)
         display(self.profile["verification_uri"], data["user_code"])
         while True:
+            with self.store.locked():
+                self._pending(generation)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ClientError("authorization_expired", outcome=4, source="idp")
@@ -126,29 +136,32 @@ class ClientAuth:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ClientError("authorization_expired", outcome=4, source="idp")
-            try:
-                response = self.http.request("token_endpoint", payload={"grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                    "device_code": data["device_code"], "client_id": self.profile["client_id"]}, timeout=remaining)
-            except ClientError as error:
-                if error.code != "request_timeout":
-                    raise
-                interval *= 2
-                continue
-            error = response.body.get("error")
-            if response.status == 400 and isinstance(error, str) and error in {"authorization_pending", "slow_down"}:
-                if error == "slow_down":
-                    interval += 5
-                continue
-            if response.status != 200 or error is not None:
-                code = error if isinstance(error, str) and error in {"access_denied", "expired_token"} else "authorization_failed"
-                raise ClientError(code, outcome=3, source="idp", status=response.status)
-            session = self._tokens(response, deadline=deadline)
-            if time.monotonic() >= deadline:
-                raise ClientError("authorization_expired", outcome=4, source="idp")
             with self.store.locked():
-                current = self.store.load()
-                if current["generation"] != generation or current["phase"] != "empty":
-                    raise ClientError("login_cancelled", outcome=3)
+                current = self._pending(generation)
+                # Serialize each bounded redemption and identity check with logout.
+                # Waiting between polls never holds the lock.
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ClientError("authorization_expired", outcome=4, source="idp")
+                try:
+                    response = self.http.request("token_endpoint", payload={"grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                        "device_code": data["device_code"], "client_id": self.profile["client_id"]}, timeout=remaining)
+                except ClientError as error:
+                    if error.code != "request_timeout":
+                        raise
+                    interval *= 2
+                    continue
+                error = response.body.get("error")
+                if response.status == 400 and isinstance(error, str) and error in {"authorization_pending", "slow_down"}:
+                    if error == "slow_down":
+                        interval += 5
+                    continue
+                if response.status != 200 or error is not None:
+                    code = error if isinstance(error, str) and error in {"access_denied", "expired_token"} else "authorization_failed"
+                    raise ClientError(code, outcome=3, source="idp", status=response.status)
+                session = self._tokens(response, deadline=deadline)
+                if time.monotonic() >= deadline:
+                    raise ClientError("authorization_expired", outcome=4, source="idp")
                 current.update(phase="ready", session=session, observed_at=self.now(current))
                 self.store.save(current)
             return redact({"status": "authenticated", "identity": session["identity"], "expires_at": session["expires_at"]},

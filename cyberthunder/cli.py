@@ -191,17 +191,25 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     from cyberthunder.client.errors import ClientError
+    from cyberthunder.client.cli import argument_error, cmd_client
+    raw = sys.argv[1:] if argv is None else argv
+    original_error = parser.error
+    # A malformed global option can fail before argparse selects the remote
+    # subparser. Sanitize that error as well; handler selection and guards below
+    # still depend exclusively on the parsed command.
+    if any(arg in {"auth", "api"} for arg in raw):
+        parser.error = argument_error
     try:
-        a, extra = parser.parse_known_args(argv)
+        a, extra = parser.parse_known_args(raw)
     except ClientError as error:
         print(json.dumps(error.public()))
         return error.outcome
-    from cyberthunder.client.cli import cmd_client
+    finally:
+        parser.error = original_error
     if a.fn is cmd_client:
         if extra:
             print(json.dumps({"error": "invalid_client_arguments", "source": "client"}))
             return 2
-        raw = sys.argv[1:] if argv is None else argv
         if any(arg.startswith("--") and "--actor".startswith(arg.split("=", 1)[0]) for arg in raw):
             print(json.dumps({"error": "typed_actor_not_supported", "source": "client"}))
             return 2

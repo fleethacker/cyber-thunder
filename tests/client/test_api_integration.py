@@ -164,10 +164,21 @@ def test_signed_device_identity_scope_and_accepted_scan(integrated):
         auth.store.save(record)
     def read_targets(_):
         other = ClientAuth(auth.profile, store=TokenStore(auth.profile.digest, root=auth.store.root))
-        return perform(other, args("targets", "list"))
+        try:
+            return perform(other, args("targets", "list"))
+        except ClientError as error:
+            if error.code != "client_store_busy":
+                raise
+            return None
     before = state.counter
     with ThreadPoolExecutor(max_workers=2) as pool:
         reads = list(pool.map(read_targets, range(2)))
+    assert state.counter == before+1 and any(item is not None for item in reads)
+    # Three bounded HTTPS requests during refresh may exceed the store's
+    # five-second contention limit. After both callers finish, explicitly issue
+    # a new read for a busy caller; production commands never retry themselves.
+    reads = [item if item is not None else read_targets(None) for item in reads]
+    assert all(item is not None for item in reads)
     assert state.counter == before+1 and all(code == 0 for _, code in reads)
     result, code = perform(auth, args("targets", "list"))
     assert code == 0 and [t["id"] for t in result["result"]["targets"]] == ["alpha"]

@@ -77,7 +77,7 @@ def perform(auth, args, note=None):
     method, route, query, body = command(args, note)
     with auth.access() as access:
         response = auth.http.request("api", method=method, route=route, query=query, payload=body, credential=access)
-        result = require_api(response)
+        result = require_api(response, credentials=(access,))
         # Do not export a bearer credential even if a response reflects it.
         result = redact(result, access)
     pending = response.status == 202 or (args.group == "decisions" and args.operation == "approve" and result.get("state") == "proposed")
