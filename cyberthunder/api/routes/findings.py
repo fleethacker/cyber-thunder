@@ -8,8 +8,18 @@ from cyberthunder.api.errors import MappedRoute, feature
 from cyberthunder.api.schemas import ExplainBatchBody, ExplainBody
 from cyberthunder.api.util import ActorDep, CtxDep, finding_plus, proposal_plus, to_plain
 from cyberthunder.findings.reassessment import ReassessmentView
+from cyberthunder.security.resources import check_record, visible_record
 
 router = APIRouter(tags=["findings"], route_class=MappedRoute)
+
+
+def _check_history(ctx, scan_id: str) -> None:
+    run = ctx.store.load_scan_run(scan_id)
+    if run is None:
+        if getattr(ctx.settings, "auth_mode", "dev") != "dev":
+            raise PermissionError("scan is unavailable to this account")
+        raise KeyError(f"unknown scan {scan_id!r}")
+    check_record(ctx, run)
 
 
 @router.get("/findings")
@@ -26,8 +36,15 @@ def list_findings(ctx=CtxDep, scan_id: str | None = None, host: str | None = Non
                               sort_by=sort_by, sort_dir=sort_dir)
     if result["findings"]:
         reassessment = ReassessmentView(ctx, scan_id=scan_id)
+        annotations = reassessment.assess_many(result["findings"])
+        for finding, annotation in zip(result["findings"], annotations):
+            finding["reassessment"] = annotation
         for finding in result["findings"]:
-            finding["reassessment"] = reassessment.assess(finding)
+            check_record(ctx, finding)
+    if scan_id:
+        _check_history(ctx, scan_id)
+    elif result["scan_id"] and not visible_record(ctx, ctx.store.load_scan_run(result["scan_id"]) or {}):
+        result["scan_id"] = None
     return result
 
 
@@ -50,8 +67,14 @@ def explain_many(body: ExplainBatchBody | None = None, ctx=CtxDep, actor: str = 
 
 @router.get("/findings/{finding_id}")
 def get_finding(finding_id: str, ctx=CtxDep, scan_id: str | None = None) -> dict:
+    if scan_id:
+        # A named historical view has the same whole-run boundary as the list route.
+        _check_history(ctx, scan_id)
     result = finding_plus(ctx, util.get_finding(ctx, finding_id, scan_id))
     result["reassessment"] = ReassessmentView(ctx, scan_id=scan_id).assess(result)
+    check_record(ctx, result)
+    if scan_id:
+        _check_history(ctx, scan_id)
     return result
 
 

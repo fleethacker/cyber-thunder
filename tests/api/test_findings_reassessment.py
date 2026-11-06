@@ -190,3 +190,143 @@ def test_retention_metadata_is_account_scoped_and_list_detail_consistent(verifie
     page = client.get(URL, headers=h).json()
     assert next(row for row in page["findings"] if row["id"] == f.id)["reassessment"] == after["reassessment"]
     assert "hidden-retention" not in json.dumps(after["reassessment"])
+
+
+def test_named_detail_requires_whole_run_history_authority(verified_app):
+    ctx, _, tokens, client, _ = verified_app
+    f = owned_observation(ctx)
+    save_run(ctx, "private-mixed-history", targets=["alpha", "beta"], findings=[f])
+    h = headers(tokens)
+    for path in (URL, f"{URL}/{f.id}"):
+        response = client.get(path, params={"scan_id": "private-mixed-history"}, headers=h)
+        assert response.status_code == 403, response.text
+        assert "private-mixed-history" not in response.text
+    assert detail(client, f.id, headers=h)["reassessment"]["status"] == "no_known_gap"
+
+
+@pytest.mark.parametrize("change", ["grant", "move", "delete", "role"])
+@pytest.mark.parametrize("fresh", [False, True])
+def test_history_authority_is_rechecked_after_observation_read(verified_app, monkeypatch, change, fresh):
+    ctx, _, _, _, _ = verified_app
+    f = owned_observation(ctx)
+    save_run(ctx)
+    with principal_scope(identity()):
+        expected = ReassessmentView(ctx).assess(f.to_dict())
+    policy = json.loads(ctx.access.path.read_text())
+    original = deepcopy(policy)
+    policy["entries"][0]["grants"][0]["target_ids"] = ["alpha", "beta"]
+    ctx.access.path.write_text(json.dumps(policy))
+    rows = [replace(f, scan_id="mixed-newest", collected_at=NEWEST)] if fresh else []
+    save_run(ctx, "mixed-newest", at=NEWEST, targets=["alpha", "beta"], findings=rows)
+    load = ctx.store.load_findings
+    revoked = False
+
+    def guarded_load(sid=None):
+        nonlocal revoked
+        rows = load(sid)
+        if sid == "mixed-newest" and not revoked:
+            revoked = True
+            if change == "grant":
+                ctx.access.path.write_text(json.dumps(original))
+            elif change == "move":
+                target = ctx.inventory.get("beta")
+                target.environment = "moved"
+                ctx.inventory.add(target)
+                ctx.inventory.save()
+            elif change == "delete":
+                ctx.inventory.remove("beta")
+                ctx.inventory.save()
+        return rows
+
+    monkeypatch.setattr(ctx.store, "load_findings", guarded_load)
+
+    def validity():
+        if change == "role" and revoked:
+            raise PermissionError("session roles were revoked")
+
+    with principal_scope(identity(), validity=validity):
+        actual = ReassessmentView(ctx).assess(f.to_dict())
+    assert revoked
+    if change == "role":
+        assert actual["status"] == "unknown"
+        assert actual["latest_attempt"] is None
+        assert actual["observation"] == {"observed_at": None, "source": None, "scan_id": None}
+    else:
+        assert actual == expected
+    assert "mixed-newest" not in json.dumps(actual)
+
+
+@pytest.mark.parametrize("roles", [("viewer",), ("analyst",), ("approver",), ("admin",), ("auditor",)])
+def test_indicator_is_read_only_for_each_current_account_role(verified_app, roles):
+    ctx, _, tokens, client, _ = verified_app
+    f = owned_observation(ctx)
+    save_run(ctx)
+    h = headers(tokens, identity(roles=roles))
+    result = detail(client, f.id, headers=h)["reassessment"]
+    page = client.get(URL, headers=h).json()
+    assert next(row for row in page["findings"] if row["id"] == f.id)["reassessment"] == result
+    assert result["status"] == "not_reassessed"
+    denied = headers(tokens, identity(roles=()))
+    assert client.get(f"{URL}/{f.id}", headers=denied).status_code == 403
+
+
+@pytest.mark.parametrize("view", ["list", "detail"])
+@pytest.mark.parametrize("revoke", ["finding", "named_history", "baseline"])
+def test_routes_recheck_authority_after_history_decoration(verified_app, monkeypatch, view, revoke):
+    ctx, _, tokens, client, _ = verified_app
+    f = owned_observation(ctx)
+    policy = json.loads(ctx.access.path.read_text())
+    policy["entries"][0]["grants"][0]["target_ids"] = ["alpha", "beta"]
+    ctx.access.path.write_text(json.dumps(policy))
+    save_run(ctx, "mixed-history", targets=["alpha", "beta"], findings=[f])
+    original = ReassessmentView._assess
+
+    def assess_and_revoke(self, finding, used):
+        result = original(self, finding, used)
+        policy["entries"][0]["grants"][0]["target_ids"] = [] if revoke == "finding" else ["alpha"]
+        ctx.access.path.write_text(json.dumps(policy))
+        return result
+
+    monkeypatch.setattr(ReassessmentView, "_assess", assess_and_revoke)
+    params = {"scan_id": "mixed-history"} if revoke == "named_history" else {}
+    if view == "list" and revoke == "baseline":
+        params["host"] = "alpha"
+    response = client.get(URL if view == "list" else f"{URL}/{f.id}", params=params, headers=headers(tokens))
+    if revoke == "baseline":
+        # The account still owns alpha; an inaccessible baseline must only lose its label.
+        assert response.status_code == 200, response.text
+        assert "mixed-history" not in response.text
+        if view == "list":
+            assert response.json()["scan_id"] is None
+    else:
+        assert response.status_code == 403, response.text
+
+
+def test_list_rechecks_history_for_entire_page_after_later_rows(verified_app, monkeypatch):
+    ctx, _, tokens, client, _ = verified_app
+    f = owned_observation(ctx)
+    peer = replace(f, id="peer-finding", rule_id="banner", title="Banner")
+    ctx.store.save_findings("base", [f, peer])
+    policy = json.loads(ctx.access.path.read_text())
+    policy["entries"][0]["grants"][0]["target_ids"] = ["alpha", "beta"]
+    ctx.access.path.write_text(json.dumps(policy))
+    save_run(ctx, "private-page-history", targets=["alpha", "beta"])
+    original = ReassessmentView._assess
+    calls = 0
+
+    def revoke_on_second_row(self, finding, used):
+        nonlocal calls
+        result = original(self, finding, used)
+        calls += 1
+        if calls == 2:
+            policy["entries"][0]["grants"][0]["target_ids"] = ["alpha"]
+            ctx.access.path.write_text(json.dumps(policy))
+        return result
+
+    monkeypatch.setattr(ReassessmentView, "_assess", revoke_on_second_row)
+    response = client.get(URL, params={"host": "alpha"}, headers=headers(tokens))
+    assert response.status_code == 200, response.text
+    rows = response.json()["findings"]
+    assert len(rows) == 2 and calls >= 2
+    assert all(row["reassessment"]["status"] == "no_known_gap" for row in rows)
+    assert "private-page-history" not in response.text

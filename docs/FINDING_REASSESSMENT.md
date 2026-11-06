@@ -64,6 +64,12 @@ to the same persisted target generation.
   Mixed-target runs are excluded when any constituent target is inaccessible.
   Current inventory IDs cannot relabel historical evidence. Deleted, moved,
   recreated, unclassified, or mismatched target generations do not grant history.
+  Named detail views enforce the same whole-run boundary as named list views.
+  After loading observations, the helper rechecks every run that influenced the
+  page's answers, including origins, cutoffs, and tied candidates. Revoked runs
+  are removed from the request-local index and the entire page is derived again,
+  so revocation while processing a later row also invalidates earlier badges. The API
+  also rechecks finding and named-history authority before returning the response.
 - Runs must name the same target and ownership scope, include the relevant
   module, and match the finding's rule ID, rule version, group ID, or citation
   when restricted by `rule_filter`, following the scanner's selection semantics.
@@ -76,11 +82,14 @@ to the same persisted target generation.
 - Terminal runs are ordered by timezone-aware start times after both the actual
   observation and collection times (and its readable source run). Running and
   pending runs do not assert completed reassessment. Equal latest times produce
-  unknown ordering, never an invented chronology from IDs.
+  unknown ordering, including in named historical views; selecting an ID does
+  not establish which of two equally timed runs came first.
 - An explicit `scan_id` bounds history at that run's start, including that run
   itself. Later scans cannot change the historical badge. A carried row retains
   its original identity/time and does not count as a new observation. A new
-  observation within a partial run supersedes that finding normally.
+  observation within a partial run supersedes that finding normally. Both its
+  collection time and actual observation time must be at or after that attempt's
+  start. Repackaging older evidence under a newer scan ID does not clear the gap.
 
 ## Scheduler integration boundary
 
@@ -90,7 +99,8 @@ The helper reads `ScanRun.targets`, `authorization_scopes`, `modules`,
 `scheduling.partial_targets`, and
 `scheduling.omitted_observations = retain_without_revalidation` from the bounded
 worker implementation at base `c27334a`. It does not modify these producers.
-The independent review `db489ef`, inspected read-only, also supplies
+The frozen release `a2a33c6`, inspected read-only during independent review,
+retains the worker contract introduced by `db489ef` and supplies
 `scheduling.retained_incomplete_observations: {target_id: [finding_id, ...]}`.
 An exact target/finding match gives reason `retained_incomplete_observation`:
 the worker withheld a `not_reviewed` or `error` replacement of prior unresolved
@@ -122,12 +132,19 @@ accessible controls, missing metadata, escaping, and unchanged decision controls
 This batch deliberately adds no reassessment filter or sort: a correct global
 facet requires deriving every visible row before existing query pagination,
 which belongs to the shared query layer outside this batch's file ownership.
-The existing observation-time sort stays available. A follow-on query change
+The existing collection-time sort stays available; it does not sort provenance
+observation times or reassessment state. A follow-on query change
 should consume this exact helper and test complete-view counts and pagination;
 it must not infer status or timestamps in the UI. Dedicated cluster/import
 reassessment and additional producer mappings also remain follow-on work.
 These are documented here without modifying the frozen shared backlog.
 
-Validation receipts are retained under `.build/finding-reassessment-next/` and
-bind the tested source and generated UI files to SHA-256 hashes. Validation uses
-fixture state only; it does not contact target hosts or production systems.
+Implementation receipts are retained under `.build/finding-reassessment-next/`
+in the implementation worktree. Independent review receipts are retained under
+`.build/finding-reassessment-review/` in the review worktree. They bind tested
+source and generated UI files to SHA-256 hashes. Negative calibration reproduces
+whole-run detail authorization, revocation during history reads, pre-attempt
+evidence, and named-view timestamp-tie defects on the unmodified candidate.
+Validation uses fixture state only; it does not contact target hosts or
+production systems. The release scanner contract is exercised with fixture
+metadata; its source is neither merged nor executed by this batch.

@@ -74,8 +74,7 @@ class ReassessmentView:
             started = timestamp(run.get("started_at"))
             if started is None or run.get("status") not in _TERMINAL:
                 continue
-            if scan_id and (self.cutoff is None or started > self.cutoff
-                            or started == self.cutoff and run["id"] != scan_id):
+            if scan_id and (self.cutoff is None or started > self.cutoff):
                 continue
             for host in run.get("targets", []):
                 self.by_target.setdefault(host, []).append((started, run))
@@ -83,6 +82,28 @@ class ReassessmentView:
             runs.sort(key=lambda item: (item[0], item[1]["id"]), reverse=True)
 
     def assess(self, finding: dict) -> dict:
+        return self.assess_many([finding])[0]
+
+    def assess_many(self, findings: list[dict]) -> list[dict]:
+        # Loading observations can wait for storage while grants or inventory change.
+        # Recheck every run that influenced the answer after those reads, including
+        # earlier rows, origin/cutoff and tied candidates. Drop revoked history and
+        # derive the entire page again, so later reads cannot leave earlier badges stale.
+        while True:
+            used: set[str] = set()
+            results = [self._assess(finding, used) for finding in findings]
+            for finding, result in zip(findings, results):
+                if not visible_record(self.ctx, finding):
+                    result.update(status="unknown", reason="history_unavailable", latest_attempt=None,
+                                  explanation="Reassessment history cannot be established from the available observation metadata.")
+                    result["observation"] = {"observed_at": None, "source": None, "scan_id": None}
+            revoked = [sid for sid in used if not visible_record(self.ctx, self.runs[sid])]
+            if not revoked:
+                return results
+            for sid in revoked:
+                self.runs.pop(sid)
+
+    def _assess(self, finding: dict, used: set[str]) -> dict:
         provenance = _mapping(finding.get("collection_provenance"))
         observed_at = provenance.get("observed_at", finding.get("collected_at"))
         observed, collected = timestamp(observed_at), timestamp(finding.get("collected_at"))
@@ -90,6 +111,8 @@ class ReassessmentView:
         origin = self.runs.get(finding.get("scan_id"), {})
         if not visible_record(self.ctx, origin):
             origin = {}
+        if origin and scope and _scope(origin, finding["host"]) == scope:
+            used.add(origin["id"])
         result = {"version": 1, "status": "unknown", "reason": "history_unavailable",
                   "explanation": "Reassessment history cannot be established from the available observation metadata.",
                   "observation": {"observed_at": observed_at if observed else None,
@@ -102,25 +125,29 @@ class ReassessmentView:
             return result
         module = _module(finding)
         if (not scope or observed is None or collected is None or module is None
-                or self.scan_id and (self.cutoff is None or not visible_record(self.ctx, self.runs.get(self.scan_id, {})))):
+                or self.scan_id and (self.cutoff is None or self.scan_id not in self.runs
+                                     or not visible_record(self.ctx, self.runs[self.scan_id]))):
             return result
+        if self.scan_id:
+            used.add(self.scan_id)
         anchor = max(observed, collected)
         origin_at = timestamp(origin.get("started_at"))
         if origin_at and _scope(origin, finding["host"]) == scope:
             anchor = max(anchor, origin_at)
         candidates = [(at, run) for at, run in self.by_target.get(finding["host"], [])
-                      if at > anchor and run["id"] != finding.get("scan_id")
+                      if run["id"] in self.runs and at > anchor and run["id"] != finding.get("scan_id")
                       and _scope(run, finding["host"]) == scope and _relevant(run, finding, module)
                       and visible_record(self.ctx, run)]
         result.update(status="no_known_gap", reason="no_later_incomplete_attempt",
                       explanation="No later incomplete assessment is recorded in the available history for this observation. This does not establish its current state.")
         if not candidates:
             return result
+        used.update(run["id"] for at, run in candidates if at == candidates[0][0])
         if len(candidates) > 1 and candidates[0][0] == candidates[1][0]:
             result.update(status="unknown", reason="ambiguous_order",
                           explanation="The latest target scans have the same start time; their order cannot be established.")
             return result
-        _, run = candidates[0]
+        started, run = candidates[0]
         sid = run["id"]
         if sid not in self.observations:
             self.observations[sid] = self.ctx.store.load_findings(sid)
@@ -132,8 +159,8 @@ class ReassessmentView:
             if (fresh.id == finding["id"] and fresh.host == finding["host"]
                     and fresh.source == finding["source"] and fresh.rule_id == finding["rule_id"]
                     and fresh.authorization_scope == scope and fresh.scan_id == sid
-                    and fresh_collected is not None and fresh_collected > anchor
-                    and fresh_observed is not None and fresh_observed > anchor
+                    and fresh_collected is not None and fresh_collected >= started
+                    and fresh_observed is not None and fresh_observed >= started
                     and visible_record(self.ctx, fresh)):
                 result.update(reason="newer_observation", explanation="A later scan recorded another observation for this finding. This view retains the selected observation.")
                 return result

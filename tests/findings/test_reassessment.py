@@ -260,3 +260,23 @@ def test_reads_do_not_write_or_change_review_fingerprint_or_approvals(env, monke
     assert reviews.summary(f) == before and evidence_fingerprint(f) == fingerprint
     assert [p.to_dict() for p in ctx.gate.list()] == proposals
     assert sorted(str(p.relative_to(ctx.store.root)) for p in ctx.store.root.rglob("*")) == paths
+
+
+@pytest.mark.parametrize("observed", [OLD, "2026-11-05T10:30:00Z"])
+def test_republished_row_predating_attempt_does_not_clear_gap(env, observed):
+    ctx, f = env
+    stale = replace(f, scan_id="later", collected_at=LATER, collection_provenance={"observed_at": observed})
+    save_run(ctx, findings=[stale], status="partial", results={"alpha": {"status": "partial"}})
+    result = assess(ctx, f)
+    assert result["status"] == "not_reassessed"
+    assert result["reason"] == "partial_collection"
+
+
+def test_named_history_does_not_order_equal_instants_by_selected_identifier(env):
+    ctx, f = env
+    save_run(ctx, findings=[f])
+    save_run(ctx, "same-instant", at="2026-11-05T12:00:00+01:00")
+    result = assess(ctx, f, scan_id="later")
+    assert result["status"] == "unknown"
+    assert result["reason"] == "ambiguous_order"
+    assert result["latest_attempt"] is None
