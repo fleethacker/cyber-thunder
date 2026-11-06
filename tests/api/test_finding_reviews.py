@@ -13,7 +13,7 @@ ACTOR = {"X-Actor": "ITC Rivera"}
 
 
 def seed(ctx, finding, scan_id="scan-1", at="2026-11-05T10:00:00Z", **run):
-    ctx.store.save_scan_run({"id": scan_id, "started_at": at, "status": "done", **run})
+    ctx.store.save_scan_run({"id": scan_id, "started_at": at, "status": "done", "targets": [finding.host], **run})
     ctx.store.save_findings(scan_id, [finding])
 
 
@@ -113,7 +113,8 @@ def test_historical_get_is_read_only_and_historical_put_is_refused(review_api, m
 def test_missing_current_finding_cannot_be_reviewed_via_history_fallback(review_api):
     client, ctx, finding, path = review_api
     body = payload(client, path)
-    ctx.store.save_scan_run({"id": "scan-2", "started_at": "2026-11-05T11:00:00Z", "status": "done"})
+    ctx.store.save_scan_run({"id": "scan-2", "started_at": "2026-11-05T11:00:00Z", "status": "done",
+                             "targets": [finding.host]})
     ctx.store.save_findings("scan-2", [])
     assert client.get(path).status_code == 404
     assert client.put(path, json=body, headers=ACTOR).status_code == 404

@@ -29,6 +29,16 @@ not named there is a file, which is what every path was before the backends exis
 JSON through the store keeps writing files until it is added to the list, which is a one-line change once
 nothing reads those files from disk.
 
+## Scan replacement scope
+
+A completed full scan replaces prior observations only for its declared `targets`.
+An empty findings list can clear those targets; it cannot clear findings on hosts
+that the run did not scan. Producers and test fixtures must therefore include the
+intended target IDs even when a scan finds nothing. Running or incomplete scans
+and partial runs do not make omissions authoritative. Explicit historical scan
+reads still return that run's retained observations. Cluster vulnerability
+observations are reconciled separately by their producer's assessed scopes.
+
 ## The two backends
 
 `CT_STATE_BACKEND=json` (the default) keeps one file per document under the state directory, written by temp
