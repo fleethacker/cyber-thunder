@@ -9,6 +9,15 @@ build. The account-access candidate's local Windows gate took 57 minutes
 does not predict hosted runner speed; the larger budget accommodates the growing
 suite without relaxing individual test deadlines, required checks or skip policy.
 
+The full Linux account-access run exposed `select()`'s fixed descriptor-number
+limit in dependency and vulnerability subprocess readers. Both now use the
+platform selector with a nonblocking check and explicit resource closure; the
+native Windows pipe path is unchanged. Three real-process reproductions with
+POSIX pipe descriptors at or above 1024 failed before the correction. The two
+affected modules then passed 55 tests on Windows 3.12 and 55 on native Linux
+3.12, including output limits, cancellation and inherited-pipe deadlines, with
+no skips. These focused results do not replace the full release gate.
+
 | Runner | Pytest state backends | Collection |
 | --- | --- | --- |
 | `ubuntu-24.04` | JSON and SQLite in the same run | Every test module, including the three deployment modules |

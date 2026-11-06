@@ -84,3 +84,52 @@ def state_dir(tmp_path, monkeypatch, request) -> Path:
 # space ("C:\Program Files\..."), which bash cannot execute, so those modules only run on Linux and macOS.
 if sys.platform == "win32":
     collect_ignore = ["test_deploy.py", "test_dev.py", "test_existing.py"]
+
+
+@pytest.fixture
+def large_pipe_descriptors(monkeypatch):
+    """Exercise real POSIX pipes above select's fixed descriptor ceiling.
+
+    Windows exercises its native pipe path unchanged. Duplication needs only two
+    high-numbered descriptors, not thousands of open files or changed OS limits.
+    """
+    import subprocess
+
+    original = subprocess.Popen
+    opened = []
+
+    def start(*args, **kwargs):
+        process = original(*args, **kwargs)
+        opened.append(process)
+        if os.name != "nt":
+            import fcntl
+
+            try:
+                for name in ("stdout", "stderr"):
+                    stream = getattr(process, name)
+                    if stream is None:
+                        continue
+                    fd = fcntl.fcntl(stream.fileno(), fcntl.F_DUPFD_CLOEXEC, 1024)
+                    try:
+                        replacement = os.fdopen(fd, "rb", buffering=0)
+                    except BaseException:
+                        os.close(fd)
+                        raise
+                    stream.close()
+                    setattr(process, name, replacement)
+                    assert replacement.fileno() >= 1024
+            except BaseException:
+                process.kill()
+                process.wait(timeout=5)
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+                raise
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", start)
+    yield
+    assert opened
+    assert all(process.poll() is not None for process in opened)
+    assert all(stream is None or stream.closed for process in opened
+               for stream in (process.stdout, process.stderr))
