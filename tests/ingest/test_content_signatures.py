@@ -464,6 +464,31 @@ def test_protected_runtime_configuration_loader(signing, key_directory):
     assert "operator.pem" not in repr(loaded)
 
 
+def test_application_loads_configured_content_trust(signing, key_directory, state_dir, monkeypatch):
+    from cyberthunder.config import Settings
+    from cyberthunder.context import AppContext
+
+    config, _ = signing
+    path = key_directory / "application-trust.json"
+    path.write_text(json.dumps(config_document(config)))
+    monkeypatch.setenv("CT_CONTENT_TRUST_CONFIG", str(path))
+    settings = Settings.from_env(state_dir=state_dir, explain_precompute=False, llm_backend="template")
+    ctx = AppContext(settings)
+    assert settings.content_trust_config == str(path)
+    envelope = sig.sign_document({"items": []}, "request", sig.config_for(ctx))
+    assert sig.verify_document(json.dumps(envelope).encode(), "request", config)[1]["operator_attested"]
+
+
+def test_no_config_does_not_invent_offline_content_trust(state_dir, monkeypatch):
+    from cyberthunder.config import Settings
+    from cyberthunder.context import AppContext
+
+    monkeypatch.delenv("CT_CONTENT_TRUST_CONFIG", raising=False)
+    ctx = AppContext(Settings(state_dir=state_dir, explain_precompute=False, llm_backend="template"))
+    config = sig.config_for(ctx)
+    assert not config.trusted_keys and config.signing_key is None
+
+
 def test_cli_retains_runtime_trust_configuration(verified, monkeypatch):
     from argparse import Namespace
     from cyberthunder.ingest.cli import _service
@@ -505,3 +530,11 @@ def test_runtime_trust_config_fails_closed(signing, key_directory, fault):
     with pytest.raises(sig.AuthenticityError) as failure:
         sig.load_config(path)
     assert "secret-canary" not in str(failure.value) and str(path) not in str(failure.value)
+    from cyberthunder.config import Settings
+    from cyberthunder.context import AppContext
+
+    state = key_directory / "uncreated-state"
+    with pytest.raises(sig.AuthenticityError):
+        AppContext(Settings(state_dir=state, content_trust_config=str(path),
+                            explain_precompute=False, llm_backend="template"))
+    assert not state.exists()

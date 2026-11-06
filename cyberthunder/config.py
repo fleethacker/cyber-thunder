@@ -77,6 +77,7 @@ class Settings:
     content_max_bytes: int = field(default_factory=lambda: _env_num("CT_CONTENT_MAX_BYTES", 512 * 1024 * 1024, int))
     content_timeout_s: int = field(default_factory=lambda: _env_num("CT_CONTENT_TIMEOUT", 30, int))
     content_snapshot: str | None = field(default_factory=lambda: _env("CT_CONTENT_SNAPSHOT", "") or None)
+    content_trust_config: str | None = field(default_factory=lambda: _env("CT_CONTENT_TRUST_CONFIG", "") or None)
     # web
     auth_mode: str = field(default_factory=lambda: _env("CT_AUTH_MODE", "dev"))
     security_mode: str = field(default_factory=lambda: _env("CT_SECURITY_MODE", "range"))

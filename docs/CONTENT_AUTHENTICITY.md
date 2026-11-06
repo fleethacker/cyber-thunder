@@ -7,9 +7,9 @@ The existing download host allow-list, TLS checks and XML/archive checks remain 
 
 ## Trust and configuration
 
-The runtime integration supplies `ctx.content_signature_config` before content operations. The safe
-configuration loader is `signatures.load_config(path)`: load a protected JSON file from a startup
-setting, never from an API request. The parent settings/context seam is:
+Set `CT_CONTENT_TRUST_CONFIG` to the absolute path of a protected JSON file. Application startup
+loads it into `ctx.content_signature_config` before constructing services or creating state. The safe
+configuration loader is `signatures.load_config(path)`; API requests cannot select the trust file:
 
 ```python
 from cyberthunder.ingest.content import signatures
@@ -18,9 +18,8 @@ from cyberthunder.ingest.content import signatures
 ctx.content_signature_config = signatures.load_config(settings.content_trust_config)
 ```
 
-The environment setting is an integration seam, not registered by this module. With no configured
-path, leave the context attribute unset (no trusted offline signers). A configured but invalid file
-must fail startup; never silently fall back. JSON schema:
+With no configured path, the application trusts no offline signers. A configured but invalid file
+fails startup without creating state; there is no silent fallback. JSON schema:
 
 ```json
 {
@@ -71,7 +70,7 @@ is refused; provision a protected location with the host administrator.
 There is no automatic trust discovery, embedded-key trust, URL key lookup or new dependency. The
 review used the installed `cryptography==50.0.2` Ed25519 implementation, already required transitively
 by `PyJWT[crypto]` and `paramiko`; this patch adds no package requirement. Runtime environment
-settings for this configuration are an integration responsibility. Never read trusted-key paths or
+settings for this configuration are read at startup. Never read trusted-key paths or
 signing credentials from an import request. Key-file changes are checked again on each verification;
 changes to the configured signer map require replacing the context configuration or restarting.
 Accepted attestations record the exact public-key SHA-256 fingerprint (DER SubjectPublicKeyInfo)
@@ -226,4 +225,5 @@ Review validation on Windows, with the shared interpreter and this checkout on `
 
 Stateful cases exercised JSON and SQLite. The only warnings were existing framework deprecations.
 No external source, production key, live identity provider or host configuration was changed. Startup
-settings/context wiring and operational key distribution remain integration work; no full gate was run.
+settings/context wiring is covered by startup regressions. Operational key distribution remains open;
+the selections above are focused evidence rather than a full gate.

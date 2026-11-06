@@ -24,6 +24,13 @@ log = logging.getLogger(__name__)
 class AppContext:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings.from_env()
+        # Trust configuration is mandatory when explicitly configured. Validate it
+        # before constructing services or creating state; optional wiring cannot
+        # swallow a bad key/policy file and silently disable authenticity checks.
+        self.content_signature_config = None
+        if self.settings.content_trust_config:
+            from cyberthunder.ingest.content.signatures import load_config
+            self.content_signature_config = load_config(self.settings.content_trust_config)
         self.store = StateStore(self.settings.state_dir, backend=self.settings.state_backend)
         self.audit = AuditLog(self.store.audit_log, node=self.settings.node)
         self.killswitch = KillSwitch(self.store.root, self.audit)
