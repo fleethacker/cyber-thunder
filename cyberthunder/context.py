@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 class AppContext:
     def __init__(self, settings: Settings | None = None):
+        self._runtime_tasks = []
         self.settings = settings or Settings.from_env()
         # Validate explicit credential configuration before creating any state.
         self._credential_resolver()
@@ -36,48 +37,97 @@ class AppContext:
             from cyberthunder.ingest.content.signatures import load_config
             self.content_signature_config = load_config(self.settings.content_trust_config)
         self.store = StateStore(self.settings.state_dir, backend=self.settings.state_backend)
-        self.audit = AuditLog(self.store.audit_log, node=self.settings.node)
-        self.killswitch = KillSwitch(self.store.root, self.audit)
-        self.gate = ApprovalGate(self.store.proposals, self.audit, self.killswitch, policy_path=self.store.policy)
-        self.inventory = Inventory.load(self.store.targets)
-        from cyberthunder.security.resources import capture
-        def resource_scope(target_id):
-            try:
-                return capture(self, [target_id])[0]
-            except (KeyError, PermissionError, OSError, ValueError):
-                if self.settings.auth_mode != "dev":
-                    raise
-                return None
-        self.gate.resource_scope = resource_scope
-        from cyberthunder.security.resources import check_record
-        self.gate.artifact_authorizer = lambda record, action: check_record(self, record, action)
-        if self.settings.auth_mode != "dev":
-            from cyberthunder.control.access import AccessPolicy
-            self.access = AccessPolicy(self.store.root / "auth" / "access.json")
-            self.gate.separation_policy = self.access.approval_identity_source
-            self.gate.authorizer = self.authorize
-            self.killswitch.authorizer = self.authorize
-        from cyberthunder.adapters import load_all
-        self.adapters = load_all()
-        self.library = FixLibrary.from_adapters(self.adapters)
-        self.policy: AutomationPolicy = load_policy(self.store.policy)
-        # services; each module may still be under construction, so wire lazily and tolerate absence
-        from cyberthunder.scan import Scanner
-        from cyberthunder.remediation.engine import RemediationEngine
-        from cyberthunder.explain.service import ExplainService
-        self.scanner = Scanner(self)
-        self.engine = RemediationEngine(self)
-        self.explain = ExplainService(self)
-        self.impact = self._optional("cyberthunder.impact.service", "ImpactService")
-        from cyberthunder.control.assessment import bind_assessment
-        self.gate.assessment_validator = lambda pid, aid, note: bind_assessment(self, pid, aid, note)
-        self.ingest = self._optional("cyberthunder.ingest.service", "IngestService")
-        if self.ingest is not None:
-            self.ingest.outbox.ctx = self
-        self.reports = self._optional("cyberthunder.report.service", "ReportService")
-        self.discovery = self._optional("cyberthunder.discovery.service", "DiscoveryService")
-        self.vulnerabilities = self._optional("cyberthunder.vulnerabilities.service", "VulnerabilityService")
-        self.cluster = self._optional("cyberthunder.cluster.service", "ClusterBaselineService")
+        try:
+            self.audit = AuditLog(self.store.audit_log, node=self.settings.node)
+            self.killswitch = KillSwitch(self.store.root, self.audit)
+            self.gate = ApprovalGate(self.store.proposals, self.audit, self.killswitch, policy_path=self.store.policy)
+            self.inventory = Inventory.load(self.store.targets)
+            from cyberthunder.security.resources import capture
+            def resource_scope(target_id):
+                try:
+                    return capture(self, [target_id])[0]
+                except (KeyError, PermissionError, OSError, ValueError):
+                    if self.settings.auth_mode != "dev":
+                        raise
+                    return None
+            self.gate.resource_scope = resource_scope
+            from cyberthunder.security.resources import check_record
+            self.gate.artifact_authorizer = lambda record, action: check_record(self, record, action)
+            if self.settings.auth_mode != "dev":
+                from cyberthunder.control.access import AccessPolicy
+                self.access = AccessPolicy(self.store.root / "auth" / "access.json")
+                self.gate.separation_policy = self.access.approval_identity_source
+                self.gate.authorizer = self.authorize
+                self.killswitch.authorizer = self.authorize
+            from cyberthunder.adapters import load_all
+            self.adapters = load_all()
+            self.library = FixLibrary.from_adapters(self.adapters)
+            self.policy: AutomationPolicy = load_policy(self.store.policy)
+            # services; each module may still be under construction, so wire lazily and tolerate absence
+            from cyberthunder.scan import Scanner
+            from cyberthunder.remediation.engine import RemediationEngine
+            from cyberthunder.explain.service import ExplainService
+            self.scanner = Scanner(self)
+            self.engine = RemediationEngine(self)
+            self.explain = ExplainService(self)
+            self.impact = self._optional("cyberthunder.impact.service", "ImpactService")
+            from cyberthunder.control.assessment import bind_assessment
+            self.gate.assessment_validator = lambda pid, aid, note: bind_assessment(self, pid, aid, note)
+            self.ingest = self._optional("cyberthunder.ingest.service", "IngestService")
+            if self.ingest is not None:
+                self.ingest.outbox.ctx = self
+            self.reports = self._optional("cyberthunder.report.service", "ReportService")
+            self.discovery = self._optional("cyberthunder.discovery.service", "DiscoveryService")
+            self.vulnerabilities = self._optional("cyberthunder.vulnerabilities.service", "VulnerabilityService")
+            self.cluster = self._optional("cyberthunder.cluster.service", "ClusterBaselineService")
+        except BaseException:
+            self.store.close()
+            raise
+
+    def close(self, timeout: float = 5.0) -> bool:
+        """Release state after producers stop. False leaves state open for a later retry.
+
+        The caller must stop accepting work and join external synchronous users first.
+        Like StateStore.close, this releases resources; later explicit use may reopen them.
+        """
+        import threading
+        import time
+        from cyberthunder.api import util
+
+        deadline = time.monotonic() + max(0, timeout)
+        remaining = lambda: max(0, deadline - time.monotonic())
+        for tasks in self._runtime_tasks:
+            if not tasks.stop(remaining()):
+                return False
+        # API jobs can spawn service jobs; service jobs can spawn scans or explanations.
+        # Re-snapshot after joining producers so their children are included.
+        def workers():
+            with util._threads_lock:
+                threads = list(util._threads)
+            for service in (self.scanner, self.discovery, self.vulnerabilities,
+                            getattr(self.ingest, "_content", None)):
+                registry = getattr(service, "_threads", None)
+                if registry is not None:
+                    threads.extend(list(registry.values()))
+                threads.extend(list(getattr(service, "threads", ())))
+            return [t for t in set(threads) if t.is_alive()]
+
+        while active := workers():
+            for thread in active:
+                if thread is threading.current_thread():
+                    return False
+                thread.join(remaining())
+            if workers() and remaining() <= 0:
+                return False
+        worker = getattr(self.explain, "_worker", None)
+        if worker is not None:
+            if not worker.wait_idle(remaining()):
+                return False
+            worker.stop(remaining())
+            if worker.alive:
+                return False
+        self.store.close()
+        return True
 
     def _optional(self, module: str, cls: str):
         try:

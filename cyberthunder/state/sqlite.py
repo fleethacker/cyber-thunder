@@ -55,7 +55,11 @@ class SqliteBackend(Backend):
         try:
             self._init_schema()
         except sqlite3.DatabaseError as e:
+            self.close()
             raise StateError(f"cannot open {self.path}: {e}") from e
+        except BaseException:
+            self.close()
+            raise
 
     @classmethod
     def exists(cls, root: str | Path) -> bool:
@@ -68,8 +72,12 @@ class SqliteBackend(Backend):
             return c
         c = sqlite3.connect(str(self.path), timeout=self.busy_timeout, isolation_level=None,
                             check_same_thread=False)
-        c.execute(f"PRAGMA busy_timeout={int(self.busy_timeout * 1000)}")
-        c.execute("PRAGMA synchronous=NORMAL")
+        try:
+            c.execute(f"PRAGMA busy_timeout={int(self.busy_timeout * 1000)}")
+            c.execute("PRAGMA synchronous=NORMAL")
+        except BaseException:
+            c.close()
+            raise
         self._tls.conn, self._tls.pid, self._tls.depth = c, os.getpid(), 0
         me = threading.current_thread()
         with self._guard:

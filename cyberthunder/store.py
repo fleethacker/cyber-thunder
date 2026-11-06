@@ -58,8 +58,12 @@ class StateStore:
         self.backend_name = validate_backend(backend) if backend else backend_from_env()
         self.docs: Backend = open_backend(self.backend_name, self.root)
         # JSON paths that are files rather than documents are always files on disk
-        self.files: Backend = self.docs if self.backend_name == "json" else JsonFilesBackend(self.root)
-        self._warn_if_unmigrated()
+        try:
+            self.files: Backend = self.docs if self.backend_name == "json" else JsonFilesBackend(self.root)
+            self._warn_if_unmigrated()
+        except BaseException:
+            self.docs.close()
+            raise
 
     def _warn_if_unmigrated(self) -> None:
         """A directory whose documents sit in the backend that is not configured looks empty. Say so once."""
@@ -162,6 +166,7 @@ class StateStore:
         return self.docs.lock(name)
 
     def close(self) -> None:
+        """Release backend handles after users drain; later use can reopen connections."""
         self.docs.close()
         if self.files is not self.docs:
             self.files.close()
