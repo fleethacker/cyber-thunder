@@ -246,6 +246,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/PERSON_ACCOUNT_LIVE.md](docs/PERSON_ACCOUNT_LIVE.md) | real local identity-provider checks of separate accounts, person quorums and revocation, with acceptance limits |
 | [docs/CREDENTIAL_RESOLVERS.md](docs/CREDENTIAL_RESOLVERS.md) | protected password sources, account-bound leases, rotation and native deployment acceptance |
 | [docs/SSH_KEY_CREDENTIALS.md](docs/SSH_KEY_CREDENTIALS.md) | protected static SSH key files, exact key parsing, explicit authentication and remaining certificate/broker work |
+| [docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md](docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md) | separate application and target accounts, protected runtime storage and remaining package provisioning |
 | [docs/CLI_AUTH.md](docs/CLI_AUTH.md) | human device login, protected client tokens and authenticated API commands |
 | [docs/AUDIT_ANCHORS.md](docs/AUDIT_ANCHORS.md) | explicit signed checkpoints and local anchor verification; independent retention remains separate |
 | [docs/WINDOWS_FILE_TRUST.md](docs/WINDOWS_FILE_TRUST.md) | native owner/DACL checks, protected-path provisioning and deployment limits |
@@ -254,6 +255,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/IDENTITY_PROVENANCE.md](docs/IDENTITY_PROVENANCE.md) | verified/legacy review attribution and saved report access |
 | [docs/PACKAGE_IDENTITY.md](docs/PACKAGE_IDENTITY.md) | native/container identity inputs, package preflight, one-worker sessions and acceptance limits |
 | [docs/CONTAINER_BUILD.md](docs/CONTAINER_BUILD.md) | portable container build, verified tool installation and unprivileged offline smoke limits |
+| [docs/CONTAINER_VULNERABILITY_REVIEW.md](docs/CONTAINER_VULNERABILITY_REVIEW.md) | pinned image/tool updates, measured full-image findings and unresolved applicability/security work |
 | [docs/COVERAGE.md](docs/COVERAGE.md) | implemented checks, benchmark denominators, executable fixes and runbooks |
 | [docs/CONFIDENCE.md](docs/CONFIDENCE.md) | evidence-strength grades, provenance, freshness and limits |
 | [docs/FINDING_REVIEW.md](docs/FINDING_REVIEW.md) | reasoned reviews, false positives, expiry, history and remediation guards |

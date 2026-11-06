@@ -114,13 +114,14 @@ for package network variables; network access alone supplies no credentials.
 Network policy must allow access to the targets and any configured model server.
 
 The image supports the Python SSH and WinRM transports and includes kubectl
-v1.36.4 and digest-pinned Trivy v0.71.1. The deployment mounts a local-cluster kubeconfig and
+v1.36.6 and digest-pinned Trivy v0.76.2. The deployment mounts a local-cluster kubeconfig and
 rotating service account token. Its RBAC permits only `get` and `list` of
 namespaces, nodes, workload resources, service accounts, services, RBAC bindings
 and network policies, plus `get /version`, for discovery, configuration scans
 and image baselines;
 it cannot apply Kubernetes remediation or read Secrets. Use a kubectl version
-compatible with the target cluster (`--build-arg KUBECTL_VERSION=vX.Y.Z`).
+compatible with the target cluster. A different `KUBECTL_VERSION` also requires
+reviewed matching architecture checksums; see [build pins](../../docs/CONTAINER_BUILD.md).
 
 These cluster-wide permissions differ from a namespace-only Role. The current
 standard collectors issue cluster-wide requests; successful reads of selected
