@@ -28,7 +28,7 @@ Completed documentation/reporting work: COV-01 now ships as `report coverage`, t
 | Standing policy | Enabled automatic approval is refused in verified mode pending content-bound signing | ZT-11 |
 | Audit identity | Version 2 records hash-cover verified principal evidence; old version 1 records remain unverified | `audit/chain.py` |
 | Transport trust | Fleet SSH requires trusted host identity; fleet WinRM requires HTTPS and CA validation; acknowledged range exceptions are recorded | [TRANSPORT_SECURITY](TRANSPORT_SECURITY.md) |
-| Remaining trust boundaries | Local state owner, Windows DACL provisioning, realm claim mappings, target-side privileges and actual enclave connectivity still need deployment validation | ZT-01/12/13/14/19/31 |
+| Remaining trust boundaries | Protected files enforce native Windows SID/DACL or POSIX ownership/mode checks. Whole-state provisioning, realm claim mappings, target-side privileges and actual enclave connectivity still need deployment validation | ZT-01/12/13/14/19/31 |
 
 The implementation tests use isolated identity and transport fixtures. They do not establish CAC acceptance, AD delegation, a production broker, or zero-trust compliance. The remaining acceptance criteria below are retained deliberately.
 
@@ -55,7 +55,7 @@ The implementation tests use isolated identity and transport fixtures. They do n
 - Done when: an approve after the idle period gets 401 and redirects; a cross-site form POST to approve is rejected; `localStorage` holds no token or name; sign-out in one tab ends access in another.
 
 **ZT-05 Step-up re-authentication for approve, policy sign, kill-switch release and scope changes.** Pillars: User. Step: 90 days. Effort: 3 days. Depends: ZT-03, ZT-04, a CAC/X.509 authenticator in the enclave realm.
-- Today: Implemented signed authentication-age and exact configured assurance checks, bounded reauthentication challenges, retained browser assurance across refresh and deliberate UI re-login without mutation replay ([STEP_UP](STEP_UP.md)). Bulk outcomes preserve earlier decisions if assurance expires mid-batch. Live realm mapping, authenticator/CAC acceptance and the operational policy for long-running administration remain open. Enabled standing approvals are refused in verified mode.
+- Today: Implemented signed authentication-age and exact configured assurance checks, monotonic freshness, bounded reauthentication challenges, retained browser assurance across refresh and deliberate UI re-login without mutation replay ([STEP_UP](STEP_UP.md)). Bulk outcomes preserve earlier decisions if assurance expires mid-batch. Explicitly admitted content/database transfers can continue beyond the freshness window while the original credential, session, account, policy and job remain valid; admission never extends token expiry or permits a new administrative decision. Live realm mapping, authenticator/CAC acceptance and longer delegation remain open. Enabled standing approvals are refused in verified mode.
 - Target: `require_step_up(max_age, min_acr)` on those routes (default 5 minutes); otherwise 401 with a challenge carrying `max_age` and `acr_values`, and the UI re-runs login. auth_time, acr and amr go into the record (ZT-23).
 - Done when: a 10-minute-old token cannot approve and the refusal is audited; after re-login it can; a password-only login cannot approve when the floor is set to the CAC level.
 
@@ -205,7 +205,7 @@ The goal is that a target's own log names the person who approved the change and
 - Done when: a changed key fails before any credential is sent, with a finding and an audit record; a target with no pin is refused in fleet mode.
 
 **ZT-31 Node hardening and state-directory protection.** Pillars: Device, Data. Step: 60 days. Effort: days. Depends: none.
-- Today: Policy and Kubernetes credential files now reject redirected/replaced files and enforce POSIX ownership/mode checks. Windows link checks do not prove DACL protection. Whole-state permissions, service hardening, encryption, node STIG evidence and an actual ISSO review remain open.
+- Today: Protected policy, static Kubernetes credentials, SSH private keys and JWKS files enforce POSIX ownership/mode checks or native Windows SID/DACL checks with pinned handles; unsafe or unavailable protection fails closed. Local Windows fixtures and native Linux regressions have dated evidence. Whole-state permissions, actual Windows service/domain/SMB/ReFS deployment, service hardening, encryption, node STIG evidence and an actual ISSO review remain open.
 - Target: a hardening guide (service account, directory ACLs, disk encryption, STIG the node itself); startup warns on permissive ACLs; node key (ZT-17) in a TPM where available.
 - Done when: startup warns when the state directory is readable by other users; the guide exists in `docs/` and names its ISSO reviewer and review date.
 
