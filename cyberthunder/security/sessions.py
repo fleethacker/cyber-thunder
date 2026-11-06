@@ -424,6 +424,10 @@ class SessionService:
         if previous is not None and access_claims["sub"] != previous.subject:
             raise ValueError()
         wall, mono = self._now()
+        if previous is None and assurance.get("auth_time") is not None and assurance["auth_time"] > wall:
+            # Token clock skew must not store a future authentication event that
+            # silently becomes usable for step-up later without a new login.
+            raise ValueError()
         if access_claims["exp"] <= wall:
             raise ValueError()
         deadline = mono + min(response["expires_in"], access_claims["exp"] - wall)
@@ -453,6 +457,12 @@ class SessionService:
                     raise ValueError()
                 if len(self._sessions) >= self.config.max_sessions and cookies.get(SESSION_COOKIE) not in self._sessions:
                     raise ValueError()
+                if pending.step_up_started is not None:
+                    _, previous = self._live(headers)
+                    if previous.lease_fingerprint != pending.session_fingerprint or previous.subject != pending.subject:
+                        raise ValueError()
+                # Check the originating session before token endpoint I/O, then
+                # again after the exchange before publishing its replacement.
                 client = WebApplicationClient(self.config.client_id)
                 _, _, body = client.prepare_token_request(
                     self.config.token_endpoint,

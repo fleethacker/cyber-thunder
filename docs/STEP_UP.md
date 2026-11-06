@@ -22,6 +22,22 @@ At most eight unique values are accepted, each 1–128 printable ASCII character
 without whitespace, quotation marks or backslashes. Invalid settings fail
 validation; invalid environment values never silently revert to defaults.
 
+For native or container deployment, put both values in the administrator-owned
+environment configuration and restart the application. A Kubernetes ConfigMap
+may carry these non-secret settings; restrict who can edit it:
+
+```yaml
+CT_STEP_UP_MAX_AGE_SECONDS: "300"
+CT_STEP_UP_ACR_VALUES: '["urn:example:assurance:hardware"]'
+```
+
+Replace the example ACR with an exact value accepted by the reviewed realm
+policy. Configure the authorization-code client to request that context and
+emit signed `auth_time` and `acr` in the nonce-bound ID token. Bearer clients need
+their own signed authentication-event claims in API access tokens. Token `iat`
+or an access-token refresh is not a substitute. The issuer/client/subject and
+server-owned account policy remain separate configuration requirements.
+
 An absent or empty accepted set accepts no authentication context. Ordinary
 verified reads can continue, but risky decisions fail closed with
 `assurance_not_configured`; the UI cannot start step-up until configured.
@@ -37,6 +53,11 @@ verified human principal, integer NumericDate `auth_time` no later than now and
 no older than the configured maximum, and an exact accepted `acr`. Missing,
 malformed, future or stale evidence cannot be replaced by token `iat`, expiry,
 refresh time, a typed name or a request parameter. Core denials are audited.
+The API and core share one nondecreasing clock for assurance age. A backwards
+wall-clock correction cannot restore eligibility after the authentication event
+has aged out. Monotonic-clock failure latches a refusal for that process; repair
+the clock before a controlled restart. A forward time correction may conservatively
+expire assurance. This clock does not change the signed claims or token lifetimes.
 
 The API repeats the assurance check before risky route handlers, including bulk
 handlers that otherwise report per-item errors. Neither an HTTP preflight nor
@@ -74,6 +95,10 @@ continue to come from the validated API access token. Refresh never advances
 the captured authentication event, even if a refreshed token claims newer
 assurance. A bearer API request must carry its own signed required claims and
 cannot borrow browser ID-token evidence.
+An interactive exchange with a future-dated ID-token `auth_time` is refused
+before establishing a session, even when generic token skew would allow it.
+Such evidence cannot sit in a session and silently become usable later. Correct
+realm/node time rather than extending the assurance window.
 
 On a step-up 401, the UI keeps the signed-in view and offers a deliberate
 Reauthenticate action. `POST /auth/reauthenticate` requires the current session,
@@ -87,7 +112,10 @@ The pending transaction binds the original account and local session, requested
 view and start time. Its callback requires fresh, accepted, signed human assurance
 for the same subject and an `auth_time` at or after the transaction's start second.
 Logout, account switching, replay, stale proof or insufficient ACR cannot finish
-the transaction. A successful callback rotates the application session and returns
+the transaction. The originating session is checked before token endpoint I/O
+and again before publishing its replacement, including logout from another tab
+that does not hold the pending login cookie. A successful callback rotates the
+application session, CSRF token and copied worker lease validity, and returns
 to the saved path/query/fragment. The rejected mutation is never replayed; the
 operator must review and submit it again. Unsaved form contents are not persisted
 through the identity-provider navigation.
@@ -114,7 +142,8 @@ retain its existing authorizer calls: each individual approval will encounter
 this step-up guard, without changing quorum requirements or recorded decisions.
 Standalone gates and custom service contexts must wire this authorizer; the
 lower-level identity/role check alone is not the step-up policy. Delayed admin
-publication can lose freshness while work is running and must then be refused.
+publication can lose freshness while work is running and is currently refused;
+the long-job integration issue below remains open.
 The bulk proposal handler preserves per-item outcomes: expiry during a batch
 returns status 401, the error code and a structured `step_up` challenge on the
 refused item. The browser keeps earlier results, prompts for deliberate
@@ -125,3 +154,53 @@ after the first recorded decision and verify that its vote remains intact.
 Parent integration must preserve the `AppContext.authorize` hook, API error mapping,
 session assurance snapshot and client 401 distinction together. Rebuild the combined
 UI separately; this change does not commit generated assets or dependencies.
+
+## Independent review and long-job integration seam
+
+Review base: `97bbfd2`, with parent bulk-result correction `554de9b` applied.
+The review reproduced and corrected three issues:
+
+- A small wall-clock rollback allowed an already-stale principal to approve
+  through both direct core calls and HTTP. API and core now use the same
+  nondecreasing age clock, including copied worker contexts.
+- Initial browser login retained a future signed authentication event under the
+  generic token clock-skew allowance. It could later satisfy step-up without a
+  new interaction. The interactive exchange now rejects that event.
+- A pending reauthentication whose original session was revoked could still
+  exchange its code before failing the final session check. It now fails before
+  token endpoint I/O, while retaining the final post-exchange check.
+
+**Open: long-running admin jobs.** At this review base, content pulls call
+`authorize("admin")` at initiation, each file, and the downloader stop callback.
+Trusted-source publication calls it again through
+`ingest/content/signatures.py:decide`. Vulnerability database update guards also
+use `admin`. An otherwise authorized operation therefore stops when the initiating
+authentication event crosses the configured age limit, even when its credential
+is still valid. A transfer at 56 kbps can reach this boundary before its first
+file completes. No guard has been disabled to hide this limitation.
+
+The bounded resolution needs an explicit admission and continuation interface
+in the owning job services. Admission must require fresh assurance and current
+authorization, then bind an in-memory receipt to the exact initiating account,
+session, node, job ID, immutable request/file set, action, assurance configuration
+and a finite deadline. Only that job's continuation/publication guard may use
+the receipt. New scope, configuration, policy, override or approval decisions
+must always take the ordinary fresh-assurance path. A generic cached success for
+`admin`, or a copied HTTP route marker that bypasses all nested admin decisions,
+would be too broad.
+
+Continuation must recheck current signed identity/roles, account grants,
+session validity, kill/link state and source authenticity before I/O and
+publication. A changed policy/configuration or job intent must invalidate the
+admission, and stopped/pending jobs must remain terminal without automatic retry.
+The required content and vulnerability service wiring is outside this step-up
+review's write scope; the current repeated checks remain in place.
+
+There is a separate credential lifetime limit: copied browser leases deliberately
+retain the original token expiry and become invalid on refresh generation change
+or logout. An admission receipt alone cannot make a five-minute token authorize
+a longer job. Supporting that needs an independently reviewed, explicitly bounded
+per-job delegation/renewal design using actual newly validated signed credentials
+and current grants. Never extend `exp`, synthesize `auth_time`, renew an old
+principal silently, or substitute a shared privileged account. External CAC/PIV
+and real realm acceptance remain open.

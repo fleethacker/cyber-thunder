@@ -11,7 +11,7 @@ from starlette.routing import compile_path
 
 from cyberthunder.control.principal import Principal, principal_scope, operation_scope
 from cyberthunder.control.roles import permissions, permits, route_action
-from cyberthunder.security.step_up import StepUpPolicy, StepUpRequired, require_step_up
+from cyberthunder.security.step_up import StepUpPolicy, StepUpRequired, require_step_up, freshness_clock
 
 
 def mode_for(settings) -> str:
@@ -135,7 +135,7 @@ class AuthenticationMiddleware:
                 # Preflight also covers batch routes that report per-item exceptions.
                 # The core repeats this check alongside current resource authorization.
                 try:
-                    require_step_up(self.ctx.settings, principal, action)
+                    require_step_up(self.ctx.settings, principal, action, clock=freshness_clock(self.ctx))
                 except StepUpRequired as exc:
                     from cyberthunder.api.errors import error_response
                     try:

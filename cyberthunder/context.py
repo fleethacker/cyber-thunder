@@ -24,6 +24,8 @@ log = logging.getLogger(__name__)
 class AppContext:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings.from_env()
+        from cyberthunder.security.step_up import FreshnessClock
+        self.step_up_clock = FreshnessClock()
         # Trust configuration is mandatory when explicitly configured. Validate it
         # before constructing services or creating state; optional wiring cannot
         # swallow a bad key/policy file and silently disable authenticity checks.
@@ -91,7 +93,7 @@ class AppContext:
         from cyberthunder.control.principal import current_principal, require_current
         from cyberthunder.inventory.host import persisted_target
         from cyberthunder.security.resources import target_scope
-        from cyberthunder.security.step_up import StepUpRequired, require_step_up
+        from cyberthunder.security.step_up import StepUpRequired, require_step_up, freshness_clock
         principal = current_principal()
         try:
             principal = require_current(action, actor)
@@ -108,7 +110,7 @@ class AppContext:
             else:
                 resource = target
             self.access.require(principal, action, resource)
-            require_step_up(self.settings, principal, action)
+            require_step_up(self.settings, principal, action, clock=freshness_clock(self))
             return principal
         except StepUpRequired as exc:
             self.audit.append("authorization.denied", principal.actor,

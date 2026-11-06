@@ -47,7 +47,6 @@ def test_old_signed_browser_assurance_challenges_and_deliberate_reauthentication
 
 @pytest.mark.parametrize("id_changes,reason", [
     ({"auth_time": "missing"}, "invalid_authentication_time"),
-    ({"auth_time": "future"}, "future_authentication_time"),
     ({"acr": "urn:ct:test:stronger", "amr": ["cac"]}, "assurance_not_accepted"),
 ])
 def test_signed_insufficient_browser_claims_are_never_upgraded(browser_api, provider, id_changes, reason):
@@ -55,8 +54,6 @@ def test_signed_insufficient_browser_claims_are_never_upgraded(browser_api, prov
     provider.id_changes.update(id_changes)
     if provider.id_changes.get("auth_time") == "missing":
         provider.id_changes.pop("auth_time")
-    elif provider.id_changes.get("auth_time") == "future":
-        provider.id_changes["auth_time"] = int(time.time()) + 30
     headers, _ = sign_in(client, provider)
     result = client.post(f"/api/v1/proposals/{item.id}/approve", json={}, headers=headers)
     assert result.status_code == 401 and result.json()["step_up"]["reason"] == reason

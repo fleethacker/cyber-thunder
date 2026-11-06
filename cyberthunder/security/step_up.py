@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import json
 import math
 import re
+import threading
 import time
 
 RISKY_ACTIONS = frozenset({"approve", "policy", "kill.release", "admin"})
@@ -13,6 +14,40 @@ DETAIL = "Fresh authentication with an accepted assurance context is required."
 _ACR = re.compile(r'[\x21\x23-\x5b\x5d-\x7e]{1,128}\Z', re.ASCII)
 REASONS = frozenset({"assurance_not_configured", "human_authentication_required", "invalid_authentication_time",
                      "future_authentication_time", "authentication_too_old", "assurance_not_accepted"})
+_clock_lock = threading.Lock()
+
+
+class FreshnessClock:
+    """One node's nondecreasing authentication-age clock, shared by API and core.
+
+    Wall-clock corrections cannot renew an authentication event. Count suspend
+    time where the operating system's monotonic clock excludes it, and fail
+    closed permanently if the monotonic source itself becomes invalid.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._wall, self._mono = time.time(), time.monotonic()
+        self._failed = False
+
+    def now(self):
+        with self._lock:
+            before, wall, mono = time.monotonic(), time.time(), time.monotonic()
+            if (self._failed or not all(math.isfinite(v) for v in (self._wall, self._mono, before, wall, mono))
+                    or before < self._mono or mono < before or wall < 0):
+                self._failed = True
+                return float("nan")
+            self._wall = max(wall, self._wall + mono - self._mono)
+            self._mono = mono
+            return self._wall
+
+
+def freshness_clock(ctx):
+    """Also support service contexts that bind AppContext.authorize explicitly."""
+    with _clock_lock:
+        if not hasattr(ctx, "step_up_clock"):
+            ctx.step_up_clock = FreshnessClock()
+        return ctx.step_up_clock
 
 
 def parse_max_age(value: str | None) -> int:
@@ -102,6 +137,6 @@ class StepUpRequired(PermissionError):
         return value
 
 
-def require_step_up(settings, principal, action: str) -> None:
+def require_step_up(settings, principal, action: str, *, clock=None) -> None:
     if settings.auth_mode != "dev" and action in RISKY_ACTIONS:
-        StepUpPolicy.from_settings(settings).require(principal)
+        StepUpPolicy.from_settings(settings).require(principal, now=clock.now() if clock is not None else None)
