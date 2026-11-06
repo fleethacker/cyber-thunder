@@ -139,3 +139,94 @@ test('unstarted proposals stay empty unless an exact proposal block is recorded'
   assert.equal(step(rows, 'blocked').state, 'failed');
   assert.equal(step(rows, 'start'), undefined);
 });
+
+test('new verification failure supersedes old success regardless of array ordering', () => {
+  const rows = steps('verified', [event('remediation.verify', { error: 'new failure' }, 'error', 9),
+    event('proposal.verified', {}, 'ok', 4)]);
+  assert.equal(step(rows, 'verified').state, 'failed');
+  assert.equal(step(rows, 'verified').rec.seq, 9);
+});
+
+test('new complete verification supersedes old failure and keeps the matching receipt', () => {
+  const rows = steps('applied', [event('remediation.verify', { ok: true, rule_passed: true, health: true }, 'ok', 9),
+    event('proposal.failed', { note: 'verify failed: rule_passed=False health=True' }, 'failed', 4)]);
+  assert.equal(step(rows, 'verified').state, 'done');
+  assert.equal(step(rows, 'verified').rec.seq, 9);
+});
+
+test('new manual or incomplete verification cannot inherit old success', () => {
+  for (const [outcome, details] of [['manual', { ok: false, rule_passed: null, health: true }], ['ok', {}]]) {
+    const rows = steps('verified', [event('proposal.verified', {}, 'ok', 3),
+      event('remediation.verify', details, outcome, 8)]);
+    assert.equal(step(rows, 'verified').state, 'pending');
+    assert.equal(step(rows, 'verified').rec.seq, 8);
+  }
+});
+
+test('dated saved verification can supersede an older failed receipt', () => {
+  const rows = steps('verified', [event('remediation.verify', {}, 'failed', 3)], {
+    history: [{ state: 'verified', ts: '2026-11-06T13:00:00Z' }],
+  });
+  assert.equal(step(rows, 'verified').state, 'done');
+  assert.equal(step(rows, 'verified').rec, undefined);
+});
+
+test('contradictory proposal and target bindings never prove success', () => {
+  for (const details of [{ proposal_id: 'other' }, { target_id: 'other' }, { finding_id: 'other' }]) {
+    const rows = steps('failed', [event('remediation.before_state', details),
+      event('proposal.verified', details, 'ok', 2), event('proposal.rolled_back', details, 'reverted', 3)]);
+    for (const key of ['before', 'verified', 'rolled_back']) assert.equal(step(rows, key).state, 'pending');
+  }
+});
+
+test('malformed and conflicting sequence evidence is excluded without accepting false success', () => {
+  const good = event('remediation.before_state');
+  const invalid = [null, false, [], {}, { ...good, seq: '1' }, { ...good, seq: -1 },
+    { ...good, seq: NaN }, { ...good, seq: 1.5 }, { ...good, action: [] },
+    { ...good, details: [] }, { ...good, subject: 0 }, { ...good, actor: {} }, { ...good, ts: {} }];
+  assert.deepEqual(proposalAudit(invalid, 'old-change'), []);
+  assert.deepEqual(proposalAudit([good, { ...good, outcome: 'error' }], 'old-change'), []);
+  assert.equal(proposalAudit([good, { ...good }], 'old-change').length, 1);
+});
+
+test('equivalent fetched and streamed objects keep positive evidence despite key order', () => {
+  const a = event('remediation.before_state', { copied: 1, files: ['fixture'] });
+  const b = { details: { files: ['fixture'], copied: 1 }, ...Object.fromEntries(Object.entries(a).filter(([k]) => k !== 'details').reverse()) };
+  assert.equal(proposalAudit([a, b], 'old-change').length, 1);
+  assert.equal(step(steps('failed', [a, b]), 'before').state, 'done');
+});
+
+test('contradictory success bodies never confirm capture verification or restoration', () => {
+  const rows = steps('failed', [event('remediation.before_state', { ok: false }),
+    event('proposal.verified', { ok: false }, 'ok', 2),
+    event('proposal.rolled_back', { ok: false }, 'reverted', 3)]);
+  for (const key of ['before', 'verified', 'rolled_back']) assert.notEqual(step(rows, key).state, 'done');
+});
+
+test('a malformed rollback result does not invent a successful start boundary', () => {
+  const row = step(steps('failed', [event('remediation.rollback', {})]), 'rolled_back');
+  assert.equal(row.state, 'pending');
+  assert.equal(row.title, 'Rollback outcome unknown');
+});
+
+test('known receipt order wins over saved milestone timestamps when the clock moves backwards', () => {
+  const history = [{ state: 'verified', ts: '2026-11-06T14:00:00Z' },
+    { state: 'rolled_back', ts: '2026-11-06T14:01:00Z' }];
+  const rows = steps('rolled_back', [
+    { ...event('proposal.verified', {}, 'ok', 1), ts: '2026-11-06T14:00:00Z' },
+    event('remediation.verify', {}, 'failed', 2),
+    { ...event('proposal.rolled_back', {}, 'reverted', 3), ts: '2026-11-06T14:01:00Z' },
+    event('proposal.rollback_error', {}, 'error', 4),
+  ], { history });
+  assert.equal(step(rows, 'verified').state, 'failed');
+  assert.equal(step(rows, 'rolled_back').state, 'failed');
+});
+
+test('a later saved verification failure supersedes older successful checks', () => {
+  const rows = steps('failed', [event('proposal.verified', {}, 'ok', 1),
+    event('remediation.verify', { ok: true, rule_passed: true, health: true }, 'ok', 2)], {
+    history: [{ state: 'failed', ts: '2026-11-06T14:00:00Z', note: 'verify failed: rule_passed=False health=True' }],
+  });
+  assert.equal(step(rows, 'verified').state, 'failed');
+  assert.equal(step(rows, 'verified').rec, undefined);
+});

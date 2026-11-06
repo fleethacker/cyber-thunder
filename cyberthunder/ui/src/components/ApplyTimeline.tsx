@@ -16,8 +16,10 @@ export function useProposalAudit(proposalId: string): AuditRecord[] {
     api.audit({ subject: proposalId, limit: 1000 })
       .then((p) => {
         if (alive) setCache((cur) => {
-          const records = proposalAudit([...p.records, ...(cur.proposalId === proposalId ? cur.records : [])], proposalId);
-          return { proposalId, records: [...new Map(records.map((r) => [r.seq, r])).values()] };
+          // Retain conflicting envelopes so the reader can quarantine their sequence;
+          // choosing one here could turn an ambiguous receipt into a success.
+          const records = [...(Array.isArray(p.records) ? p.records : []), ...(cur.proposalId === proposalId ? cur.records : [])];
+          return { proposalId, records };
         });
       })
       .catch(() => { /* unavailable audit leaves only recorded history and live evidence */ });
@@ -27,7 +29,7 @@ export function useProposalAudit(proposalId: string): AuditRecord[] {
     if (proposalAudit([r], proposalId).length) {
       setCache((cur) => {
         const records = cur.proposalId === proposalId ? cur.records : [];
-        return { proposalId, records: records.some((x) => x.seq === r.seq) ? records : [...records, r] };
+        return { proposalId, records: records.some((x) => JSON.stringify(x) === JSON.stringify(r)) ? records : [...records, r] };
       });
     }
   });

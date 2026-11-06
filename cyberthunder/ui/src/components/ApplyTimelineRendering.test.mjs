@@ -138,3 +138,42 @@ test('limited applied history is explicitly ambiguous between payload and runboo
   assert.match(html, /Payload completion is unconfirmed/);
   assert.doesNotMatch(html, /Application recorded|>Applied<|>Verifying</);
 });
+
+test('verification is historical after failed, blocked or incomplete recovery too', () => {
+  for (const receipt of [event('remediation.rollback_started'), event('remediation.rollback_mutation'),
+    event('remediation.rollback', { ok: false }, 'error'),
+    event('proposal.rollback_error', { error: 'partial restore' }, 'error'),
+    event('remediation.rollback_preflight', {}, 'blocked')]) {
+    const html = render(proposal('verified'), [receipt]);
+    assert.match(html, /Historical result/);
+    assert.match(html, /current state.*unconfirmed/i);
+    assert.doesNotMatch(html, /Rolling back|Rolled back/);
+  }
+});
+
+test('a newer failed verification renders its own receipt instead of an old success badge', () => {
+  const html = render(proposal('verified'), [event('remediation.verify', { error: 'latest check failed' }, 'error', 12),
+    event('proposal.verified', {}, 'ok', 8)]);
+  assert.match(row(html, 'verified'), /data-state="failed"/);
+  assert.match(html, /Verification failed/);
+  assert.match(html, /#12/);
+  assert.doesNotMatch(html, /Verified ✓|#8/);
+});
+
+test('later recovery failure cannot be hidden by a saved rollback milestone', () => {
+  const html = render(proposal('rolled_back'), [event('proposal.rolled_back', {}, 'reverted', 10),
+    event('remediation.rollback_started', {}, 'ok', 11),
+    event('proposal.rollback_error', { error: 'later recovery failed' }, 'error', 12)]);
+  assert.match(row(html, 'rolled_back'), /data-state="failed"/);
+  assert.match(html, /later recovery failed/);
+  assert.doesNotMatch(html, /Rolled back/);
+});
+
+test('raw malformed records and history render unknown milestones without crashing', () => {
+  const html = render({ ...proposal('failed'), history: [null, 7, [], { state: 'verified', to: 'failed' }] },
+    [null, false, [], { ...event('proposal.verified'), seq: '2' },
+      { ...event('remediation.before_state'), ts: { unsafe: true } },
+      { ...event('proposal.rolled_back'), details: [] }]);
+  assert.doesNotMatch(html, /Before-state captured|Verified ✓|Rolled back/);
+  assert.match(html, /Verification outcome unknown/);
+});
