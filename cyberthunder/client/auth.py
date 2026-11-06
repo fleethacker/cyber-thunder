@@ -31,9 +31,15 @@ class ClientAuth:
         if (not all(math.isfinite(v) for v in (wall, mono)) or wall < self._raw_wall or mono < self._mono
                 or wall < (record or {}).get("observed_at", 0)):
             raise ClientError("clock_changed_login_required", outcome=3)
-        self._wall, self._mono = max(wall, self._wall + mono - self._mono), mono
+        self._wall, self._mono = max(wall, self._wall + (mono - self._mono)), mono
         self._raw_wall = wall
         return self._wall
+
+    def _observed_wall(self, record):
+        # Expiry uses elapsed monotonic time, which can advance between wall-clock
+        # ticks. Persist only an actual wall observation for rollback detection.
+        self.now(record)
+        return self._raw_wall
 
     def _identity(self, access, *, timeout=10, private=()):
         value = require_api(self.http.request("api", method="GET", route="/whoami", credential=access, timeout=timeout),
@@ -116,7 +122,7 @@ class ClientAuth:
             if record["phase"] != "empty":
                 raise ClientError("logout_before_login", outcome=3)
             # Establish the generation before polling; logout can invalidate it.
-            record["observed_at"] = self.now(record)
+            record["observed_at"] = self._observed_wall(record)
             self.store.save(record)
             generation = record["generation"]
             # One 256-bit verifier per attempt, retained only until login returns.
@@ -173,7 +179,7 @@ class ClientAuth:
                 session = self._tokens(response, deadline=deadline, private=(verifier, data["device_code"]))
                 if time.monotonic() >= deadline:
                     raise ClientError("authorization_expired", outcome=4, source="idp")
-                current.update(phase="ready", session=session, observed_at=self.now(current))
+                current.update(phase="ready", session=session, observed_at=self._observed_wall(current))
                 self.store.save(current)
             return redact({"status": "authenticated", "identity": session["identity"], "expires_at": session["expires_at"]},
                           session["access_token"], session["refresh_token"])
@@ -188,7 +194,7 @@ class ClientAuth:
             response = self.http.request("token_endpoint", payload={"grant_type": "refresh_token",
                 "refresh_token": session["refresh_token"], "client_id": self.profile["client_id"]})
             new = self._tokens(response, session)
-            record.update(phase="ready", session=new, observed_at=self.now(record))
+            record.update(phase="ready", session=new, observed_at=self._observed_wall(record))
             self.store.save(record)
         except BaseException:
             self.store.save(self.store.empty(record))
@@ -208,7 +214,7 @@ class ClientAuth:
             self._same_identity(session["identity"], identity)
             if min(session["expires_at"], expiry) <= self.now(record):
                 raise ClientError("token_expired_login_required", outcome=3)
-            record["observed_at"] = self.now(record)
+            record["observed_at"] = self._observed_wall(record)
             self.store.save(record)
             yield session["access_token"]
 
@@ -223,7 +229,7 @@ class ClientAuth:
                 return {"status": "expired", "verified": False}, 3
             identity, expiry = self._identity(session["access_token"])
             self._same_identity(session["identity"], identity)
-            record["observed_at"] = self.now(record)
+            record["observed_at"] = self._observed_wall(record)
             self.store.save(record)
             return redact({"status": "online_verified", "verified": True, "identity": identity,
                     "expires_at": min(expiry, session["expires_at"])}, session["access_token"], session["refresh_token"]), 0

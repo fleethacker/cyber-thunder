@@ -151,3 +151,59 @@ def test_status_does_not_refresh_and_clock_rollback_does_not_extend_session(clie
     clock.base -= 1000
     with pytest.raises(ClientError, match="clock_changed"):
         auth.status()
+
+
+def test_wall_clock_ticks_do_not_conflict_with_monotonic_session_expiry(client, monkeypatch):
+    auth, provider, clock = client
+    # The clocks need not tick together. Keep wall time fixed while elapsed time
+    # advances through login, status, credential use and refresh.
+    monkeypatch.setattr(clock, "time", lambda: clock.base)
+    auth.login(lambda *_: None)
+    assert auth.status()[1] == 0
+    with auth.access() as access:
+        assert access == "access-private"
+    with auth.store.locked():
+        record = auth.store.load()
+        assert record["observed_at"] == clock.base
+        expiry = record["session"]["expires_at"]
+    other = ClientAuth(auth.profile, store=auth.store, transport=provider)
+    assert other.status()[1] == 0
+    with auth.store.locked():
+        assert auth.store.load()["session"]["expires_at"] == expiry
+    clock.elapsed += 280
+    provider.refresh = "refresh-two"
+    with auth.access():
+        pass
+    with auth.store.locked():
+        refreshed = auth.store.load()
+        assert refreshed["observed_at"] == clock.base
+        assert refreshed["session"]["refresh_token"] == "refresh-two"
+        assert refreshed["session"]["expires_at"] <= expiry
+    before = len(provider.requests)
+    clock.elapsed += 30
+    assert auth.status() == ({"status": "expired", "verified": False}, 3)
+    assert len(provider.requests) == before
+
+
+@pytest.mark.parametrize("changed", ["wall", "monotonic", "stored_wall"])
+def test_clock_rollback_is_rejected_even_with_ahead_monotonic_time(client, monkeypatch, changed):
+    auth, provider, clock = client
+    monkeypatch.setattr(clock, "time", lambda: clock.base)
+    auth.login(lambda *_: None)
+    before = len(provider.requests)
+    if changed == "wall":
+        clock.base -= 0.001
+        clock.elapsed += 1
+    elif changed == "monotonic":
+        clock.elapsed -= 0.001
+    else:
+        with auth.store.locked():
+            record = auth.store.load()
+            record["observed_at"] = clock.base + 0.001
+            auth.store.save(record)
+        # A new process must also refuse a future persisted wall observation.
+        auth = ClientAuth(auth.profile, store=auth.store, transport=provider)
+        clock.elapsed += 1
+    with pytest.raises(ClientError, match="clock_changed_login_required"):
+        auth.status()
+    assert len(provider.requests) == before

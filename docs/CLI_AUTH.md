@@ -140,6 +140,12 @@ Normal API commands refresh near expiry when a refresh credential is available,
 then verify the account again. Refresh cannot change issuer/subject or invent a
 new `auth_time`, ACR or AMR. Clock rollback fails closed; correct the workstation
 clock before logging in again. Access lifetimes above one hour are unsupported.
+The saved clock watermark is an actual wall-clock observation. Session expiry
+also advances with process-local monotonic elapsed time; clocks with different
+tick resolution do not create a future saved watermark. A real backward wall or
+monotonic step, or a saved wall observation ahead of the current clock, still
+refuses use without a grace period. Existing future watermarks remain refused
+until the system clock catches up; the client does not silently rewrite them.
 
 ## Read, scan and decide through the API
 
