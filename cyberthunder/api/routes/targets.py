@@ -18,7 +18,7 @@ from cyberthunder.transport.base import TransportError
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["targets"], route_class=MappedRoute)
 
-READ_ONLY_FIELDS = {"id", "added_at", "last_scan"}
+READ_ONLY_FIELDS = {"id", "added_at", "last_scan", "authorization_id"}
 # The id names files and directories (scan workdirs, snapshots), so it must be a plain name.
 TARGET_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 BOOL_FIELDS = ("in_scope", "sudo", "simulated")

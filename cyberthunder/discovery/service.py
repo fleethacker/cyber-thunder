@@ -785,6 +785,9 @@ class DiscoveryService:
                             credential_ref=credential_ref or None, tags=["discovered"], in_scope=in_scope,
                             simulated=simulated, options=options,
                             notes=f"accepted from discovery by {actor}: {reason}")
+            from cyberthunder.control.principal import authorize
+            authorize(self.ctx, "admin", actor=actor)
+            authorize(self.ctx, "admin", actor=actor, target=target)
             self.ctx.inventory.add(target)
             self.ctx.save_inventory(actor, "inventory.add", {
                 "source": "discovery", "target": target.id,

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Iterator
 
 from cyberthunder.control.identity import normalize_actor, require_human
 from cyberthunder.control.killswitch import KillSwitchEngaged
+from cyberthunder.control.principal import authorize, current_operation, operation
 from cyberthunder.cluster.findings import (
     database_provenance, is_stale, mark_missing_sections, normalize_findings, parse_report,
 )
@@ -136,9 +137,17 @@ class _ClusterBinding:
     kubeconfig: str
     context: str
     kubectl: str
+    account: dict | None = None
+    credential: dict | None = None
 
     def argv(self) -> list[str]:
-        return [self.kubectl, "--kubeconfig", self.kubeconfig, "--context", self.context]
+        args = [self.kubectl, "--kubeconfig", self.kubeconfig, "--context", self.context]
+        if self.credential is not None:
+            args.extend(["--cluster", self.credential["cluster"], "--user", self.credential["user"]])
+        return args
+
+    def to_dict(self) -> dict:
+        return {k: v for k, v in asdict(self).items() if v is not None}
 
 
 class ClusterBaselineService:
@@ -148,6 +157,21 @@ class ClusterBaselineService:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _binding(self, target_id: str) -> _ClusterBinding:
+        if getattr(self.ctx.settings, "auth_mode", "dev") != "dev":
+            from cyberthunder.inventory.host import persisted_target
+            from cyberthunder.security.credentials import bind_target
+            from cyberthunder.security.kube_credentials import validate_kubeconfig
+            target = persisted_target(self.ctx.inventory, target_id, require_scope=True)
+            action = current_operation()
+            if action not in {"scan", "discover"}:
+                raise PermissionError("cluster access requires a scan or discovery operation")
+            principal = authorize(self.ctx, action, target=target)
+            binding = self.ctx.access.credential(principal, action, target)
+            selected = bind_target(target, binding)
+            checked = validate_kubeconfig(binding)
+            base = self._target_binding(selected)
+            return _ClusterBinding(base.target_id, base.kubeconfig, base.context, "kubectl",
+                                   binding.evidence(), checked.evidence())
         inventory_path = self.ctx.inventory.path
         if inventory_path is None:
             raise ClusterGuardError("cluster access requires a persisted inventory authorization source")
@@ -179,9 +203,11 @@ class ClusterBaselineService:
 
     def _authorize(self, target_id: str, actor: str, action: str) -> _ClusterBinding:
         try:
+            if getattr(self.ctx.settings, "auth_mode", "dev") != "dev":
+                authorize(self.ctx, current_operation() or "scan", actor=actor, target=target_id)
             self.ctx.killswitch.guard(action, actor)
             return self._binding(target_id)
-        except (ScopeViolation, KillSwitchEngaged):
+        except (PermissionError, ScopeViolation, KillSwitchEngaged):
             raise
         except Exception as exc:  # noqa: BLE001 - fail closed, including transient guard and parser failures
             # Parser/IO exceptions can carry inventory contents; only expose the failure type to audit/API.
@@ -202,7 +228,9 @@ class ClusterBaselineService:
             actor = require_human(actor)
             details["requested_by"] = actor
             binding = self._authorize(details["target_id"], actor, action)
-            details.update(asdict(binding))
+            if binding.account is not None:
+                self.ctx.audit.append("credential.use", actor, binding.account, subject=binding.target_id)
+            details.update(binding.to_dict())
             self.ctx.audit.append(f"{action}.start", actor, details, subject=details["run_id"])
             started = True
             yield binding, details
@@ -221,9 +249,14 @@ class ClusterBaselineService:
 
     def _kubectl_json(self, binding: _ClusterBinding, actor: str, *args: str, timeout: int = 120) -> dict:
         self._guard(binding, actor)
+        options = {}
+        if binding.account is not None:
+            from cyberthunder.security.kube_credentials import kube_subprocess_env, validate_kubectl_args
+            validate_kubectl_args([*args, "-o", "json"])
+            options["env"] = kube_subprocess_env()
         try:
             p = subprocess.run([*binding.argv(), *args, "-o", "json"], capture_output=True, text=True,
-                               timeout=timeout, encoding="utf-8", errors="replace")
+                               timeout=timeout, encoding="utf-8", errors="replace", **options)
         finally:
             self._guard(binding, actor)
         if p.returncode != 0:
@@ -233,11 +266,12 @@ class ClusterBaselineService:
             raise RuntimeError("kubectl supplied no valid resource list")
         return doc
 
+    @operation("discover")
     def survey(self, *, actor: str, target_id: str | None = None) -> dict:
         with self._operation("cluster.survey", actor, target_id) as (binding, details):
             result = self._survey(binding, details["requested_by"])
             details.update(namespaces=len(result["namespaces"]), errors=len(result["errors"]))
-            return {**result, "requested_by": details["requested_by"], "target": asdict(binding),
+            return {**result, "requested_by": details["requested_by"], "target": binding.to_dict(),
                     "id": details["run_id"]}
 
     def _survey(self, binding: _ClusterBinding, actor: str) -> dict:
@@ -288,6 +322,7 @@ class ClusterBaselineService:
         return {"surveyed_at": utcnow(), "namespaces": namespaces, "workloads": [w.to_dict() for w in workloads],
                 "errors": errors}
 
+    @operation("scan")
     def scan(self, *, actor: str, target_id: str | None = None, use_openai: bool = False) -> dict:
         with self._operation("cluster.baseline", actor, target_id) as (binding, details):
             try:
@@ -302,7 +337,7 @@ class ClusterBaselineService:
                     self._guard(binding, details["requested_by"])
                     error = f"Cluster vulnerability assessment failed ({type(exc).__name__})"
                     findings, _ = normalize_findings(binding.target_id, {"errors": [error]}, {}, None,
-                                                     details["run_id"], target_binding=asdict(binding))
+                                                     details["run_id"], target_binding=binding.to_dict())
                     findings = [f for f in findings if f.rule_id.startswith("cluster-survey:")]
                     self.ctx.store.save_findings(details["run_id"], findings)
                     self._guard(binding, details["requested_by"])
@@ -353,7 +388,7 @@ class ClusterBaselineService:
             if snapshot and is_stale(snapshot):
                 image_reports[image]["complete"] = False
         errors.extend(mark_missing_sections(self.ctx.store.current_findings(), binding.target_id, survey,
-                                             image_reports, asdict(binding)))
+                                             image_reports, binding.to_dict()))
         profiles = self._profiles(survey, image_reports)
         if describe:
             for profile in profiles:
@@ -370,10 +405,13 @@ class ClusterBaselineService:
                 elif err:
                     profile.setdefault("notes", []).append(f"OpenAI summary unavailable: {err}")
         doc = {"id": run_id, "generated_at": utcnow(), "survey": survey, "images": image_reports,
-               "namespaces": profiles, "errors": errors, "requested_by": actor, "target": asdict(binding),
+               "namespaces": profiles, "errors": errors, "requested_by": actor, "target": binding.to_dict(),
                "status": "partial" if errors else "done", "database": database_provenance(snapshot)}
+        from cyberthunder.security.resources import capture
+        doc["targets"] = [binding.target_id]
+        doc["authorization_scopes"] = capture(self.ctx, doc["targets"])
         findings, assessed = normalize_findings(binding.target_id, survey, image_reports, snapshot, run_id,
-                                                target_binding=asdict(binding))
+                                                target_binding=binding.to_dict())
         run = self._scan_run(binding, details, findings, status=doc["status"], errors=errors,
                              assessed=assessed, database=doc["database"])
         self._guard(binding, actor)
@@ -403,7 +441,11 @@ class ClusterBaselineService:
                        findings_count=len(findings), summary=summary, error="; ".join(errors) or None).to_dict()
 
     def latest(self) -> dict | None:
-        return self.ctx.store.read_json(self.root / "latest.json")
+        doc = self.ctx.store.read_json(self.root / "latest.json")
+        if doc is not None:
+            from cyberthunder.security.resources import check_record
+            check_record(self.ctx, doc)
+        return doc
 
     def _scan_image(self, image: str, run_dir: Path, binding: _ClusterBinding,
                     actor: str, *, snapshot: dict) -> tuple[dict | None, str | None]:
@@ -418,6 +460,13 @@ class ClusterBaselineService:
                 "--scanners", "vuln", "--skip-db-update",
                 "--skip-java-db-update", "--offline-scan", "--skip-version-check", "--", image]
         env = {key: value for key, value in os.environ.items() if not key.upper().startswith("TRIVY_")}
+        if binding.account is not None:
+            from cyberthunder.vulnerabilities.engine import environment
+            isolated = run_dir / "scanner-home"
+            isolated.mkdir(mode=0o700, exist_ok=True)
+            env = environment(isolated)
+            # No daemon or shared registry-account fallback in a user's scan.
+            args[2:2] = ["--image-src", "remote"]
         t0 = time.monotonic()
         self._guard(binding, actor)
         try:

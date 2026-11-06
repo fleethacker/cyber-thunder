@@ -313,9 +313,15 @@ def dependency_ssh_probe(monkeypatch):
 
 def test_dependency_probe_uses_shared_connector_and_keeps_read_bounds(dependency_ssh_probe):
     probe = dependency_ssh_probe
-    guard = lambda: None
+    checked = []
+    guard = lambda: checked.append("caller")
     assert io.read_command(probe.transport, "fixed-read", timeout=10, guard=guard) == "facts"
-    assert probe.calls[0] == ("connect", {"timeout": 3, "guard": guard, "allow_agent": False})
+    assert probe.calls[0][0] == "connect"
+    passed = probe.calls[0][1]
+    assert passed["timeout"] == 3 and passed["allow_agent"] is False
+    before = len(checked)
+    passed["guard"]()
+    assert len(checked) == before + 1
     assert ("recv", 4096) in probe.calls
     assert probe.calls[-2:] == [("channel_closed",), ("client_closed",)]
 

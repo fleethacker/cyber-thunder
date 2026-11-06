@@ -49,3 +49,16 @@ def test_new_full_scan_resets_the_overlay(state_dir):
     _run(store, "scan-3", "2026-11-04T12:00:00+00:00", [_f("h1", "a", status="not_a_finding")])
     assert store.latest_scan_id() == "scan-3"
     assert [f.rule_id for f in store.load_findings()] == ["a"]
+
+
+def test_full_scan_does_not_erase_targets_it_did_not_scan(state_dir):
+    store = StateStore(state_dir)
+    _run(store, "both", "2026-11-04T10:00:00+00:00", [_f("h1", "a"), _f("h2", "b")])
+    _run(store, "one", "2026-11-04T11:00:00+00:00", [_f("h1", "a", status="not_a_finding")])
+    current = {f.host: f for f in store.load_findings()}
+    assert current["h1"].status.value == "not_a_finding"
+    assert current["h2"].status.value == "open"
+    store.save_scan_run({"id": "empty", "started_at": "2026-11-04T12:00:00+00:00",
+                         "status": "done", "targets": ["h1"]})
+    store.save_findings("empty", [])
+    assert [(f.host, f.rule_id) for f in store.load_findings()] == [("h2", "b")]

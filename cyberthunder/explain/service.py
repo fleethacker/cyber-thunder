@@ -62,6 +62,7 @@ class Explanation:
     latency_s: float | None = None
     attempts: int = 1
     fingerprint: str | None = None  # finding_fingerprint() of the finding this text was written for
+    authorization_scope: dict | None = None
 
     def to_dict(self) -> dict: return asdict(self)
     @classmethod
@@ -74,7 +75,7 @@ def finding_fingerprint(finding: Finding) -> str:
     """Hash of the finding fields an explanation depends on. Finding ids are stable per (host, source, rule),
     so a cached explanation is only reused while severity, status, evidence, rule and fix are unchanged."""
     parts = [finding.severity.value, finding.status.value, finding.evidence, finding.rule_version,
-             finding.benchmark_release, finding.fix_ref]
+             finding.benchmark_release, finding.fix_ref, finding.authorization_scope]
     return hashlib.sha256(json.dumps(parts).encode("utf-8")).hexdigest()
 
 
@@ -144,10 +145,16 @@ class ExplainService:
     # -- public API --------------------------------------------------------------------
     def get(self, finding_id: str) -> Explanation | None:
         d = self.ctx.store.load_explanation(finding_id)
+        if d and getattr(self.ctx.settings, "auth_mode", "dev") != "dev":
+            from cyberthunder.security.resources import visible_artifact
+            if not visible_artifact(self.ctx, d.get("authorization_scope")):
+                return None
         return Explanation.from_dict(d) if d else None
 
     def explain(self, finding: Finding, *, force: bool = False) -> Explanation:
         """Return cached explanation unless force; otherwise call the backend, validate, cache, audit 'explain.generate'."""
+        from cyberthunder.security.resources import check_record
+        check_record(self.ctx, finding, "explain")
         authorize(self.ctx, "explain", target=finding.host)
         fp = finding_fingerprint(finding)
         if not force:
@@ -194,6 +201,8 @@ class ExplainService:
                               validated=attempts == 0, dropped_citations=dropped, fallback=True,
                               latency_s=latency, attempts=max(attempts, 1))
         exp.fingerprint = fp
+        exp.authorization_scope = finding.authorization_scope
+        check_record(self.ctx, finding, "explain")
         authorize(self.ctx, "explain", target=finding.host)
         self.ctx.store.save_explanation(finding.id, exp.to_dict())
         details = {"finding_id": finding.id, "backend": exp.backend, "requested_backend": backend.name,
@@ -219,6 +228,8 @@ class ExplainService:
         seen: set[str] = set()
         todo: list[Finding] = []
         for f in findings:
+            from cyberthunder.security.resources import check_record
+            check_record(self.ctx, f, "explain")
             if f.id in seen:
                 continue
             seen.add(f.id)

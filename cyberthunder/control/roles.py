@@ -1,7 +1,7 @@
 """Explicit permissions; unknown actions and new write routes fail closed."""
 from __future__ import annotations
 
-READ = frozenset({"read", "kill.engage"})
+READ = frozenset({"read", "read.all", "kill.engage"})
 ROLE_PERMISSIONS = {
     "viewer": READ,
     "analyst": READ | {"scan", "discover", "propose", "explain", "plan", "import"},

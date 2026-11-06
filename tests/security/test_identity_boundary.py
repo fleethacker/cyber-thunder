@@ -51,7 +51,7 @@ def verified_app(state_dir, monkeypatch):
     path.write_text(json.dumps({"version": 1, "entries": [
         {"issuer": identity().issuer, "subject": subject,
          "node_actions": ["kill.engage", "kill.release", "audit"],
-         "grants": [{"target_ids": [tid], "actions": sorted(ACTIONS)}]}
+         "grants": [{"target_ids": [tid], "actions": sorted(ACTIONS - {"read.all"})}]}
         for subject, tid in (("first-user", "alpha"), ("second-user", "beta"))]}))
     path.chmod(0o600)
     ctx.access = AccessPolicy(path)

@@ -264,6 +264,8 @@ class RemediationEngine:
             raise PolicyEvidenceBlocked(reason + "; cancel this proposal and request individual approval")
 
     def propose(self, finding: Finding, *, actor: str = "agent", fix: FixEntry | None = None) -> Proposal | None:
+        from cyberthunder.security.resources import check_record
+        check_record(self.ctx, finding, "propose")
         if self._review_suppressed(finding, actor, "propose"):
             return None
         existing = self.proposal_for_finding(finding.id)
@@ -359,6 +361,8 @@ class RemediationEngine:
     # -- execution ---------------------------------------------------------------------
     def _target(self, p: Proposal, action: str, actor: str):
         try:
+            from cyberthunder.security.resources import check_record
+            check_record(self.ctx, p, "apply" if action == "execute" else action)
             from cyberthunder.control.identity import is_machine
             # Internal completion/recovery uses a service label while retaining
             # the initiating principal. It never supplies a new account identity.

@@ -31,6 +31,10 @@ SCOPED = {
     ("POST", "/scans"), ("POST", "/scan"), ("POST", "/findings/explain"),
     ("POST", "/proposals/bulk"), ("POST", "/generate/explain"), ("POST", "/generate/propose"),
     ("POST", "/apply"), ("POST", "/rollback"), ("POST", "/reports"),
+    ("GET", "/cluster/survey"), ("POST", "/cluster/baseline"),
+    ("GET", "/outbox"), ("POST", "/outbox/sync"),
+    ("GET", "/cluster/risk"), ("GET", "/cluster/known-good"),
+    ("POST", "/cluster/known-good/exceptions"), ("DELETE", "/cluster/known-good/exceptions/{exception_id}"),
 }
 
 
@@ -44,6 +48,8 @@ async def authorize_request(request: Request) -> None:
     if action is None:
         raise PermissionError("route has no authorization policy")
     require_current(action)
+    if path in {"/demo", "/demo/load", "/demo/reset"} and method != "GET":
+        raise PermissionError("demonstration controls are available only in local development mode")
     params = request.path_params
     if "target_id" in params:
         authorize(ctx, action, target=params["target_id"])
@@ -69,12 +75,19 @@ async def authorize_request(request: Request) -> None:
         proposal_id = receipt.get("proposal_id")
         if not isinstance(proposal_id, str):
             raise PermissionError("assessment resource association unavailable")
-        authorize(ctx, action, target=ctx.gate.get(proposal_id).host)
+        from cyberthunder.api.util import get_proposal
+        proposal = get_proposal(ctx, proposal_id)
+        from cyberthunder.security.resources import check_record
+        check_record(ctx, proposal, action)
         return
     if (method, path) in SCOPED:
         return
     # Node-wide views and operations require an explicit node grant. No target grant implies one.
     authorize(ctx, action)
+    if action == "read":
+        # Unfiltered node history can include removed targets. Current inventory grants
+        # cannot prove ownership of that data; require an explicit global read grant.
+        authorize(ctx, "read.all")
     if action in {"read", "export", "import", "admin", "discover", "scan", "policy"}:
         # Global reports, history and catalog selection can contain data from several environments.
         require_all(ctx, ctx.inventory.all())

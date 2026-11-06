@@ -79,6 +79,11 @@ class CurrentFindings:
     def for_context(cls, ctx):
         proposals = list(ctx.gate.list())
         records = list(ctx.audit.records())
+        if getattr(getattr(ctx, "settings", None), "auth_mode", "dev") != "dev":
+            from cyberthunder.security.resources import visible_record
+            proposals = [p for p in proposals if visible_record(ctx, p)]
+            allowed_ids = {p.id for p in proposals}
+            records = [r for r in records if r.get("subject") in allowed_ids]
         completed = [(r.get("subject"), r.get("details", {})) for r in records
                      if r.get("action") == "remediation.rollback"]
         completed_by_proposal = dict(completed)

@@ -60,6 +60,7 @@ class ScanRun:
     summary: dict = field(default_factory=dict)   # findings.schema.summarize() output
     error: str | None = None
     coverage_incomplete: bool | None = None       # None for legacy runs without coverage observations
+    authorization_scopes: list[dict] | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -140,9 +141,16 @@ class Scanner:
         try:
             self.run(run)
         except Exception:  # noqa: BLE001  a background thread must not die silently; run() already recorded it
+            if run.status == "pending":
+                run.status, run.error, run.finished_at = "error", "scan authorization expired or was revoked before execution", utcnow()
+                self._save(run)
             log.exception("scan %s failed", run.id)
 
     def _save(self, run: ScanRun) -> None:
+        if run.authorization_scopes is None:
+            previous = self.ctx.store.load_scan_run(run.id)
+            run.authorization_scopes = (previous.get("authorization_scopes") if previous is not None else
+                                        self.ctx.store.capture_resources(run.targets))
         d = run.to_dict()
         with self._lock:
             if run.status in ("pending", "running"):

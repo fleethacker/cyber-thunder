@@ -29,6 +29,17 @@ class AppContext:
         self.killswitch = KillSwitch(self.store.root, self.audit)
         self.gate = ApprovalGate(self.store.proposals, self.audit, self.killswitch, policy_path=self.store.policy)
         self.inventory = Inventory.load(self.store.targets)
+        from cyberthunder.security.resources import capture
+        def resource_scope(target_id):
+            try:
+                return capture(self, [target_id])[0]
+            except (KeyError, PermissionError, OSError, ValueError):
+                if self.settings.auth_mode != "dev":
+                    raise
+                return None
+        self.gate.resource_scope = resource_scope
+        from cyberthunder.security.resources import check_record
+        self.gate.artifact_authorizer = lambda record, action: check_record(self, record, action)
         if self.settings.auth_mode != "dev":
             from cyberthunder.control.access import AccessPolicy
             self.access = AccessPolicy(self.store.root / "auth" / "access.json")
@@ -49,6 +60,8 @@ class AppContext:
         from cyberthunder.control.assessment import bind_assessment
         self.gate.assessment_validator = lambda pid, aid, note: bind_assessment(self, pid, aid, note)
         self.ingest = self._optional("cyberthunder.ingest.service", "IngestService")
+        if self.ingest is not None:
+            self.ingest.outbox.ctx = self
         self.reports = self._optional("cyberthunder.report.service", "ReportService")
         self.discovery = self._optional("cyberthunder.discovery.service", "DiscoveryService")
         self.vulnerabilities = self._optional("cyberthunder.vulnerabilities.service", "VulnerabilityService")
@@ -116,6 +129,10 @@ class AppContext:
             principal = self.authorize(action, target=target)
             binding = self.access.credential(principal, action, target)
             selected = bind_target(target, binding)
+            kube_binding = None
+            if selected.transport == "kubeconfig":
+                from cyberthunder.security.kube_credentials import validate_kubeconfig
+                kube_binding = validate_kubeconfig(binding)
             evidence = binding.evidence()
             configuration = {k: v for k, v in target.to_dict().items() if k not in {"last_scan", "notes", "added_at"}}
 
@@ -128,14 +145,22 @@ class AppContext:
                 now = {k: v for k, v in current.to_dict().items() if k not in {"last_scan", "notes", "added_at"}}
                 if now != configuration or self.access.credential(principal, action, current).evidence() != evidence:
                     raise PermissionError("target or account authorization changed; reconnect using current permissions")
+                if kube_binding is not None:
+                    from cyberthunder.security.kube_credentials import guard_kubeconfig
+                    guard_kubeconfig(kube_binding)
 
             guard()
-            # Kubeconfig consumers require validation of embedded authentication providers as well.
-            if selected.transport == "kubeconfig":
-                raise PermissionError("account-specific Kubernetes configuration validation is required")
             self.audit.append("credential.use", principal.actor, evidence, subject=target.id)
             transport = make_transport(selected, self.settings, guard=guard,
                 on_security_event=lambda event: self.record_transport_event(target, event))
+            if kube_binding is not None:
+                transport.account_binding = kube_binding
+                transport.account_guard = guard
+            def secondary_transport(target_id):
+                guard()
+                node = persisted_target(self.inventory, target_id, require_scope=True)
+                return node, self.transport_for(node)
+            transport.secondary_transport = secondary_transport
             return protect_transport(transport, guard, sudo_allowed=binding.sudo)
         return make_transport(target, self.settings,
                               on_security_event=lambda event: self.record_transport_event(target, event))

@@ -247,6 +247,14 @@ def read_command(transport, command, *, timeout, guard):
     from cyberthunder.transport.ssh import SSHTransport
     from cyberthunder.transport.winrm import WinRMTransport
 
+    caller_guard = guard
+    def guard():
+        caller_guard()
+        for name in ("account_guard", "_guard"):
+            check = getattr(transport, name, None)
+            if callable(check):
+                check()
+
     guard()
     if isinstance(transport, FixtureTransport):
         result = _fixture(transport, command)
@@ -254,7 +262,9 @@ def read_command(transport, command, *, timeout, guard):
         argv, stdin = transport.build_argv(command)
         if stdin is not None:
             raise ReadFailure("unsupported_command")
-        result = _process(argv, timeout, guard=guard)
+        from cyberthunder.security.kube_credentials import kube_subprocess_env
+        env = kube_subprocess_env() if getattr(transport, "account_binding", None) is not None else None
+        result = _process(argv, timeout, guard=guard, env=env)
     elif type(transport) is LocalTransport:
         argv = shlex.split(command) if command.startswith("systemctl show ") else transport._argv(command)
         result = _process(argv, timeout, cwd=transport.cwd, env=transport.env, guard=guard)

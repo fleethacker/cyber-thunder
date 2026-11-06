@@ -84,6 +84,7 @@ class Proposal:
     before_state_ref: str | None = None   # snapshot/backup handle captured before apply
     history: list[dict] = field(default_factory=list)
     assessment: dict | None = None   # immutable receipt reference reviewed by the approving person
+    authorization_scope: dict | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -111,6 +112,8 @@ class ApprovalGate:
         self.policy_path = Path(policy_path) if policy_path else None
         self.assessment_validator = None
         self.authorizer = None
+        self.resource_scope = None
+        self.artifact_authorizer = None
         self._items: dict[str, Proposal] = {}
         self._sig: tuple[int, int] | None = None
         self._tlock = threading.RLock()
@@ -200,6 +203,8 @@ class ApprovalGate:
                 if live:
                     return live[-1]
             p = Proposal(**kwargs)
+            if self.resource_scope is not None:
+                p.authorization_scope = self.resource_scope(p.host)
             entry = {"ts": p.created_at, "state": p.state.value, "actor": actor, "note": None}
             _add_principal(entry)
             if meta:
@@ -236,7 +241,9 @@ class ApprovalGate:
             return actor
         return require_human(actor)
 
-    def _authorize(self, action: str, actor: str, proposal: Proposal) -> None:
+    def _authorize(self, action: str, actor: str | None, proposal: Proposal) -> None:
+        if self.artifact_authorizer:
+            self.artifact_authorizer(proposal, action)
         if self.authorizer:
             self.authorizer(action, actor=actor, target=proposal.host)
 
@@ -257,8 +264,7 @@ class ApprovalGate:
                 # verified account must still hold the operation's target permission.
                 if new != ProposalState.APPLYING and current_operation() in {"apply", "verify", "rollback"}:
                     action = current_operation()
-                self.authorizer(action, target=p.host,
-                                actor=actor if new == ProposalState.APPLYING or not is_machine(actor) else None)
+                self._authorize(action, actor if new == ProposalState.APPLYING or not is_machine(actor) else None, p)
             if new not in TRANSITIONS[p.state]:
                 self.audit.append(f"proposal.{new.value}", actor, {"from": p.state.value, "note": note},
                                   subject=pid, outcome="rejected")

@@ -38,8 +38,8 @@ def list_proposals(ctx=CtxDep, state: str | None = None, host: str | None = None
     items = sorted(ctx.gate.list(), key=lambda p: p.created_at)
     out = []
     for p in items:
-        from cyberthunder.api.access import visible
-        if not visible(ctx, p.host):
+        from cyberthunder.security.resources import visible_record
+        if not visible_record(ctx, p):
             continue
         if states and p.state.value not in states:
             continue

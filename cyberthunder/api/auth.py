@@ -5,6 +5,7 @@ import ipaddress
 from pathlib import Path
 
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.routing import compile_path
 
@@ -48,9 +49,29 @@ def make_validator(settings, state_dir: Path):
         authorized_party=getattr(settings, "oidc_authorized_party", None)))
 
 
+def make_session_config(settings, state_dir: Path):
+    from cyberthunder.security.oidc import OIDCConfig
+    from cyberthunder.security.sessions import SessionConfig
+    names = ("oidc_client_id", "oidc_authorization_endpoint", "oidc_token_endpoint", "oidc_redirect_uri")
+    values = [getattr(settings, name, "") for name in names]
+    if not any(values):
+        return None
+    if not all(values):
+        raise ValueError("browser sign-in requires client ID, authorization endpoint, token endpoint and redirect URI")
+    if getattr(settings, "oidc_authorized_party", None) != values[0]:
+        raise ValueError("browser sign-in requires CT_OIDC_AUTHORIZED_PARTY to equal CT_OIDC_CLIENT_ID")
+    return SessionConfig(settings.oidc_issuer, *values,
+        id_token_config=OIDCConfig(issuer=settings.oidc_issuer, audience=values[0],
+            jwks_url=settings.oidc_jwks_url, cache_path=state_dir.absolute() / "auth" / "id-jwks.json",
+            max_age_s=settings.oidc_jwks_max_age, authorized_party=values[0]),
+        client_secret_ref=settings.oidc_client_secret_ref, scope=settings.oidc_scope,
+        idle_timeout_s=settings.session_idle_seconds, absolute_timeout_s=settings.session_absolute_seconds)
+
+
 class AuthenticationMiddleware:
-    def __init__(self, app, *, ctx, routes, mode: str, validator=None):
+    def __init__(self, app, *, ctx, routes, mode: str, validator=None, sessions=None):
         self.app, self.ctx, self.routes, self.mode, self.validator = app, ctx, routes, mode, validator
+        self.sessions = sessions
 
     def _refusal(self, action: str, route: str, reason: str, principal=None) -> None:
         # Never include request headers, query strings, tokens, bodies, or validator exceptions.
@@ -70,9 +91,28 @@ class AuthenticationMiddleware:
                 action = route_action(method, route_path)
                 break
         headers = [v for k, v in scope.get("headers", []) if k.lower() == b"authorization"]
-        principal = None
+        principal = validity = None
         reason, code = "authentication required", 401
-        if len(headers) == 1 and len(headers[0]) <= 32768:
+        cookie_request = any(b"__Host-ct_session" in v for k, v in scope.get("headers", []) if k.lower() == b"cookie")
+        if cookie_request and self.sessions is not None:
+            try:
+                request_headers = Headers(scope=scope)
+                await run_in_threadpool(self.sessions.csrf_check, method, request_headers)
+                touch = not (method == "GET" and route_path in {"/api/v1/status", "/api/v1/audit/verify", "/api/v1/audit/stream"})
+                resolved = await run_in_threadpool(self.sessions.resolve_session_with_lease, request_headers, touch=touch)
+                if resolved is None:
+                    raise ValueError("invalid session")
+                claims, lease = resolved
+                def validity():
+                    try:
+                        lease()
+                    except Exception:
+                        raise PermissionError("the authenticated application session is no longer valid") from None
+                principal = Principal.from_claims(claims, via=self.mode,
+                    roles_claim=getattr(self.ctx.settings, "oidc_roles_claim", "ct_roles"))
+            except Exception:
+                reason = "session authentication or request verification failed"
+        elif not cookie_request and len(headers) == 1 and len(headers[0]) <= 32768:
             try:
                 scheme, value = headers[0].decode("ascii").split(" ", 1)
                 if scheme.casefold() != "bearer" or not value or value.strip() != value:
@@ -89,8 +129,17 @@ class AuthenticationMiddleware:
                 reason, code = "role does not permit this action", 403
             else:
                 scope.setdefault("state", {})["principal"] = principal
-                with principal_scope(principal), operation_scope(action):
-                    await self.app(scope, receive, send)
+                async def private_send(message):
+                    if message["type"] == "http.response.start":
+                        message = dict(message)
+                        response_headers = [(k, v) for k, v in message.get("headers", [])
+                                            if k.lower() not in {b"cache-control", b"pragma", b"vary", b"x-content-type-options"}]
+                        response_headers.extend([(b"cache-control", b"no-store"), (b"pragma", b"no-cache"),
+                                                 (b"vary", b"Cookie, Authorization"), (b"x-content-type-options", b"nosniff")])
+                        message["headers"] = response_headers
+                    await send(message)
+                with principal_scope(principal, validity=validity), operation_scope(action):
+                    await self.app(scope, receive, private_send)
                 return
         try:
             await run_in_threadpool(self._refusal, action or "unknown", route_path, reason, principal)
@@ -112,6 +161,18 @@ def install_auth(app, ctx):
                 "verified": bool(principal and principal.verified)}
 
     validator = make_validator(ctx.settings, Path(ctx.store.root)) if mode != "dev" else None
+    if not hasattr(ctx, "session_config"):
+        ctx.session_config = make_session_config(ctx.settings, Path(ctx.store.root)) if mode != "dev" else None
+    def session_identity(claims):
+        principal = Principal.from_claims(claims, via=mode, roles_claim=ctx.settings.oidc_roles_claim)
+        return {"principal": {"actor": principal.actor, "name": principal.display_name,
+                "subject": principal.subject, "issuer": principal.issuer, "source": principal.via,
+                "roles": list(principal.roles), "verified": principal.verified},
+                "permissions": sorted(permissions(principal))}
+    ctx.session_status_identity = session_identity
+    from cyberthunder.api.session_routes import install_sessions
+    sessions = install_sessions(app, ctx, validator)
+    app.state.sessions = sessions
     routes = []
     # Use the public schema rather than framework-private included-router wrappers. Undocumented
     # API routes are denied by the middleware until deliberately added to this policy table.
@@ -126,4 +187,4 @@ def install_auth(app, ctx):
             routes.append((method.upper(), path, compile_path(path)[0]))
     for path in ("/api/docs", "/api/openapi.json"):
         routes.append(("GET", path, compile_path(path)[0]))
-    app.add_middleware(AuthenticationMiddleware, ctx=ctx, routes=routes, mode=mode, validator=validator)
+    app.add_middleware(AuthenticationMiddleware, ctx=ctx, routes=routes, mode=mode, validator=validator, sessions=sessions)
