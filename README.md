@@ -257,6 +257,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/RISK_ACCEPTANCE.md](docs/RISK_ACCEPTANCE.md) | temporary account-authorized risk decisions, remediation holds and unchanged scanner failures |
 | [docs/REPORT_ASSURANCE.md](docs/REPORT_ASSURANCE.md) | raw scanner results and review decisions in commander and POA&M reports |
 | [docs/REMEDIATION_PLAN.md](docs/REMEDIATION_PLAN.md) | static change previews, declared capture paths, verification and rollback instructions |
+| [docs/MAINTENANCE_WINDOWS.md](docs/MAINTENANCE_WINDOWS.md) | protected apply windows, separately authorized one-time exceptions and recovery after expiry |
 | [docs/CHANGE_HISTORY.md](docs/CHANGE_HISTORY.md) | persistent change history, finding status after rollback, restore guards and coverage limits |
 | [docs/KUBERNETES_FIX_SAFETY.md](docs/KUBERNETES_FIX_SAFETY.md) | investigation-first Kubernetes guidance, retired deletion actions and recovery limits |
 | [docs/HOST_SCOPE.md](docs/HOST_SCOPE.md) | container-host setup, explicit host access and reviewed IP/range scope |

@@ -1,8 +1,10 @@
-# Maintenance windows — FUTURE candidate
+# Maintenance windows
 
-This bounded COV-03 slice restricts when a new remediation may start. It is a
-candidate for review and acceptance, not release evidence. It does not add a
-host-validated dry run, recurring schedules, a DST scheduler, or timed jobs.
+An optional protected policy restricts when a new remediation may start.
+Independent review and native-platform regression evidence are recorded in
+[MAINTENANCE_WINDOWS_REVIEW](MAINTENANCE_WINDOWS_REVIEW.md). Deployment acceptance
+remains separate. This does not add a host-validated dry run, recurring schedules,
+a DST scheduler, or timed jobs.
 
 ## Operator configuration
 
