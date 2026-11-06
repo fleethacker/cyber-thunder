@@ -272,6 +272,8 @@ class KubectlTransport(LocalTransport):
             from cyberthunder.security.kube_credentials import kube_subprocess_env
             self.account_guard()
             options["env"] = kube_subprocess_env()
+        if self.namespace_guard is not None:
+            self.namespace_guard()
         try:
             p = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout,
                                encoding="utf-8", errors="replace", **options)
@@ -283,6 +285,8 @@ class KubectlTransport(LocalTransport):
         finally:
             if self.account_guard is not None:
                 self.account_guard()
+            if self.namespace_guard is not None:
+                self.namespace_guard()
 
     def read_file(self, path: str) -> bytes:
         raise TransportError("kubeconfig transport has no file access; use kubectl")

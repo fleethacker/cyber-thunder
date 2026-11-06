@@ -44,6 +44,12 @@ accounts unequal permissions for the same declared namespace; unreadable lists
 remain unavailable for that account. Reconnect after changing inventory,
 namespace selection, account authorization, context or credential files.
 
+Collection, discovery and health entry points also reject namespace mode on
+local, SSH and simulated targets, including transports constructed by the generic
+factory. Direct namespace transports recheck the selected namespace, target
+identity and connection options before execution and after each response. Verified
+sessions retain the existing current-inventory, actor and credential-file guards.
+
 ## Requests and completeness
 
 For each declared namespace, collection issues only:
@@ -99,6 +105,11 @@ Native workload and binding checks use available namespace evidence. An absent
 NetworkPolicy is reported only when that namespace's policy list is complete;
 otherwise the control is `not_reviewed`. Binding findings describe declarations,
 not effective rights: referenced Role/ClusterRole contents are unavailable.
+Malformed binding subjects make the binding list unavailable. Namespace workload
+checks evaluate observed Pods even when a ReplicaSet or Job owns them: a readable
+Pod must not disappear from detection just because its owner's template cannot
+be read. Templates and their Pods can each produce findings for their own observed
+configuration; those findings do not represent additional control coverage.
 Control-plane and kubelet rules remain `not_reviewed`, including when
 `kube-system` was explicitly selected. A successfully collected empty namespace
 is never presented as an empty or globally compliant cluster. Targeted rule
@@ -137,3 +148,10 @@ scope/credential/context/policy/actor drift, kill-switch revocation, stored scan
 and checklist evidence, and the default cluster command path. Local acceptance
 and negative-calibration receipts belong under the ignored `.build` directory;
 they are evidence for the tested source, not a deployment authorization.
+
+Independent negative cases are in `tests/kubernetes/test_namespace_scope_review.py`.
+They cover denied owner-template reads, malformed subjects, final-response drift,
+alternate command spellings, unsupported transports, stop-exception propagation,
+and serialized read-only findings presented with a fresh cluster transport.
+Review receipts and source hashes are under `.build/namespace-review/`. This
+fixture review adds no live-cluster, login or production assurance.

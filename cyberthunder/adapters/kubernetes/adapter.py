@@ -57,9 +57,7 @@ class KubernetesAdapter(Adapter):
         return _settings_state_dir(settings) / "simulated" / f"{target.id}.json"
 
     def make_transport(self, target, settings=None):
-        namespaces = scope.namespace_scope(target.options)
-        if namespaces is not None and target.transport not in {"kubeconfig", "fixture"}:
-            raise ValueError("namespace collection requires kubeconfig or fixture transport")
+        namespaces = self._namespace_scope(target, None)
         if target.transport == "simulated":
             return SimulatedClusterTransport(self.simulated_state_path(target, settings))
         if target.transport == "kubeconfig":
@@ -69,9 +67,22 @@ class KubernetesAdapter(Adapter):
             transport = KubectlTransport(kc, context=(target.options or {}).get("context"),
                                         kubectl=(target.options or {}).get("kubectl", "kubectl"),
                                         namespaces=list(namespaces) if namespaces is not None else None)
+            connection = (str(kc), transport.context, transport.kubectl)
+            identity = (target.id, target.transport, target.in_scope)
+
             def guard_namespace():
-                if scope.namespace_scope(target.options) != namespaces:
+                try:
+                    current = scope.namespace_scope(target.options)
+                except ValueError:
+                    raise PermissionError("namespace selection invalid; reconnect using current permissions") from None
+                if current != namespaces or transport.namespace_scope != namespaces:
                     raise PermissionError("namespace selection changed; reconnect using current permissions")
+                if namespaces is not None:
+                    options = target.options
+                    selected = (str(options.get("kubeconfig")), options.get("context"), options.get("kubectl", "kubectl"))
+                    if ((target.id, target.transport, target.in_scope) != identity or selected != connection
+                            or (transport.kubeconfig, transport.context, transport.kubectl) != connection):
+                        raise PermissionError("namespace connection changed; reconnect using current permissions")
             transport.namespace_guard = guard_namespace
             return transport
         return None
@@ -102,6 +113,8 @@ class KubernetesAdapter(Adapter):
     @staticmethod
     def _namespace_scope(target, transport):
         namespaces = scope.namespace_scope(target.options)
+        if namespaces is not None and target.transport not in {"kubeconfig", "fixture"}:
+            raise ValueError("namespace collection requires kubeconfig or fixture transport")
         if isinstance(transport, KubectlTransport) and transport.namespace_scope != namespaces:
             raise PermissionError("target and transport namespace selections differ")
         return namespaces

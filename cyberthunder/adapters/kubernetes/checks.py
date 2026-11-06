@@ -172,7 +172,7 @@ class Workload:
 
 
 def workloads(data: KubeData) -> Iterator[Workload]:
-    """Deployments, CronJobs and pods not created by a ReplicaSet or Job (those are covered by their owner)."""
+    """Workload templates and pods; namespace mode also evaluates observed controller-owned pods."""
     for d in data.items("deployments"):
         md = d["metadata"]
         yield Workload(ObjRef(md["namespace"], "deployment", md["name"]),
@@ -184,7 +184,9 @@ def workloads(data: KubeData) -> Iterator[Workload]:
     for p in data.items("pods"):
         md = p["metadata"]
         owners = {o.get("kind") for o in md.get("ownerReferences", [])}
-        if owners & {"ReplicaSet", "Job"}:
+        # Namespace RBAC can permit pods while denying their owners. Even a
+        # readable template cannot prove the admitted/running pod has the same spec.
+        if owners & {"ReplicaSet", "Job"} and SCOPE_KEY not in data.c.raw:
             continue
         yield Workload(ObjRef(md["namespace"], "pod", md["name"]), p.get("spec", {}), md.get("labels", {}), md)
 

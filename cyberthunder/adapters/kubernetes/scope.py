@@ -91,8 +91,16 @@ def complete_items(document, resource, namespace):
         if resource == "rolebindings":
             role = item.get("roleRef")
             if (not isinstance(role, dict) or role.get("kind") not in {"Role", "ClusterRole"}
-                    or role.get("apiGroup") != "rbac.authorization.k8s.io" or not isinstance(role.get("name"), str)):
+                    or role.get("apiGroup") != "rbac.authorization.k8s.io" or not isinstance(role.get("name"), str)
+                    or not RE_RBAC_NAME.fullmatch(role["name"])):
                 raise ValueError("binding role reference unavailable")
+            for subject in item.get("subjects", []):
+                if (subject.get("kind") not in ("ServiceAccount", "User", "Group")
+                        or not isinstance(subject.get("name"), str) or not subject["name"]
+                        or ("namespace" in subject and (not isinstance(subject["namespace"], str)
+                            or (subject["namespace"] != "" and not _LABEL.fullmatch(subject["namespace"]))))
+                        or ("apiGroup" in subject and not isinstance(subject["apiGroup"], str))):
+                    raise ValueError("binding subject unavailable")
     return document["items"]
 
 
