@@ -79,6 +79,7 @@ def test_container_refuses_invalid_network_identity(packaged_env, monkeypatch, c
 
 def test_configured_container_uses_validated_host_tls_and_one_worker(packaged_env, monkeypatch, crypto):
     cert, key, _ = crypto
+    monkeypatch.setenv("WEB_CONCURRENCY", "8")
     for name, value in {
         "CT_AUTH_MODE": "oidc", "CT_SECURITY_MODE": "fleet", "CT_HOST": "0.0.0.0",
         "CT_TLS_CERT": str(cert), "CT_TLS_KEY": str(key),
@@ -107,8 +108,10 @@ def test_configured_container_uses_validated_host_tls_and_one_worker(packaged_en
 
 def test_explicit_loopback_dev_start_still_uses_native_cli(packaged_env, monkeypatch):
     monkeypatch.setenv("CT_HOST", "127.0.0.1")
+    monkeypatch.setenv("WEB_CONCURRENCY", "8")
     captured = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: captured.append((app, kwargs)))
     assert main(packaged_env) == 0
     assert captured[0][0].state.ctx.settings.auth_mode == "dev"
     assert captured[0][1]["host"] == "127.0.0.1"
+    assert captured[0][1]["workers"] == 1

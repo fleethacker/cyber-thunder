@@ -8,6 +8,9 @@ then `api.app.serve` validates it again before constructing the application and
 starting Uvicorn. No Uvicorn CLI flag can silently choose a different address
 from the settings inspected by application authentication. Retain one worker
 and one replica: browser sessions are local to that process.
+The shared serve implementation also passes `workers=1` explicitly. An external
+`WEB_CONCURRENCY` override therefore cannot enable multiple workers; the startup
+regressions set it to `8` and verify that one worker is retained.
 
 This is a breaking startup correction. An image with no identity configuration
 now exits with `development authentication may bind only to loopback` instead
