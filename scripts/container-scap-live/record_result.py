@@ -49,14 +49,24 @@ def main(repo, receipts):
         "expected_rule_count": len(scope["expected_rule_ids"]),
         "benchmark_sha256": hashlib.sha256(benchmark.read_bytes()).hexdigest(),
         "xccdf_available": xml.is_file(), "raw_status_counts": None,
-        "result_scope_complete": False, "platform_applicability": "unverified", "compliance_claim": False}
+        "security_coverage_established": False, "platform_applicability": "unverified", "compliance_claim": False}
+    if (receipts / "harness-config.json").exists():
+        summary["harness"] = json.loads((receipts / "harness-config.json").read_text())
     if xml.is_file():
         result = list(ET.parse(xml).getroot().iter(X + "TestResult"))
         assert len(result) == 1
         summary["raw_status_counts"] = dict(Counter(r.findtext(X + "result")
             for r in result[0].findall(X + "rule-result")))
         summary["test_result_id"] = result[0].get("id")
-        summary["import_acceptance"] = "not performed by this evidence recorder"
+        summary["test_result_attributes"] = result[0].attrib
+        observed = {r.get("idref") for r in result[0].findall(X + "rule-result")}
+        summary["missing_expected_rule_ids"] = sorted(set(scope["expected_rule_ids"]) - observed)
+        summary["unexpected_rule_ids"] = sorted(observed - set(scope["expected_rule_ids"]))
+        summary["declared_results_present"] = not summary["missing_expected_rule_ids"]
+        if (receipts / "acceptance-summary.json").exists():
+            summary["import_acceptance"] = json.loads((receipts / "acceptance-summary.json").read_text())["backends"]
+        else:
+            summary["import_acceptance"] = "not performed by this evidence recorder"
     else:
         summary["reason"] = "Engine aborted without XCCDF; no valid TestResult or import manifest can be supplied"
         summary["import_acceptance"] = {backend: {"import": "not attempted", "findings": "unverified",

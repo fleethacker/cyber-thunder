@@ -22,12 +22,13 @@ def relative(name):
     return p
 
 
-def main(archive, destination, receipt):
+def main(archive, destination, receipt, scan_readable=False):
     root = Path(destination).resolve(strict=True)
     if any(root.iterdir()):
         raise ValueError("destination must be empty")
     counts = {"directories": 0, "files": 0, "hardlinks": 0, "symlinks": 0}
     skipped = []
+    normalized_modes = 0
     with tarfile.open(archive, "r:") as tf:
         entries = tf.getmembers()
         if len(entries) > 200000 or sum(e.size for e in entries) > 4 * 1024**3:
@@ -54,7 +55,9 @@ def main(archive, destination, receipt):
             elif entry.isfile():
                 with tf.extractfile(entry) as src, path.open("xb") as dst:
                     shutil.copyfileobj(src, dst)
-                os.chmod(path, entry.mode)
+                mode = entry.mode | 0o444 if scan_readable else entry.mode
+                normalized_modes += mode != entry.mode
+                os.chmod(path, mode)
                 os.utime(path, (entry.mtime, entry.mtime))
                 counts["files"] += 1
             elif not (entry.issym() or entry.islnk()):
@@ -86,15 +89,21 @@ def main(archive, destination, receipt):
         # Apply restrictive modes last so unprivileged extraction can create links.
         for name, entry in reversed(list(members.items())):
             if entry.isdir():
-                os.chmod(root / name, entry.mode, follow_symlinks=False)
+                mode = entry.mode | 0o555 if scan_readable else entry.mode
+                normalized_modes += mode != entry.mode
+                os.chmod(root / name, mode, follow_symlinks=False)
                 os.utime(root / name, (entry.mtime, entry.mtime), follow_symlinks=False)
     with open(archive, "rb") as source:
         digest = hashlib.file_digest(source, "sha256").hexdigest()
     Path(receipt).write_text(json.dumps({"archive_sha256": digest, "counts": counts,
         "skipped_special_files": skipped, "ownership_preserved": False,
+        "modes_preserved": not scan_readable, "normalized_mode_entries": normalized_modes,
+        "mode_policy": "files OR 0444; directories OR 0555" if scan_readable else "archive modes",
         "xattrs_preserved": False, "symlinks": "original text; created after all file writes",
         "limits": "200000 entries; 4 GiB expanded; no devices or archive traversal"}, indent=2) + "\n")
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:])
+    if len(sys.argv) not in (4, 5) or len(sys.argv) == 5 and sys.argv[4] != "--scan-readable":
+        raise SystemExit("usage: extract_rootfs.py ARCHIVE DIRECTORY RECEIPT [--scan-readable]")
+    main(*sys.argv[1:4], scan_readable=len(sys.argv) == 5)
