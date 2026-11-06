@@ -23,9 +23,11 @@ import os
 import re
 import sys
 import threading
+from contextvars import copy_context
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Callable, Iterable
+from uuid import uuid4
 
 from cyberthunder.adapters.base import make_finding
 from cyberthunder.control.killswitch import KillSwitchEngaged
@@ -36,6 +38,7 @@ from . import applicability
 from .classify import apply_classification
 from .models import RUN_MODES, DiscoveredAsset, DiscoveryRun, DiscoveryScope, asset_id_for
 from .oui import tag_virtual
+from .recipes import ScopeRecipeStore
 from .simulated import DEMO_SCOPE, SimulatedSweep
 from .sources import active_directory, hypervisor, kube, neighbors, network_gear, nmap
 
@@ -191,7 +194,17 @@ class DiscoveryService:
 
     # -- scopes --------------------------------------------------------------------------------
     def scopes(self) -> list[DiscoveryScope]:
-        return [DiscoveryScope.from_dict(d) for d in (self._read(self.scopes_file, []) or [])]
+        return [DiscoveryScope.from_dict(d) for d in self.scope_recipes()["scopes"]]
+
+    def scope_recipes(self) -> dict:
+        return ScopeRecipeStore(self.ctx).snapshot()
+
+    def preview_scope_recipes(self, recipes: list[dict], revision: str) -> dict:
+        return ScopeRecipeStore(self.ctx).preview(recipes, revision)
+
+    def save_scope_recipes(self, recipes: list[dict], revision: str, preview_fingerprint: str,
+                           actor: str, reason: str) -> dict:
+        return ScopeRecipeStore(self.ctx).save(recipes, revision, preview_fingerprint, require_human(actor), _reason(reason))
 
     def set_scopes(self, scopes: Iterable, actor: str, reason: str, *, range_input: dict | None = None,
                    acknowledge_normalization: bool = False) -> list[DiscoveryScope]:
@@ -213,13 +226,9 @@ class DiscoveryService:
                 if not t.in_scope:
                     raise ValueError(f"scanner target {t.id} is out of scope")
             if all(x.cidr != sc.cidr for x in new):
+                sc.grant_id = sc.grant_id or uuid4().hex
                 new.append(sc)
-        with self._lock:
-            before = [s.to_dict() for s in self.scopes()]
-            self._write(self.scopes_file, [s.to_dict() for s in new])
-        self.ctx.audit.append("discovery.scopes", actor, {
-            "before": [s["cidr"] for s in before], "after": [s.cidr for s in new],
-            "allow_public": [s.cidr for s in new if s.allow_public], "reason": reason,
+        ScopeRecipeStore(self.ctx).replace_effective([s.to_dict() for s in new], actor, reason, range_input=range_input, details={
             **({"normalizations": normalizations, "acknowledge_normalization": True} if normalizations else {}),
             **({"range_input": range_input} if range_input is not None else {})})
         return new
@@ -237,14 +246,37 @@ class DiscoveryService:
                     cover = next((x for x in saved if x.covers(s)), None)
                     if cover is None:
                         raise ValueError(f"{s.cidr} is not inside a saved discovery scope; add it with a reason first")
+                    if s.scanner_target and s.scanner_target != cover.scanner_target:
+                        raise ValueError("a sweep cannot override the saved scanner policy; edit and review the recipe first")
                     out.append(DiscoveryScope(cidr=s.cidr, allow_public=cover.allow_public, added_by=cover.added_by,
-                                              reason=cover.reason, scanner_target=s.scanner_target or cover.scanner_target))
+                                              reason=cover.reason, scanner_target=cover.scanner_target))
+                    out[-1]._grant = cover.to_dict()
                 chosen = out
         if not chosen:
             raise ValueError("no discovery scopes saved; add one (CIDR and reason) before sweeping")
         for s in chosen:
             s.validate()
+            if mode != "simulated" and not hasattr(s, "_grant"):
+                s._grant = s.to_dict()
         return chosen
+
+    def _guard_scope(self, scope: DiscoveryScope, actor: str) -> None:
+        """A running sweep keeps its original grant; a wider replacement cannot renew that grant."""
+        self._authorize_discovery(actor)
+        self.ctx.killswitch.guard("discovery.sweep", actor)
+        grant = getattr(scope, "_grant", scope.to_dict())
+        if not any(s.to_dict() == grant for s in self.scopes()):
+            raise PermissionError(f"discovery scope {scope.cidr} was revoked or replaced; start a newly reviewed sweep")
+        if scope.scanner_target:
+            self.ctx.inventory.assert_in_scope(scope.scanner_target)
+
+    def _authorize_discovery(self, actor: str) -> None:
+        """The application supplies principal-aware authorization; old development contexts need no hook."""
+        if getattr(self.ctx.settings, "auth_mode", "dev") != "dev":
+            authorize = getattr(self.ctx, "authorize", None)
+            if not callable(authorize):
+                raise PermissionError("discovery authorization is unavailable")
+            authorize("discover", actor=actor)
 
     # -- sweeps --------------------------------------------------------------------------------
     def sweep(self, scopes=None, mode: str = "quick", actor: str = "operator",
@@ -252,6 +284,7 @@ class DiscoveryService:
         if mode not in RUN_MODES:
             raise ValueError(f"unknown mode {mode!r}; expected one of {RUN_MODES}")
         actor = (actor or "").strip() or "operator"
+        self._authorize_discovery(actor)
         chosen = self._sweep_scopes(scopes, mode)
         run = DiscoveryRun(id=self.ctx.store.new_id("disc-"), mode=mode, scopes=[s.cidr for s in chosen],
                            requested_by=actor)
@@ -269,7 +302,8 @@ class DiscoveryService:
         if not background:
             self._execute(run, chosen, actor, raise_stop=True)
             return run
-        th = threading.Thread(target=self._execute, args=(run, chosen, actor), name=f"discovery-{run.id}", daemon=True)
+        th = threading.Thread(target=copy_context().run, args=(self._execute, run, chosen, actor),
+                              name=f"discovery-{run.id}", daemon=True)
         self._threads[run.id] = th
         th.start()
         return run
@@ -320,6 +354,7 @@ class DiscoveryService:
         if sim is not None:
             baseline = sim.baseline
         for scope in scopes:
+            self._authorize_discovery(actor)
             self.ctx.killswitch.guard("discovery.sweep", actor)
             if sim is not None:
                 got = [a for a in sim.assets() if scope.contains(a.address)]
@@ -330,6 +365,8 @@ class DiscoveryService:
             observed.extend(got)
         if sim is None:
             self.ctx.killswitch.guard("discovery.sweep", actor)
+            for scope in scopes:
+                self._guard_scope(scope, actor)
             observed.extend(self._inventory_sources(scopes, run))
         return observed, baseline, incomplete
 
@@ -351,11 +388,13 @@ class DiscoveryService:
     def _nmap(self, scope: DiscoveryScope, run: DiscoveryRun) -> tuple[list[DiscoveredAsset], str]:
         """(assets, scope state). When only the port phase fails, the hosts the ping sweep saw are still
         returned and the scope is SCOPE_PARTIAL; when the ping sweep fails it is SCOPE_FAILED."""
+        self._guard_scope(scope, run.requested_by)
         transport, exe, privileged = self._scanner(scope)
         up: list[DiscoveredAsset] = []
         swept = False
         bad: list[str] = []
         try:
+            self._guard_scope(scope, run.requested_by)
             ping = nmap.run_nmap(transport, nmap.build_ping_command([scope], nmap=exe))
             up = [a for a in nmap.parse_xml(ping, bad) if a.address and scope.contains(a.address)]
             hosts = [h for h in nmap.live_hosts(ping) if scope.contains(h)]
@@ -363,6 +402,7 @@ class DiscoveryService:
             if not hosts:
                 return [], SCOPE_COMPLETE
             argv = nmap.build_command([scope], run.mode, privileged, hosts=hosts, nmap=exe)
+            self._guard_scope(scope, run.requested_by)
             xml = nmap.run_nmap(transport, argv, sudo=privileged and bool(scope.scanner_target))
             got = [a for a in nmap.parse_xml(xml, bad) if scope.contains(a.address)]
             have = {a.address for a in got}
@@ -380,6 +420,7 @@ class DiscoveryService:
 
     def _passive(self, scope: DiscoveryScope, run: DiscoveryRun) -> tuple[list[DiscoveredAsset], str]:
         """(assets, scope state). SCOPE_FAILED when no neighbor table could be read."""
+        self._guard_scope(scope, run.requested_by)
         transport, _, _ = self._scanner(scope)
         powershell = getattr(transport, "shell", None) == "powershell"
         got: list[DiscoveredAsset] = []
@@ -388,6 +429,7 @@ class DiscoveryService:
             cmds = [neighbors.NEIGHBOR_COMMANDS["powershell"]] if powershell else \
                 [neighbors.NEIGHBOR_COMMANDS["posix"], neighbors.NEIGHBOR_COMMANDS["posix_fallback"]]
             for cmd in cmds:
+                self._guard_scope(scope, run.requested_by)
                 r = transport.run(cmd, timeout=60)
                 if r.ok and r.stdout.strip():
                     got.extend(neighbors.parse_neighbors(r.stdout))
@@ -401,6 +443,7 @@ class DiscoveryService:
                      neighbors.parse_hosts_file),
                     ("known_hosts", lambda: self._known_hosts(transport, powershell), neighbors.parse_known_hosts)):
                 try:
+                    self._guard_scope(scope, run.requested_by)
                     got.extend(parser(reader() or ""))
                 except Exception as e:  # noqa: BLE001 - a missing file is normal
                     run.errors.append(f"passive {scope.cidr}: {label}: {e}")
@@ -423,6 +466,7 @@ class DiscoveryService:
         """Switch tables, cluster nodes, directory and hypervisor listings from in-scope inventory targets."""
         got: list[DiscoveredAsset] = []
         for t in self.ctx.inventory.all():
+            self._authorize_discovery(run.requested_by)
             if not t.in_scope:
                 continue
             o = t.options or {}
@@ -448,6 +492,7 @@ class DiscoveryService:
                 continue
             try:
                 for label, job in jobs:
+                    self._authorize_discovery(run.requested_by)
                     try:
                         for a in job(transport):
                             a.facts.setdefault("reported_by", t.id)

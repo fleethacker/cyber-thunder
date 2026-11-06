@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from cyberthunder.api.util import require_actor
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.discovery.service import DiscoveryService, require_human, service_for
+from cyberthunder.discovery.recipes import ScopeRevisionConflict
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
 T = TypeVar("T")
@@ -41,6 +42,24 @@ class ScopeRangesIn(BaseModel):
 
 
 class SaveScopeRangesIn(ScopeRangesIn):
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class ScopeRecipeIn(ScopeRangesIn):
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=80)
+    include: list[str] | None = Field(max_length=128)
+    exclude: list[str] | None = Field(max_length=128)
+
+
+class ScopeRecipesIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: str = Field(min_length=1, max_length=64)
+    recipes: list[ScopeRecipeIn] = Field(max_length=128)
+
+
+class SaveScopeRecipesIn(ScopeRecipesIn):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
     reason: str = Field(min_length=1, max_length=1000)
 
 
@@ -84,6 +103,8 @@ def _call(fn: Callable[[], T]) -> T:
         raise HTTPException(403, str(e)) from None
     except KeyError as e:
         raise HTTPException(404, str(e.args[0]) if e.args else "not found") from None
+    except ScopeRevisionConflict as e:
+        raise HTTPException(409, str(e)) from None
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
 
@@ -109,6 +130,23 @@ def put_scopes(body: ScopesIn, request: Request, actor: str = Depends(require_ac
 def preview_scope_ranges(body: ScopeRangesIn):
     from cyberthunder.discovery.ranges import preview_ranges
     return _call(lambda: preview_ranges(**body.model_dump()))
+
+
+@router.get("/scopes/recipes")
+def get_scope_recipes(request: Request):
+    return _call(lambda: _svc(request).scope_recipes())
+
+
+@router.post("/scopes/recipes/preview")
+def preview_scope_recipes(body: ScopeRecipesIn, request: Request):
+    return _call(lambda: _svc(request).preview_scope_recipes([r.model_dump() for r in body.recipes], body.revision))
+
+
+@router.put("/scopes/recipes")
+def save_scope_recipes(body: SaveScopeRecipesIn, request: Request, actor: str = Depends(require_actor)):
+    actor = _human(actor)
+    return _call(lambda: _svc(request).save_scope_recipes([r.model_dump() for r in body.recipes], body.revision,
+                                                        body.preview_fingerprint, actor, body.reason))
 
 
 @router.put("/scopes/ranges")

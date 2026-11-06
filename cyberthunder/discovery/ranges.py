@@ -11,6 +11,8 @@ LIMITS = {"max_entries": 128, "max_networks": 256, "max_addresses": 65536}
 def _parse(value):
     if not isinstance(value, str) or not value.strip() or len(value) > 256:
         raise ValueError("each scope entry must be a nonempty string of at most 256 characters")
+    if not value.isascii() or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError("scope entries must use ASCII IP syntax without control characters")
     value = value.strip()
     if "%" in value:
         raise ValueError("scope entries cannot contain IPv6 zone identifiers")

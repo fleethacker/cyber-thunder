@@ -514,6 +514,7 @@ export interface DiscoveryScope {
   added_at: string;
   reason: string;
   scanner_target: string | null;
+  grant_id?: string;
 }
 
 export interface ScopeRangeInput {
@@ -534,7 +535,7 @@ export interface ScopeRangePreview {
   can_save: boolean;
   blocking_reasons: string[];
   warnings: string[];
-  normalizations: { field: 'include' | 'exclude'; input: string; normalized: string }[];
+  normalizations: { field: 'include' | 'exclude'; input: string; normalized: string; recipe_id?: string; recipe_name?: string }[];
   requires_normalization_acknowledgment: boolean;
   limits: { max_entries: number; max_networks: number; max_addresses: number };
 }
