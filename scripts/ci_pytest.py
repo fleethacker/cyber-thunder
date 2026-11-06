@@ -42,6 +42,55 @@ UDS_TESTS = (
 )
 
 
+# Native ACL tests execute on Windows; each Linux skip is named explicitly.
+WINDOWS_FILE_TRUST_TESTS = (
+    "tests/security/test_windows_file_trust.py::test_fixture_is_genuinely_protected_and_checks_private_bytes",
+    "tests/security/test_windows_file_trust.py::test_file_mutation_granted_to_everyone_is_rejected[2]",
+    "tests/security/test_windows_file_trust.py::test_file_mutation_granted_to_everyone_is_rejected[4]",
+    "tests/security/test_windows_file_trust.py::test_file_mutation_granted_to_everyone_is_rejected[16]",
+    "tests/security/test_windows_file_trust.py::test_file_mutation_granted_to_everyone_is_rejected[256]",
+    "tests/security/test_windows_file_trust.py::test_file_mutation_granted_to_everyone_is_rejected[65536]",
+    "tests/security/test_windows_file_trust.py::test_file_mutation_granted_to_everyone_is_rejected[262144]",
+    "tests/security/test_windows_file_trust.py::test_file_mutation_granted_to_everyone_is_rejected[524288]",
+    "tests/security/test_windows_file_trust.py::test_file_mutation_granted_to_everyone_is_rejected[1073741824]",
+    "tests/security/test_windows_file_trust.py::test_file_mutation_granted_to_everyone_is_rejected[268435456]",
+    "tests/security/test_windows_file_trust.py::test_group_membership_or_unknown_sid_cannot_grant_file_mutation[S-1-5-32-545]",
+    "tests/security/test_windows_file_trust.py::test_group_membership_or_unknown_sid_cannot_grant_file_mutation[S-1-5-11]",
+    "tests/security/test_windows_file_trust.py::test_group_membership_or_unknown_sid_cannot_grant_file_mutation[S-1-5-21-100-200-300-4444]",
+    "tests/security/test_windows_file_trust.py::test_public_read_is_allowed_but_private_data_read_is_not",
+    "tests/security/test_windows_file_trust.py::test_null_dacl_and_unsupported_object_ace_are_rejected",
+    "tests/security/test_windows_file_trust.py::test_owner_must_be_in_the_trusted_sid_set",
+    "tests/security/test_windows_file_trust.py::test_owner_rights_is_only_accepted_for_a_checked_trusted_owner",
+    "tests/security/test_windows_file_trust.py::test_deny_ace_does_not_make_a_dangerous_allow_acceptable",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[parent-64]",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[parent-65536]",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[parent-262144]",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[parent-524288]",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[parent-256]",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[parent-16]",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[grandparent-64]",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[grandparent-65536]",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[grandparent-262144]",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[grandparent-524288]",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[grandparent-256]",
+    "tests/security/test_windows_file_trust.py::test_parent_mutation_including_delete_child_is_rejected[grandparent-16]",
+    "tests/security/test_windows_file_trust.py::test_child_creation_is_safe_for_existing_reads_but_not_cache_creation",
+    "tests/security/test_windows_file_trust.py::test_inherit_only_grant_is_checked_on_new_cache_file_before_write",
+    "tests/security/test_windows_file_trust.py::test_handles_prevent_file_and_parent_replacement_and_data_writes",
+    "tests/security/test_windows_file_trust.py::test_dacl_change_after_read_invalidates_the_operation",
+    "tests/security/test_windows_file_trust.py::test_policy_dacl_change_during_parse_invalidates_decision",
+    "tests/security/test_windows_file_trust.py::test_replacement_between_policy_lstat_and_native_open_is_rejected",
+    "tests/security/test_windows_file_trust.py::test_junction_created_between_checks_and_open_is_rejected",
+    "tests/security/test_windows_file_trust.py::test_native_api_unavailable_fails_closed_for_policy_and_cache",
+    "tests/security/test_windows_file_trust.py::test_kubeconfig_confidentiality_and_guard_recheck",
+    "tests/security/test_windows_file_trust.py::test_external_kube_public_certificates_and_private_key_have_distinct_rules",
+    "tests/security/test_windows_file_trust.py::test_cache_integrity_allows_readers_and_rejects_writer_or_replacement",
+    "tests/security/test_windows_file_trust.py::test_windows_path_aliases_are_rejected[:stream]",
+    "tests/security/test_windows_file_trust.py::test_windows_path_aliases_are_rejected[.]",
+    "tests/security/test_windows_file_trust.py::test_windows_path_aliases_are_rejected[ ]",
+)
+
+
 def expected_skips(platform: str) -> dict[str, str]:
     if platform not in {"linux", "win32"}:
         raise ValueError(f"Unsupported CI platform: {platform}")
@@ -84,6 +133,11 @@ def expected_skips(platform: str) -> dict[str, str]:
                 "POSIX FIFO and O_NOFOLLOW semantics"
             )
     if platform == "linux":
+        allowed.update({
+            f"tests/security/test_windows_file_trust.py::{name}":
+                "native Windows security descriptors and file sharing"
+            for name in WINDOWS_FILE_TRUST_TESTS
+        })
         allowed["tests/security/test_oidc.py::test_windows_junction_cache_path_rejected"] = (
             "Windows directory junction fixture"
         )
