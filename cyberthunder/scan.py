@@ -334,6 +334,8 @@ class Scanner:
                 collected.facts = facts
             findings = adapter.run_detection(target, collected)
             findings = self._filter(findings, run.rule_filter)
+            from cyberthunder.catalog_rule_metadata import annotate_native_findings
+            annotate_native_findings(ctx, target, collected, findings, actor=actor)
             self._apply_known_good(target, findings, actor)
             for f in findings:
                 f.collection_provenance = dict(f.collection_provenance or {})
