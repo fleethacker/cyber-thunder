@@ -378,7 +378,7 @@ class ApprovalGate:
             person_association = separation.participation(self, p, evidence)
             assessment = self._assessment(p.id, assessment_id, assessment_note)
             association = separation.assessment_association(assessment)
-            if p.approvals and association != separation.assessment_association(p.assessment):
+            if p.approvals and separation.digest(association) != separation.digest(separation.assessment_association(p.assessment)):
                 raise PermissionError("all approvers must review the same assessment; create a new proposal to change it")
             self._validate_approved_assessments(p)
             # Assessment work may take time; its callbacks cannot make stale
@@ -433,7 +433,7 @@ class ApprovalGate:
         for vote in p.approvals:
             old = vote["assessment"]
             fresh = self._assessment(p.id, old.get("id"), old.get("note"))
-            if separation.assessment_association(fresh) != separation.assessment_association(old):
+            if separation.digest(separation.assessment_association(fresh)) != separation.digest(separation.assessment_association(old)):
                 raise PermissionError("an approved assessment changed; create a new proposal and collect approvals")
 
     def _validate_application(self, p: Proposal, actor: str) -> None:

@@ -256,11 +256,12 @@ def _validate_lifecycle(proposal, records) -> None:
             edge = action.removeprefix("proposal.")
             if edge in outcomes and record.get("outcome") == outcomes[edge]:
                 state = edge
-    if proposal.state.value != state or proposal.approvals != votes:
+    # JSON evidence includes types: Python equality equates True, 1 and 1.0.
+    if proposal.state.value != state or digest(proposal.approvals) != digest(votes):
         raise PermissionError("proposal state or receipts differ from the audited lifecycle")
     if votes and len(votes) == proposal.required_approvals:
         last = votes[-1]
-        if (proposal.decided_by != last["actor"] or proposal.decided_principal != last["principal"]
+        if (proposal.decided_by != last["actor"] or digest(proposal.decided_principal) != digest(last["principal"])
                 or proposal.decided_at != last["approved_at"] or proposal.decision_note != last["note"]):
             raise PermissionError("final decision differs from its audited approval")
 
@@ -309,13 +310,13 @@ def validate_history(gate, proposal, *, quorum: bool = False) -> dict:
                 raise PermissionError("approvals must be distinct people other than the proposer")
             seen.add(person)
             audited = [r for r in records if r.get("action") in {"proposal.approval_recorded", "proposal.approved"}
-                       and r.get("outcome") == "ok" and r["details"].get("approval") == vote]
+                       and r.get("outcome") == "ok" and digest(r["details"].get("approval")) == digest(vote)]
             if (len(audited) != 1 or audited[0]["actor"] != vote["actor"]
-                    or (verified and audited[0].get("principal") != vote["principal"])
+                    or (verified and digest(audited[0].get("principal")) != digest(vote["principal"]))
                     or vote["requirements_sha256"] != digest(requirements)
                     or vote["payload_sha256"] != requirements["payload_sha256"]
                     or vote["assessment_sha256"] != digest(assessment_association(vote["assessment"]))
-                    or assessment_association(vote["assessment"]) != assessment_association(proposal.assessment)):
+                    or digest(assessment_association(vote["assessment"])) != digest(assessment_association(proposal.assessment))):
                 raise PermissionError("approval differs from its audited payload or assessment association")
         if quorum and len(seen) != proposal.required_approvals:
             raise PermissionError("the required distinct human approvals are incomplete")

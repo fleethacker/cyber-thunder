@@ -77,6 +77,23 @@ def test_disputed_person_receipts_are_not_certified_historically(exported):
     assert result["approvals"][0]["person_association"]["person_id"] == "fake"
 
 
+def test_numerically_equal_principal_tampering_is_disputed(exported):
+    ctx, p, _ = exported
+
+    def edit(row):
+        principal = row["approvals"][0]["principal"]
+        principal["auth_time"] = float(principal["auth_time"])
+
+    edit_proposal(ctx, p.id, edit)
+    with principal_scope(person("alice", roles=("auditor",))):
+        result = approvals.evidence(ctx, ctx.gate.get(p.id))
+    assert result["historical_validation"]["status"] == "not_established"
+    assert not result["historical_quorum_evidence_checked"]
+    assert not result["quorum_evidence_checked"]
+    assert not result["approval_identities"][0]["identity"]["verified"]
+    assert result["current_apply_authorization"] == "not_established_by_report"
+
+
 def test_malformed_requirements_are_retained_as_disputed_history(exported):
     ctx, p, _ = exported
     edit_proposal(ctx, p.id, lambda d: d.update(approval_requirements=["invalid"]))

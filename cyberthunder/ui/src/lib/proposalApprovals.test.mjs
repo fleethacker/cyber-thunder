@@ -112,3 +112,25 @@ test('unknown schema and source modes cannot be displayed as a valid quorum', ()
     assert.equal(approvalFixture().approvalProgress(p).collected, 0);
   }
 });
+
+test('v2 requires nonempty string accounts even when both recorded copies match', () => {
+  for (const invalid of ['', null, ['reviewer-1'], 42]) {
+    const p = personProposal({ approvals: [personVote()] });
+    p.approvals[0].principal.sub = invalid;
+    p.approvals[0].person_association.subject = invalid;
+    assert.equal(approvalFixture().approvalProgress(p).collected, 0);
+    p.proposed_principal.iss = invalid;
+    p.approval_requirements.proposer_association.issuer = invalid;
+    assert.equal(approvalFixture().approvalProgress(p).required, null);
+  }
+});
+
+test('v2 rejects trailing line terminators in opaque identifiers and policy hashes', () => {
+  for (const suffix of ['\n', '\r', '\u2028', '\u2029']) {
+    const p = personProposal({ approvals: [personVote()] });
+    p.approvals[0].person_association.person_id += suffix;
+    assert.equal(approvalFixture().approvalProgress(p).collected, 0);
+    p.approval_requirements.identity_basis.policy_sha256 += suffix;
+    assert.equal(approvalFixture().approvalProgress(p).required, null);
+  }
+});

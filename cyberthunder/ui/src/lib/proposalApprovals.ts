@@ -1,16 +1,18 @@
 import { sessionIdentity, type SessionIdentity } from '../api/identity';
 import type { PersonAssociation, PersonIdentityBasis, Proposal, RecordedPrincipalEvidence } from '../api/types';
 
-const key = (issuer?: string, subject?: string) => issuer && subject ? JSON.stringify([issuer, subject]) : null;
+const key = (issuer?: string, subject?: string) => typeof issuer === 'string' && issuer.length > 0
+  && typeof subject === 'string' && subject.length > 0 ? JSON.stringify([issuer, subject]) : null;
 const recordedKey = (evidence?: RecordedPrincipalEvidence | null) => key(evidence?.iss, evidence?.sub);
 const opaque = (value?: string) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
 const validBasis = (b?: PersonIdentityBasis) => b?.mode === 'person' && b.policy_version === 2 && b.version === 1
   && opaque(b.namespace) && Number.isSafeInteger(b.revision) && b.revision > 0
   && typeof b.policy_sha256 === 'string' && /^[0-9a-f]{64}$/.test(b.policy_sha256);
 function mappedKey(e: RecordedPrincipalEvidence | null | undefined, a?: PersonAssociation, b?: PersonIdentityBasis) {
+  const account = recordedKey(e);
   if (!validBasis(b) || !validBasis(a?.source) || !opaque(a?.person_id)
       || !e || e.verified !== true || e.kind !== 'human' || !['oidc', 'mesh'].includes(e.via)
-      || key(a?.issuer, a?.subject) !== recordedKey(e)
+      || !account || key(a?.issuer, a?.subject) !== account
       || a?.source.namespace !== b?.namespace || a?.source.revision !== b?.revision
       || a?.source.policy_sha256 !== b?.policy_sha256) return null;
   return key(b?.namespace, a?.person_id);
