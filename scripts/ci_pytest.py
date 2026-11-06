@@ -93,6 +93,27 @@ WINDOWS_FILE_TRUST_TESTS = (
 )
 
 
+WINDOWS_CLEANUP_TESTS = (
+    "test_remove_root_removes_native_readonly_git_object",
+    "test_cleanup_refuses_unregistered_root_before_rmtree",
+    "test_readonly_retry_refuses_paths_outside_its_registered_root[other-root]",
+    "test_readonly_retry_refuses_paths_outside_its_registered_root[parent-traversal]",
+    "test_readonly_retry_refuses_paths_outside_its_registered_root[unregistered]",
+    "test_readonly_retry_refuses_hardlinked_file_without_changing_outside_attributes",
+    "test_readonly_retry_refuses_reparse_points_and_their_children[junction]",
+    "test_readonly_retry_refuses_reparse_points_and_their_children[file-symlink]",
+    "test_readonly_retry_refuses_reparse_points_and_their_children[directory-symlink]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[writable]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[sharing]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[missing]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[directory]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[other-operation]",
+    "test_readonly_retry_does_not_swallow_unrelated_errors[generic-permission]",
+    "test_readonly_retry_attempts_unlink_once_and_propagates_second_error",
+    "test_remove_root_keeps_registration_and_reports_unhandled_error",
+)
+
+
 WINDOWS_FILE_TRUST_REVIEW_TESTS = (
     "test_acl_fixture_refuses_hardlink_aliases",
     "test_add_file_can_set_reparse_data_while_directory_is_pinned",
@@ -307,6 +328,11 @@ def expected_skips(platform: str) -> dict[str, str]:
                 "POSIX FIFO and O_NOFOLLOW semantics"
             )
     if platform == "linux":
+        allowed.update({
+            f"tests/test_windows_acl_cleanup.py::{name}":
+                "native Windows read-only attributes and reparse points"
+            for name in WINDOWS_CLEANUP_TESTS
+        })
         allowed.update({
             f"tests/security/test_windows_file_trust_review.py::{name}":
                 "native Windows security descriptors and file sharing"

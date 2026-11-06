@@ -6,6 +6,7 @@ import gc
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 from weakref import WeakSet
@@ -102,12 +103,48 @@ def track_databases(root):
     return close
 
 
-def remove_root(root):
+def _removal_root(root):
     root = Path(root).absolute()
     assert root in _roots and root.resolve() == root and root.parent == Path(root.anchor)
     assert root.name.startswith("ct-trust-tests-")
-    try:
-        gc.collect()  # Release unreachable test contexts/SQLite connections before Windows deletion.
-        shutil.rmtree(root)
-    finally:
-        _roots.remove(root)
+    info = root.lstat()
+    assert stat.S_ISDIR(info.st_mode) and not info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    return root
+
+
+def _retry_readonly(root, function, path, error):
+    """Retry only an owned, ordinary read-only file's failed Windows unlink.
+
+    Fixtures must have stopped their writers before cleanup. Never change a
+    DACL, directory, link target, or another registered root to make deletion work.
+    """
+    if (os.name != "nt" or function not in (os.unlink, os.remove)
+            or not isinstance(error, PermissionError) or getattr(error, "winerror", None) != 5):
+        raise error
+    root = _removal_root(root)
+    path = Path(path).absolute()
+    assert root in path.parents and ".." not in path.parts, "cleanup path escaped its registered root"
+    # Check from the root outward, before even inspecting a possible link target.
+    for parent in reversed(path.parents):
+        if root in parent.parents:
+            info = parent.lstat()
+            assert not (stat.S_ISLNK(info.st_mode) or info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT), \
+                "cleanup must not traverse a symlink or reparse point"
+            assert stat.S_ISDIR(info.st_mode)
+    info = path.lstat()
+    assert not (stat.S_ISLNK(info.st_mode) or info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT), \
+        "cleanup must not modify a symlink or reparse point"
+    assert path.resolve() == path, "cleanup path resolved outside its validated location"
+    if not stat.S_ISREG(info.st_mode) or not info.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+        raise error
+    assert info.st_nlink == 1, "cleanup must not modify hardlinked files"
+    os.chmod(path, info.st_mode | stat.S_IWRITE)  # Windows changes only this file's read-only attribute.
+    function(path)  # One retry; sharing, ACL and other failures still propagate.
+
+
+def remove_root(root):
+    root = _removal_root(root)
+    gc.collect()  # Release unreachable test contexts/SQLite connections before Windows deletion.
+    # onerror also supports Python 3.11; its exception tuple is normalized here.
+    shutil.rmtree(root, onerror=lambda function, path, exc: _retry_readonly(root, function, path, exc[1]))
+    _roots.remove(root)  # Keep ownership recorded if cleanup failed.

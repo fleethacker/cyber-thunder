@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from scripts.ci_pytest import (
-    MODEL_REASON, SHARING_REASON, UDS_REASON, UDS_TESTS, WINDOWS_IGNORED,
+    MODEL_REASON, SHARING_REASON, UDS_REASON, UDS_TESTS, WINDOWS_IGNORED, WINDOWS_CLEANUP_TESTS,
     RegressionPolicy, expected_skips,
 )
 
@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 110 and len(windows) == 102
+    assert len(linux) == 127 and len(windows) == 102
     native_acl = {node: reason for node, reason in linux.items()
                   if node.startswith("tests/security/test_windows_file_trust.py::")}
     assert len(native_acl) == 46
@@ -454,3 +454,28 @@ def test_scan_writer_skip_does_not_allow_sqlite_or_changed_cases(platform):
         ))
         assert policy.skips[0]["allowed"] is accepted
         assert bool(policy.errors) is not accepted
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_windows_cleanup_skips_are_exact_and_never_allow_teardown_or_missing_capability(platform):
+    prefix = "tests/test_windows_acl_cleanup.py::"
+    reason = "native Windows read-only attributes and reparse points"
+    nodes = {prefix + name for name in WINDOWS_CLEANUP_TESTS}
+    assert len(nodes) == 17
+    actual = {node for node in expected_skips(platform) if node.startswith(prefix)}
+    assert actual == (nodes if platform == "linux" else set())
+    for node in nodes:
+        for candidate, explanation, phase, accepted in (
+            (node, reason, "setup", platform == "linux"),
+            (node + "[new]", reason, "setup", False),
+            (node, reason + " changed", "setup", False),
+            (node, "native link creation unavailable", "call", False),
+            (node, reason, "teardown", False),
+        ):
+            policy = RegressionPolicy(ROOT, platform)
+            policy.pytest_runtest_logreport(SimpleNamespace(
+                nodeid=candidate, when=phase, outcome="skipped", skipped=True,
+                longrepr=("file.py", 1, "Skipped: " + explanation),
+            ))
+            assert policy.skips[0]["allowed"] is accepted
+            assert bool(policy.errors) is not accepted

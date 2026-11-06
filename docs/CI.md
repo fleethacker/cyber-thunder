@@ -204,7 +204,16 @@ SQLite counterpart passed on native Windows and Linux; it cannot be skipped.
 The [independent review](SCAN_WORKERS_REVIEW.md) records the scope and receipts.
 Policy tests reject changed names/reasons, the SQLite case and teardown skips.
 
-That permits at most **110 skipped cases on Linux and 102 on Windows**, with every
+The disposable-root cleanup regression adds 17 exact Windows-only cases on
+Linux, enumerated in `WINDOWS_CLEANUP_TESTS` in `scripts/ci_pytest.py`, with reason
+`native Windows read-only attributes and reparse points`. They exercise a real
+read-only Git object, registered-root containment, native hardlinks/symlinks and
+junctions, and error propagation. Every case must execute on Windows; missing
+link-creation privileges are not an allowed skip. Cleanup clears only a failed
+ordinary file unlink's read-only bit after validation, without changing DACLs.
+Its owned fixture writers must already be stopped before teardown.
+
+That permits at most **127 skipped cases on Linux and 102 on Windows**, with every
 case individually constrained. Missing Git or Bash is not an allowed skip on
 either runner. Windows runs the command-shell and file-sharing tests that
 Linux skips.

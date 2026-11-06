@@ -10,6 +10,7 @@ import pytest
 
 from cyberthunder.api.routes.proposals import deny
 from cyberthunder.audit.chain import AuditLog, head_path
+from cyberthunder.config import Settings
 from cyberthunder.control.approvals import ApprovalGate, ProposalState
 from cyberthunder.control.killswitch import KillSwitch
 from cyberthunder.inventory import targets
@@ -65,6 +66,7 @@ def test_deny_response_survives_windows_inventory_sharing(inventory, monkeypatch
     gate = ApprovalGate(root / "proposals.json", audit, KillSwitch(root, audit))
     proposal = propose(gate)
     ctx = SimpleNamespace(gate=gate, inventory=inventory,
+                          settings=Settings(state_dir=root, maintenance_policy=None),
                           library=SimpleNamespace(get=lambda _: None),
                           store=SimpleNamespace(get_finding=lambda _: None))
     other = Inventory.load(inventory.path)
@@ -81,6 +83,7 @@ def test_deny_response_survives_windows_inventory_sharing(inventory, monkeypatch
     assert response["state"] == "denied"
     assert response["decided_by"] == "ITC Rivera"
     assert response["target"]["name"] == "Updated fixture name"
+    assert response["maintenance"]["status"] == "unconfigured"
     assert gate.get(proposal.id).state is ProposalState.DENIED
     decisions = [r for r in audit.records() if r["action"] == "proposal.denied"]
     assert len(decisions) == 1 and decisions[0]["actor"] == "ITC Rivera"
