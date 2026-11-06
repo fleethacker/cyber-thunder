@@ -238,9 +238,11 @@ evaluated those namespace snapshots and detected one seeded Deployment finding;
 the standard collectors' cluster-wide requests cannot complete under that
 namespace-only Role. This is limited namespace evidence, not an end-to-end
 collector scan. Full Kubernetes SSO, successful verified-account authentication
-and remediation were outside that acceptance. Namespace-scoped collection
-would require a separate implementation and acceptance; it is not supplied by
-these provisioning instructions.
+and remediation were outside that acceptance. The subsequent optional
+[namespace collector](KUBERNETES_NAMESPACE_SCOPE.md) supports explicit namespace
+lists and refuses automatic remediation. It does not change the packaged survey
+Role, provision credentials, or extend the earlier acceptance to the new code.
+Its intended deployment still requires a recorded collector run.
 
 Before operational acceptance, verify protection/readability as the actual
 runtime account and validate each authorized account/action against the intended

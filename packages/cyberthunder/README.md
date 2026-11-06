@@ -89,10 +89,13 @@ cluster, and allows Kubernetes API egress through UDS. It cannot mutate cluster
 resources or read Secrets. Deployment does not start a baseline automatically.
 
 A namespace-only Role is not equivalent to this cluster-wide survey role:
-the current standard collectors still issue cluster-wide requests. Local
+the default collectors still issue cluster-wide requests. Local
 acceptance with seven readable resource types in one namespace established
 limited namespace evidence, not an end-to-end collector scan, verified-account
 authentication or SSO. See the [acceptance limits](../../docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md#pvc-root-and-namespace-acceptance-limits).
+The optional [namespace collector](../../docs/KUBERNETES_NAMESPACE_SCOPE.md)
+accepts explicit target namespaces for read-only configuration collection. It
+does not change this packaged Role or authorize namespace remediation.
 
 ### Upgrade existing scan permissions
 

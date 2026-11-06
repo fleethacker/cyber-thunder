@@ -123,11 +123,14 @@ it cannot apply Kubernetes remediation or read Secrets. Use a kubectl version
 compatible with the target cluster. A different `KUBECTL_VERSION` also requires
 reviewed matching architecture checksums; see [build pins](../../docs/CONTAINER_BUILD.md).
 
-These cluster-wide permissions differ from a namespace-only Role. The current
-standard collectors issue cluster-wide requests; successful reads of selected
+These cluster-wide permissions differ from a namespace-only Role. The default
+collectors issue cluster-wide requests; successful reads of selected
 types inside one namespace do not establish an end-to-end scan. The
 [bounded local acceptance](../../docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md#pvc-root-and-namespace-acceptance-limits)
 established limited namespace evidence and persistence, not full scanning or SSO.
+An optional [namespace collector](../../docs/KUBERNETES_NAMESPACE_SCOPE.md) uses
+explicit target namespaces and refuses automatic remediation. It does not narrow
+this packaged Role or the separate survey/image-baseline collectors automatically.
 
 Neither packaged role grants `nodes/proxy`; even `get` on that subresource can
 authorize kubelet command execution. Optional kubelet `configz` evidence remains
