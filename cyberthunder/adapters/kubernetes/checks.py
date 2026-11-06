@@ -24,6 +24,7 @@ from cyberthunder.adapters.containers.images import uses_latest_or_untagged
 from cyberthunder.findings.schema import Finding
 
 from .kubectl import OBJ_TAG, ObjRef
+from .scope import SCOPE_KEY
 
 SOURCE = "kubernetes"
 SYSTEM_NAMESPACES = ("kube-system", "kube-public", "kube-node-lease")
@@ -435,7 +436,13 @@ def check_namespaces(target, data: KubeData) -> list[Finding]:
     with_policy = {p["metadata"]["namespace"] for p in data.items("networkpolicies")}
     with_workloads = {w.namespace for w in workloads(data)}
     for ns in sorted(with_workloads - with_policy - set(SYSTEM_NAMESPACES)):
-        out.append(finding(target, CIS_RULES["netpol"], ObjRef(None, "namespace", ns), f"namespace {ns}: no NetworkPolicy"))
+        coverage = data.c.raw.get(SCOPE_KEY)
+        complete = (coverage is None or coverage.get("resources", {}).get("networkpolicies", {})
+                    .get(ns, {}).get("status") == "collected")
+        out.append(finding(target, CIS_RULES["netpol"], ObjRef(None, "namespace", ns),
+                           f"namespace {ns}: no NetworkPolicy" if complete else
+                           f"namespace {ns}: NetworkPolicy list unavailable or incomplete; absence cannot be evaluated",
+                           status="open" if complete else "not_reviewed"))
     # CNTR-K8-000420: dashboard deployed
     for p in data.items("pods"):
         md = p["metadata"]
@@ -501,10 +508,34 @@ ALL_CHECKS = (check_apiserver, check_controller_manager, check_kubelet, check_po
               check_service_accounts, check_rbac)
 
 
+def namespace_coverage_finding(target, collected, *, source=SOURCE):
+    coverage = collected.raw[SCOPE_KEY]
+    unavailable = [f"{resource}/{ns}" for resource, rows in coverage["resources"].items()
+                   for ns, row in rows.items() if row["status"] != "collected"]
+    rule = Rule(base="k8s:coverage:namespace", title="Kubernetes namespace coverage is incomplete for the cluster",
+                severity="info", refs=["CCI-000366"], benchmark="Cyber Thunder Kubernetes checks",
+                description="Only declared namespace lists were requested. This is not a cluster compliance result.")
+    return finding(target, rule, None,
+                   "Unavailable by scope: " + ", ".join(coverage["unavailable_inputs"]) +
+                   ". RoleBinding declarations do not establish effective rights; referenced roles were not read." +
+                   (" Unavailable namespace lists: " + ", ".join(unavailable) if unavailable else
+                    " All requested namespace lists were collected, including any empty lists."),
+                   status="not_reviewed", source=source, collected_at=collected.collected_at)
+
+
 def run_checks(target, collected: Collected) -> list[Finding]:
     data = KubeData(collected)
     out: list[Finding] = []
-    for fn in ALL_CHECKS:
+    selected_checks = ALL_CHECKS
+    if SCOPE_KEY in collected.raw:
+        # Even kube-system namespace evidence cannot establish node or cluster coverage.
+        selected_checks = (check_pod_security, check_namespaces, check_service_accounts, check_rbac)
+        for sid in (*APISERVER_RULES, "CNTR-K8-000220", "CNTR-K8-000910", "CNTR-K8-000370", "CNTR-K8-000330",
+                    "CNTR-K8-000380", "CNTR-K8-000440", "CNTR-K8-001620"):
+            out.append(finding(target, stig(sid), None, "Cluster and node inputs unavailable in namespace collection mode.",
+                               status="not_reviewed"))
+        out.append(namespace_coverage_finding(target, collected))
+    for fn in selected_checks:
         try:
             out.extend(fn(target, data))
         except Exception as e:  # noqa: BLE001  one broken check must not hide the rest

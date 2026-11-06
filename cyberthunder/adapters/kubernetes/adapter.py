@@ -19,7 +19,7 @@ from cyberthunder.remediation.library import FixEntry
 from cyberthunder.remediation.models import (ApplyResult, BeforeState, HealthCheck, HealthResult, RollbackResult,
                                              VerifyResult)
 
-from . import checks, fixes, hunt, k3s
+from . import checks, fixes, hunt, k3s, scope
 from .kubectl import (KubectlTransport, ObjRef, heredoc, ref_from_finding, render, split_commands,
                       strip_server_fields)
 from .simulated import SimulatedClusterTransport
@@ -57,14 +57,23 @@ class KubernetesAdapter(Adapter):
         return _settings_state_dir(settings) / "simulated" / f"{target.id}.json"
 
     def make_transport(self, target, settings=None):
+        namespaces = scope.namespace_scope(target.options)
+        if namespaces is not None and target.transport not in {"kubeconfig", "fixture"}:
+            raise ValueError("namespace collection requires kubeconfig or fixture transport")
         if target.transport == "simulated":
             return SimulatedClusterTransport(self.simulated_state_path(target, settings))
         if target.transport == "kubeconfig":
             kc = (target.options or {}).get("kubeconfig")
             if not kc:
                 raise ValueError(f"target {target.id}: options.kubeconfig is required for the kubeconfig transport")
-            return KubectlTransport(kc, context=(target.options or {}).get("context"),
-                                    kubectl=(target.options or {}).get("kubectl", "kubectl"))
+            transport = KubectlTransport(kc, context=(target.options or {}).get("context"),
+                                        kubectl=(target.options or {}).get("kubectl", "kubectl"),
+                                        namespaces=list(namespaces) if namespaces is not None else None)
+            def guard_namespace():
+                if scope.namespace_scope(target.options) != namespaces:
+                    raise PermissionError("namespace selection changed; reconnect using current permissions")
+            transport.namespace_guard = guard_namespace
+            return transport
         return None
 
     def demo_targets(self):
@@ -75,6 +84,7 @@ class KubernetesAdapter(Adapter):
                        notes="Simulated k3s cluster seeded to match range/answer_key/kubernetes.json")]
 
     def reset_simulated(self, target, settings=None) -> bool:
+        self._require_mutable(target, None)
         if not target.simulated and target.transport != "simulated":
             return False
         SimulatedClusterTransport(self.simulated_state_path(target, settings)).reset()
@@ -82,9 +92,33 @@ class KubernetesAdapter(Adapter):
 
     # -- discovery / collection ---------------------------------------------------------------
     def discover(self, target, transport) -> AssetFacts:
+        namespaces = self._namespace_scope(target, transport)
+        if namespaces is not None:
+            return self._namespace_facts(target, scope.collection_coverage(namespaces))
         ver = _json(transport.run("kubectl version -o json").stdout) or {}
         nodes = _json(transport.run("kubectl get nodes -o json").stdout) or {}
         return self._facts(target, ver, nodes)
+
+    @staticmethod
+    def _namespace_scope(target, transport):
+        namespaces = scope.namespace_scope(target.options)
+        if isinstance(transport, KubectlTransport) and transport.namespace_scope != namespaces:
+            raise PermissionError("target and transport namespace selections differ")
+        return namespaces
+
+    @staticmethod
+    def _namespace_facts(target, coverage):
+        return AssetFacts(hostname=target.name, os_name="Kubernetes", model="Namespace collection; nodes unavailable",
+                          extra={"node_count": None, "nodes_ready": None, "nodes": None,
+                                 scope.SCOPE_KEY: coverage})
+
+    @staticmethod
+    def _require_mutable(target, transport, evidence=None):
+        namespaces = scope.namespace_scope(target.options)
+        provenance = getattr(evidence, "collection_provenance", None) or {}
+        if (namespaces is not None or getattr(transport, "namespace_scope", None) is not None
+                or scope.SCOPE_KEY in provenance or "k8s:namespace-read-only" in getattr(evidence, "tags", [])):
+            raise PermissionError(scope.READ_ONLY)
 
     @staticmethod
     def _facts(target, ver: dict, nodes: dict) -> AssetFacts:
@@ -100,10 +134,16 @@ class KubernetesAdapter(Adapter):
 
     def collect(self, target, transport, workdir: Path, *, modules: Iterable[str] = MODULES,
                 rule_filter: list[str] | None = None) -> Collected:
+        namespaces = self._namespace_scope(target, transport)
         workdir = Path(workdir)
         workdir.mkdir(parents=True, exist_ok=True)
         col = Collected(target_id=target.id, asset_type=self.asset_type, workdir=str(workdir),
                         modules=[m for m in modules if m in ("check", "hunt")], rule_filter=rule_filter)
+        if namespaces is not None:
+            scope.collect_lists(col, transport, namespaces)
+            col.facts = self._namespace_facts(target, col.raw[scope.SCOPE_KEY])
+            col.raw.update(server_version=None, node_count=None)
+            return col
         for name, cmd in checks.ARTIFACTS.items():
             r = transport.run(cmd)
             if not r.ok:
@@ -231,14 +271,25 @@ class KubernetesAdapter(Adapter):
 
     # -- detection ---------------------------------------------------------------------------------
     def check(self, target, collected: Collected) -> list[Finding]:
-        return _filter(fixes.point_at_applicable_fix(checks.run_checks(target, collected)), collected.rule_filter)
+        findings = checks.run_checks(target, collected)
+        return _filter(scope.annotate(fixes.point_at_applicable_fix(findings), collected), collected.rule_filter)
 
     def hunt(self, target, collected: Collected) -> list[Finding]:
-        return _filter(fixes.point_at_applicable_fix(hunt.run_hunt(target, collected)), collected.rule_filter)
+        findings = hunt.run_hunt(target, collected)
+        if scope.SCOPE_KEY in collected.raw:
+            findings.append(checks.namespace_coverage_finding(target, collected, source="hunt"))
+        return _filter(scope.annotate(fixes.point_at_applicable_fix(findings), collected), collected.rule_filter)
 
     # -- remediation -------------------------------------------------------------------------------
     def fixes(self) -> list[FixEntry]:
-        return fixes.kubernetes_fixes()
+        return fixes.kubernetes_fixes() + [FixEntry(
+            fix_ref="k8s:runbook:namespace-read-only", title="Review namespace collection with the resource owner",
+            asset_type="kubernetes", applies_to=[], kind="runbook", rollback_kind="manual", reversible=False,
+            steps=[scope.READ_ONLY, "Review findings and unavailable inputs with the namespace owner.",
+                   "Arrange separately authorized changes and collect fresh evidence afterwards."],
+            rollback_steps=["No automated changes are performed in namespace collection mode."],
+            verify={"rule_ids": ["k8s:coverage:namespace"]},
+            citations=["CCI-000366"], source="kubernetes", notes=scope.READ_ONLY)]
 
     @staticmethod
     def _meta(fix: FixEntry) -> fixes.FixMeta | None:
@@ -259,6 +310,7 @@ class KubernetesAdapter(Adapter):
         return ref, restore
 
     def capture_before_state(self, target, transport, fix: FixEntry, finding: Finding, dest: Path) -> BeforeState:
+        self._require_mutable(target, transport, finding)
         # Reject before returning a snapshot: the engine must not attempt automatic rollback for a
         # blocked historical payload that never ran. Guard the stable ref, not the mutable payload.
         if reason := fixes.retired_reason(fix):
@@ -291,6 +343,7 @@ class KubernetesAdapter(Adapter):
         return before
 
     def apply(self, target, transport, fix: FixEntry, finding: Finding, before: BeforeState) -> ApplyResult:
+        self._require_mutable(target, transport, finding)
         if reason := fixes.retired_reason(fix):
             return ApplyResult(ok=False, changed=False, output=reason)
         if fix.kind == "runbook":
@@ -340,6 +393,7 @@ class KubernetesAdapter(Adapter):
             return found, list(col.errors)
 
     def verify(self, target, transport, fix: FixEntry, finding: Finding) -> VerifyResult:
+        self._require_mutable(target, transport, finding)
         if fixes.retired_reason(fix) or fix.fix_ref in fixes.REVIEW_FIXES:
             return VerifyResult(ok=False, rule_passed=None, health=HealthResult(ok=False),
                                 evidence="Owner investigation and service validation required. Containment or object "
@@ -376,6 +430,9 @@ class KubernetesAdapter(Adapter):
                                      "application_health": "not assessed"})
 
     def health_check(self, target, transport) -> HealthResult:
+        if self._namespace_scope(target, transport) is not None:
+            return HealthResult(ok=False, checks=[HealthCheck("cluster_health", False,
+                                "Cluster and application health unavailable in namespace collection mode")])
         res: list[HealthCheck] = []
         v = transport.run("kubectl version -o json")
         ver = _json(v.stdout) if v.ok else None
@@ -395,6 +452,7 @@ class KubernetesAdapter(Adapter):
         return HealthResult(ok=all(c.ok for c in res), checks=res)
 
     def rollback(self, target, transport, fix: FixEntry, before: BeforeState) -> RollbackResult:
+        self._require_mutable(target, transport)
         if fix.kind == "runbook":
             return RollbackResult(ok=True, output="Runbook fix: nothing was changed by the tool. Manual rollback:\n"
                                   + fix.rollback_plan_text(), details={"runbook": True})
