@@ -144,15 +144,32 @@ class KubernetesAdapter(Adapter):
             except Exception as e:  # unavailable input never becomes passing defaults
                 col.errors.append(f"k3d configuration collection unavailable: {e}")
         elif node_id:
-            self._collect_k3s_node(target, str(node_id), data, col)
+            self._collect_k3s_node(target, str(node_id), data, col,
+                                   factory=getattr(transport, "secondary_transport", None))
         col.facts = self._facts(target, data.doc("version") or {}, data.doc("nodes") or {})
         col.raw["server_version"] = col.facts.os_version
         col.raw["node_count"] = col.facts.extra.get("node_count")
         return col
 
-    def node_transport(self, node_id: str):
+    def node_transport(self, node_id: str, factory=None):
         """(node target, transport) for the k3s server node named by options.node_target. The node must be an
-        in-scope linux target in the inventory; the scope check runs here, before anything is sent to it."""
+        in-scope linux target. Verified sessions must use the parent's guarded secondary factory."""
+        if factory is not None:
+            if not callable(factory):
+                raise PermissionError("a guarded secondary transport factory is required")
+            return factory(node_id)
+        try:
+            from cyberthunder.control.principal import current_principal
+        except ModuleNotFoundError as error:
+            # Legacy development checkouts may not include the identity module.
+            # An import failure inside an installed identity module is never a fallback.
+            if error.name != "cyberthunder.control.principal":
+                raise
+            principal = None
+        else:
+            principal = current_principal()
+        if principal is not None and getattr(principal, "verified", False):
+            raise PermissionError("verified node collection requires a guarded secondary transport factory")
         from cyberthunder.config import Settings
         from cyberthunder.inventory.targets import Inventory
         from cyberthunder.store import StateStore
@@ -163,14 +180,33 @@ class KubernetesAdapter(Adapter):
             raise ValueError(f"node_target {node_id} is a {node.asset_type} target, not linux")
         return node, make_transport(node, settings)
 
-    def _collect_k3s_node(self, target, node_id: str, data: checks.KubeData, col: Collected) -> None:
+    def _collect_k3s_node(self, target, node_id: str, data: checks.KubeData, col: Collected, *, factory=None) -> None:
         """Read the k3s control-plane flags from the server node (see k3s.py). Only the parsed component
         flags are kept; the raw config file (which may hold the join token) is never written out."""
         try:
-            node, nt = self.node_transport(node_id)
-        except Exception as e:  # noqa: BLE001  scope violation, unknown target, connect failure
+            node, nt = self.node_transport(node_id, factory=factory)
+        except PermissionError:
+            raise
+        except Exception as e:  # noqa: BLE001  unknown target or transport setup failure
             col.errors.append(f"node_target {node_id}: {e}")
             return
+        denied = False
+        try:
+            if node.id != node_id or node.asset_type != "linux" or node.in_scope is not True:
+                raise PermissionError("secondary transport must select the requested in-scope Linux target")
+            self._read_k3s_node(target, node_id, node, nt, data, col)
+        except PermissionError:
+            denied = True
+            raise
+        finally:
+            try:
+                nt.close()
+            except Exception:
+                if not denied:
+                    raise
+
+    def _read_k3s_node(self, target, node_id, node, nt, data, col):
+        """Read and parse the node through the already-authorized transport."""
         cfg = nt.run(k3s.READ_CONFIG, sudo=bool(getattr(node, "sudo", True)))
         unit = nt.run(k3s.READ_EXECSTART)
         env = nt.run(k3s.READ_ENVIRONMENT)
