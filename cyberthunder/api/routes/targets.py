@@ -146,6 +146,8 @@ def discover_target(target_id: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
         declared = {key: getattr(target, key) for key in fields}
 
         def guard():
+            from cyberthunder.control.principal import authorize
+            authorize(ctx, "discover", actor=actor, target=target)
             current = persisted_target(ctx.inventory, target_id, require_scope=True)
             if any(getattr(current, key) != value for key, value in declared.items()):
                 raise ScopeViolation("target connection declarations changed; retry with the current inventory")
@@ -167,8 +169,8 @@ def discover_target(target_id: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
             checked = HostConnectionTransport(transport, guard) if target.asset_type in {"linux", "windows"} else transport
             facts = adapter.discover(target, checked)
             guard()
-    except (ScopeViolation, KillSwitchEngaged):
-        ctx.audit.append("inventory.discover", actor, {"target": target_id, "reason": "scope or kill guard refused access"},
+    except (PermissionError, KillSwitchEngaged):
+        ctx.audit.append("inventory.discover", actor, {"target": target_id, "reason": "authorization, scope or kill guard refused access"},
                          subject=target_id, outcome="blocked")
         raise
     except (TransportError, NotImplementedError, KeyError) as e:

@@ -83,6 +83,7 @@ class AppContext:
             return None
         from cyberthunder.control.principal import current_principal, require_current
         from cyberthunder.inventory.host import persisted_target
+        from cyberthunder.security.resources import target_scope
         principal = current_principal()
         try:
             principal = require_current(action, actor)
@@ -92,6 +93,10 @@ class AppContext:
             elif target is not None and action != "admin":
                 resource = persisted_target(self.inventory, target.id,
                     require_scope=action in {"scan", "discover", "plan", "apply", "rollback", "verify"})
+                # Authorize the ownership snapshot the caller will actually use.
+                # An identifier may now name a different account's target.
+                if target_scope(target) != target_scope(resource):
+                    raise PermissionError("target ownership changed")
             else:
                 resource = target
             self.access.require(principal, action, resource)
@@ -107,9 +112,12 @@ class AppContext:
             return True
         from cyberthunder.control.principal import require_current
         from cyberthunder.inventory.host import persisted_target
+        from cyberthunder.security.resources import target_scope
         try:
             principal = require_current(action)
             resource = persisted_target(self.inventory, target if isinstance(target, str) else target.id)
+            if not isinstance(target, str) and target_scope(target) != target_scope(resource):
+                return False
             return self.access.allows(principal, action, resource)
         except (PermissionError, KeyError):
             return False
@@ -125,7 +133,11 @@ class AppContext:
             action = current_operation()
             if action not in {"scan", "discover", "plan", "apply", "rollback", "verify"}:
                 raise PermissionError("target access requires an explicit authorized operation")
-            target = persisted_target(self.inventory, target.id, require_scope=True)
+            requested = target
+            target = persisted_target(self.inventory, requested.id, require_scope=True)
+            from cyberthunder.security.resources import target_scope
+            if target_scope(requested) != target_scope(target):
+                raise PermissionError("target ownership changed; retry using the current inventory")
             principal = self.authorize(action, target=target)
             binding = self.access.credential(principal, action, target)
             selected = bind_target(target, binding)

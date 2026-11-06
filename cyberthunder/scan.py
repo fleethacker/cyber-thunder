@@ -22,6 +22,7 @@ from cyberthunder.adapters.kubernetes.known_good import KubernetesKnownGoodState
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.findings.schema import Finding, summarize, utcnow
 from cyberthunder.inventory.targets import ScopeViolation
+from cyberthunder.security.resources import check_record
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -177,6 +178,7 @@ class Scanner:
         actor = run.requested_by
         for tid in run.targets:
             authorize(ctx, "scan", actor=actor, target=tid)
+        check_record(ctx, run, "scan")
         run.status = "running"
         self._save(run)
         ctx.audit.append("scan.start", actor, {"targets": run.targets, "modules": run.modules,
@@ -296,6 +298,7 @@ class Scanner:
 
         try:
             target = ctx.inventory.assert_in_scope(tid)
+            check_record(ctx, run, "scan")
             authorize(ctx, "scan", actor=actor, target=target)
         except ScopeViolation as e:
             res.errors.append(str(e))
@@ -340,6 +343,10 @@ class Scanner:
             res.coverage = ScanContentService(ctx).observed(target, collected, findings)
             collected.raw["coverage"] = res.coverage
             run.coverage_incomplete = True
+            # Collection/detection may finish after logout, grant revocation or
+            # target replacement. Do not publish facts under that old request.
+            authorize(ctx, "scan", actor=actor, target=target)
+            check_record(ctx, run, "scan")
             ctx.store.write_json(workdir / "collected.json", collected.to_dict())
             res.errors.extend(collected.errors)
             res.findings = len(findings)
