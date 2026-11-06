@@ -196,6 +196,21 @@ under `.build/reassessment-query/`. Validation is focused, not a full release ga
 or a general performance claim. Dedicated cluster/import reassessment and
 additional producer mappings remain open in BACKLOG UI-04.
 
+Independent combined-tree query review adds final-page history revocation and
+repeated grant changes on both backends. Page authorization precedes the final
+history derivation, including when only mixed-run history authority changes.
+The query permits four rebuild attempts, then returns a sanitized `409` without
+rows or aggregate metadata if authority continues changing. Separate fixtures
+check every facet against a new authorized query after off-page grant revocation
+or target-generation replacement, including filtered-out rows and page shifts.
+Real browser validation mounts the findings page and account boundary, exercising
+controls, counts, pagination, saved preference reset, forged values, and a delayed
+response across an account switch. It uses intercepted fixture HTTP responses;
+API authorization is tested separately with real fixture policies and stores.
+Original failures, source hashes, logs, and browser receipts are retained under
+`.build/reassessment-query-review/`. This remains focused validation; it does not
+establish production performance or complete the open producer mappings.
+
 Implementation receipts are retained under `.build/finding-reassessment-next/`
 in the implementation worktree. Independent review receipts are retained under
 `.build/finding-reassessment-review/` in the review worktree. They bind tested

@@ -514,7 +514,9 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
     history = ReassessmentView(ctx, scan_id=scan_id)
     observations = [f.to_dict() for f in all_f]
     annotations = history.assess_many(observations)
-    while True:
+    # Access can alternate without permanently removing a row or indexed run.
+    # Bound retries so concurrent policy changes cannot occupy a request forever.
+    for _ in range(4):
         readable = [f for f in all_f if visible_record(ctx, f)]
         if len(readable) != len(all_f):
             if not readable:
@@ -540,9 +542,11 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
         baseline = (ctx.store.load_scan_run(sid) or {}) if sid and not scan_id else None
         if baseline is not None and not visible_record(ctx, baseline):
             sid = None
-        checked = history.assess_many(observations)
         for finding in page:
             check_record(ctx, finding)
+        # Page authorization reads persisted inventory/policy too. Recheck history
+        # afterwards even when every returned observation remains readable.
+        checked = history.assess_many(observations)
         if checked != annotations:
             annotations = checked
             continue
@@ -553,6 +557,8 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
         if any(not visible_record(ctx, f) for f in all_f):
             continue
         break
+    else:
+        raise HTTPException(status_code=409, detail="Findings view changed during authorization; retry the query.")
     for finding in page:
         finding["reassessment"] = reassessments[finding["id"]]
     return {"findings": page, "total": len(selected), "scan_id": sid,

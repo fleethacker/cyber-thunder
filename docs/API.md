@@ -121,6 +121,9 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
   complete coverage, or a current pass. Named history retains its whole-run read boundary and cutoff.
   Revoked history during query/page reads rebuilds counts and selection; revoked off-page finding
   authority removes that contributor and rebuilds summary/facets too. Revoked page authority fails closed.
+  History is checked again after page authorization reads, even if every observation remains readable.
+  At most four attempts rebuild the query; continuing authority changes return `409` with a sanitized
+  string `detail` and no findings, counts, or facets. The caller may retry the query.
 - `q` is a case-insensitive substring of title, machine/host ID, rule ID, rule version, group ID,
   reference identifiers (including CVEs and STIGs), source, benchmark, or release.
 - `sort_by` accepts `default`, `severity`, `host`, `asset_type`, `category`, `title`, `rule_id`,
