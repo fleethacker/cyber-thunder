@@ -2,6 +2,8 @@ import { Accordion, Alert, Badge, Button, Checkbox, FileInput, Group, Paper, Pro
 import { notifications } from '@mantine/notifications';
 import { useEffect, useRef, useState } from 'react';
 import { linkLabel } from '../lib/linkPresentation';
+import { canOverrideContent, contentAccount, manifestText } from '../lib/contentAuthenticity';
+import { usePermissions } from './PermissionGate';
 import { api, errorText } from '../api/client';
 import type { ContentUploadResult, ImportDirResult, PullDelta, PullJob, StigLibrary } from '../api/types';
 import { fmtBytes, fmtSeconds, fmtZonedTime } from '../lib/format';
@@ -62,8 +64,8 @@ function JobProgress({ job }: { job: PullJob }) {
   </Stack>;
 }
 
-function downloadJson(name: string, doc: unknown) {
-  const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+function downloadJson(name: string, contents: string) {
+  const blob = new Blob([contents], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name;
@@ -80,6 +82,12 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
   view?: 'all' | 'updates' | 'transfers'; onProductSelect?: (key: string) => void; onMaintained?: () => void; onTransfers?: () => void;
 }) {
   const { status } = useAppState();
+  const permission = usePermissions();
+  const [override, setOverride] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
+  const [overrideAccount, setOverrideAccount] = useState<string | null>(null);
+  const exception = useRef({ override, reason: overrideReason, account: overrideAccount });
+  exception.current = { override, reason: overrideReason, account: overrideAccount };
   const [selected, setSelected] = useState<string[]>([]);
   const [pace, setPace] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -98,6 +106,8 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
   const link = status?.global_details === false ? null : status?.link;
   const connected = link === null ? null : link?.connected ?? library.connected;
   const blocked = disabled || !!busy;
+  const exceptionBlocked = override && (overrideAccount !== contentAccount() || !canOverrideContent() || !overrideReason.trim() || overrideReason.trim().length > 512);
+  const importBlocked = blocked || !permission.can('import') || exceptionBlocked;
   const selectionBlocked = blocked || dirty || running;
   const uploadBlocked = useRef(disabled);
   uploadBlocked.current = disabled;
@@ -121,13 +131,26 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
 
   const act = async (what: string, fn: () => Promise<void>) => {
     if (blocked || (['pull', 'manifest'].includes(what) && (dirty || running)) || (what === 'pull' && !connected)) return;
+    if (!permission.can(what === 'manifest' ? 'export' : what === 'pull' ? 'admin' : 'import')) return;
     setBusy(what);
     setError(null);
     try { await fn(); }
     catch (e) { setError(errorText(e)); }
     finally { setBusy(null); }
   };
+  const importException = (account: string) => {
+    if (account !== contentAccount() || uploadBlocked.current || !permission.can('import')) {
+      throw new Error('Import stopped: account or permissions changed. Review before retrying.');
+    }
+    const value = exception.current;
+    if (!value.override) return undefined;
+    if (value.account !== account || !canOverrideContent() || !value.reason.trim() || value.reason.trim().length > 512) {
+      throw new Error('This exception requires a verified human with import and admin permissions and a reason.');
+    }
+    return value.reason.trim();
+  };
   const upload = async () => {
+    const account = contentAccount();
     const batch: UploadItem[] = files.map((file) => ({ file, state: 'queued' }));
     setUploads(batch);
     for (let i = 0; i < batch.length; i++) {
@@ -138,7 +161,7 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
         if (item.file.size > 32 * 1024 * 1024) throw new Error('File exceeds the 32 MiB upload limit.');
         batch[i] = { ...item, state: 'uploading' };
         setUploads([...batch]);
-        const result = await api.uploadContent(item.file);
+        const result = await api.uploadContent(item.file, importException(account));
         batch[i] = { ...item, state: 'done', result };
         setUploads([...batch]);
         await onRefresh().catch((e) => setError(`File imported, but the library could not refresh: ${errorText(e)}`));
@@ -171,13 +194,14 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
             <Table.Td>{fmtZonedTime(r.upload_date, 'Not provided')}</Table.Td><Table.Td>{fmtBytes(r.expected_bytes)}</Table.Td>
           </Table.Tr>} />
         <Group>
-          <Button loading={busy === 'pull'} disabled={selectionBlocked || !connected || !selected.length} onClick={() => void act('pull', async () => {
+          <Button loading={busy === 'pull'} disabled={selectionBlocked || !permission.can('admin') || !connected || !selected.length} onClick={() => void act('pull', async () => {
             setNewJob(await api.pullUpdates({ filenames: selected.filter((name) => updates.some((r) => r.filename === name)), pace: pace && link?.mode === 'test' }));
             onTransfers?.();
             await onRefresh();
           })}>Download selected ({selected.length})</Button>
           <Switch label="Pace downloads to the configured TEST rate" checked={pace && link?.mode === 'test'} disabled={blocked || link?.mode !== 'test'} onChange={(e) => setPace(e.currentTarget.checked)} />
         </Group>
+        {!permission.can('admin') && <Text size="sm" c="dimmed">Downloading updates requires the admin permission and a node grant.</Text>}
         {!connected && <Text size="sm" c={connected === null ? 'dimmed' : 'orange'}>{connected === null
           ? 'Link status is restricted or unknown. Download availability cannot be determined.' : 'Use a manifest and local import while disconnected.'}</Text>}
         {library.selection.skipped.length > 0 && <Accordion variant="contained"><Accordion.Item value="skipped"><Accordion.Control>Unmatched or skipped ({library.selection.skipped.length})</Accordion.Control><Accordion.Panel>
@@ -189,12 +213,26 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
     </Paper>
     </>}
     {view !== 'updates' && <>
+    <Alert color="blue" title="Offline content trust">
+      <Text size="sm">Verified nodes require an operator-attested bundle. Configure trusted keys on the server, then use folder import. A plain XML or ZIP has no attestation.</Text>
+      <Checkbox mt="sm" label="Request an exception for unsigned content or an unknown signer" checked={override}
+        disabled={blocked || (!override && !canOverrideContent())} onChange={(event) => {
+          if (!event.currentTarget.checked || canOverrideContent()) {
+            setOverride(event.currentTarget.checked);
+            setOverrideAccount(event.currentTarget.checked ? contentAccount() : null);
+          }
+        }} />
+      {!canOverrideContent() && <Text size="xs">Exceptions require a verified human with import and admin permissions. The server also checks node grants.</Text>}
+      {override && <TextInput mt="sm" label="Reason for the content exception" description="Recorded in the audit and library. Do not include secrets. This cannot bypass a bad signature or changed file bytes."
+        maxLength={512} value={overrideReason} onChange={(event) => setOverrideReason(event.currentTarget.value)} disabled={blocked} />}
+    </Alert>
     <Paper withBorder p="md" radius="md">
       <Stack gap="sm">
         <Text fw={700}>Upload from this computer</Text>
+        {!permission.can('import') && <Text size="sm" c="dimmed">Your account does not have permission to import content.</Text>}
         <Text size="sm" c="dimmed">XML or ZIP, up to 32 MiB per file. Files are validated and indexed one at a time. Uploads work offline; publisher authenticity is not verified.</Text>
         <FileInput label="Choose content files" placeholder="Select XML or ZIP files" multiple clearable accept=".xml,.zip" value={files} onChange={setFiles} disabled={blocked} />
-        <Button loading={busy === 'upload'} disabled={blocked || !files.length} onClick={() => void act('upload', upload)} style={{ alignSelf: 'flex-start' }}>Upload {files.length || ''} file{files.length === 1 ? '' : 's'}</Button>
+        <Button loading={busy === 'upload'} disabled={importBlocked || !files.length} onClick={() => void act('upload', upload)} style={{ alignSelf: 'flex-start' }}>Upload {files.length || ''} file{files.length === 1 ? '' : 's'}</Button>
         {uploads.length > 0 && <LibraryTable rows={uploads} label="upload results" empty="No uploads." searchText={(u) => `${u.file.name} ${u.state}`}
           headings={<><Table.Th>File</Table.Th><Table.Th>Result</Table.Th></>}
           render={(u, i) => <Table.Tr key={i}><Table.Td><Text size="sm" style={{ overflowWrap: 'anywhere' }}>{u.file.name}</Text></Table.Td><Table.Td>
@@ -213,15 +251,16 @@ export function ContentUpdates({ library, dirty, disabled, onRefresh, view = 'al
     <Paper withBorder p="md" radius="md">
       <Stack gap="sm">
         <Text fw={700}>Transfer with a manifest</Text>
+        {!permission.can('export') && <Text size="sm" c="dimmed">Exporting a manifest requires the export permission and a node grant.</Text>}
         <Text size="sm" c="dimmed">Export a manifest for your saved selections. Retrieve its files on a connected machine, then import the folder available to this server.</Text>
         <Group align="flex-end">
-          <Button variant="light" loading={busy === 'manifest'} disabled={selectionBlocked || !library.selection.wanted.length} onClick={() => void act('manifest', async () => {
-            const manifest = await api.writeManifest(); downloadJson('manifest.json', manifest);
+          <Button variant="light" loading={busy === 'manifest'} disabled={selectionBlocked || !permission.can('export') || !library.selection.wanted.length} onClick={() => void act('manifest', async () => {
+            const manifest = await api.writeManifest(); downloadJson('manifest.json', manifestText(manifest));
             notifications.show({ message: `Manifest exported: ${manifest.items.length} items` });
           })}>Download manifest</Button>
           <TextInput label="Import folder on the server" placeholder="E:\stig-content" value={folder} disabled={blocked} style={{ flex: 1, minWidth: 220 }} onChange={(e) => setFolder(e.currentTarget.value)} />
-          <Button variant="light" loading={busy === 'import'} disabled={blocked || !folder.trim()} onClick={() => void act('import', async () => {
-            setImported(await api.importDir(folder.trim())); await onRefresh();
+          <Button variant="light" loading={busy === 'import'} disabled={importBlocked || !folder.trim()} onClick={() => void act('import', async () => {
+            setImported(await api.importDir(folder.trim(), importException(contentAccount()))); await onRefresh();
           })}>Import folder</Button>
         </Group>
         {imported && <Stack gap="sm">

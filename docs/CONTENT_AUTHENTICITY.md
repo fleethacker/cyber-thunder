@@ -125,8 +125,17 @@ workload token or caller-supplied permission flag cannot authorize an exception.
 For folder imports, send an additional `override_reason` string (1–512 characters). Raw
 `/ingest/content/upload` accepts one `file` part and an optional text `override_reason` part; the
 legacy `/ingest/stig` JSON path body accepts the same reason. Signed packages use the folder route.
-No UI override control is provided here. CLI `--override-reason` does not establish identity or bypass
-the existing verified-mode CLI restriction.
+The STIG Library's Import / transfer view has an initially unchecked exception control. It requires
+a verified human with both role permissions and a nonempty reason; the server independently checks
+node grants and the live session. An exception cannot carry over to a different signed-in account.
+The downloaded-file view labels attested, HTTPS, development, legacy and human-exception provenance
+separately. These labels describe the stored event, not current key validity or publisher authorship.
+CLI `--override-reason` does not establish identity or bypass the verified-mode CLI restriction.
+
+Manifest export returns the exact portable artifact as `download_text` beside the API summary. The
+browser downloads those bytes, preserving the artifact's hash and signed envelope; it never rebuilds
+a signed request from the unsigned summary. Older development responses use only the portable
+request fields. A response claiming a signature but missing the downloadable artifact is refused.
 
 An exception records `human_override`, the verified actor and reason in `content.authenticity` audit
 events and held-content provenance. It is never relabelled as a verified signature. Invalid signatures

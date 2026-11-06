@@ -4,6 +4,14 @@ import { browser, errorText, evaluate, format, libraryFixture, linkPresentation,
 
 async function setup(t, overrides = {}) {
   const env = browser(t), calls = [];
+  let identity = null;
+  const permissions = new Set(['import', 'admin', 'export']);
+  const authenticity = evaluate(new URL('../lib/contentAuthenticity.ts', import.meta.url), {
+    '../api/identity': { sessionIdentity: () => identity },
+  });
+  const downloads = [];
+  t.mock.method(URL, 'createObjectURL', (blob) => { downloads.push(blob); return 'blob:fixture'; });
+  const manifest = { items: [] };
   let readFailure = false;
   const context = { status: { kill: { engaged: false }, link: { connected: true } }, actor: 'IT1 Operator' };
   const job = { id: 'job', state: 'queued', files: [], deltas: [], created_at: '2026-11-05T12:00:00Z', created_by: 'IT1 Operator' };
@@ -14,15 +22,69 @@ async function setup(t, overrides = {}) {
     '../api/client': { errorText, api: {
       pullUpdates: async (body) => { calls.push(['pull', body]); return job; },
       pullJob: async (id) => { calls.push(['job', id]); if (readFailure) throw new Error('Transfer status unavailable'); return { ...job, state: 'done' }; },
-      uploadContent: async (file) => { calls.push(['upload', file.name]); return { record: props.library.held.files[0] }; },
-      importDir: async (path) => { calls.push(['import', path]); return { imported: [], refused: [], skipped: [], missing: [], deltas: [], verified_by: 'hash' }; },
-      writeManifest: async () => { calls.push(['manifest']); return { items: [] }; },
+      uploadContent: async (file, reason) => { calls.push(['upload', file.name, reason]); return { record: props.library.held.files[0] }; },
+      importDir: async (path, reason) => { calls.push(['import', path, reason]); return { imported: [], refused: [], skipped: [], missing: [], deltas: [], verified_by: 'hash' }; },
+      writeManifest: async () => { calls.push(['manifest']); return manifest; },
     } }, '../lib/format': format, '../state/AppState': { useAppState: () => context }, './ActorChip': { actorProblem: () => null },
     './LibraryTables': tableStubs, './common': ui, '../lib/linkPresentation': linkPresentation,
+    '../lib/contentAuthenticity': authenticity,
+    './PermissionGate': { usePermissions: () => ({ can: (action) => permissions.has(action) }) },
   }).ContentUpdates, props);
   env.cleanup(() => panel.unmount()); await panel.settle();
-  return { ...panel, props, calls, context, env, failRead: () => { readFailure = true; } };
+  return { ...panel, props, calls, context, env, manifest, downloads, permissions,
+    identity: (value) => { identity = value; }, failRead: () => { readFailure = true; } };
 }
+
+const human = (subject = 'reviewer') => ({ mode: 'oidc', authenticated: true, permissions: ['import', 'admin', 'export'],
+  principal: { issuer: 'https://identity.example.test', subject, actor: subject, verified: true, source: 'oidc', kind: 'human' } });
+
+test('manifest downloads preserve the signed artifact bytes instead of API receipt fields', async (t) => {
+  const panel = await setup(t, { view: 'transfers' });
+  const signed = '{"payload":"payload","protected":"header","signature":"signature"}';
+  Object.assign(panel.manifest, { download_text: signed, path: 'private/local/path', sha256: 'receipt', authenticity: { status: 'operator_signed' } });
+  await panel.click('Download manifest');
+  assert.equal(panel.downloads.length, 1);
+  assert.equal(await panel.downloads[0].text(), signed);
+});
+
+test('a missing signed download cannot fall back to an unsigned summary', async (t) => {
+  const panel = await setup(t, { view: 'transfers' });
+  panel.manifest.authenticity = { status: 'operator_signed' };
+  await panel.click('Download manifest');
+  assert.equal(panel.downloads.length, 0);
+  assert.ok(panel.nodes().some((node) => String(node.props?.error).includes('signed download')));
+});
+
+test('unsigned exception requires explicit verified human intent and a bounded reason', async (t) => {
+  const panel = await setup(t, { view: 'transfers' });
+  const label = 'Request an exception for unsigned content or an unknown signer';
+  assert.equal(panel.control(label).props.disabled, true);
+  panel.control(label).props.onChange({ currentTarget: { checked: true } }); await panel.settle();
+  assert.equal(panel.control(label).props.checked, false);
+  panel.identity(human()); await panel.rerender();
+  await panel.change(label, true);
+  await panel.change('Choose content files', [new File(['fixture'], 'reviewed.xml')]);
+  assert.equal(panel.button('Upload 1 file').props.disabled, true);
+  await panel.change('Reason for the content exception', '  Courier identity checked separately  ');
+  await panel.click('Upload 1 file');
+  assert.ok(panel.calls.some(([kind, , reason]) => kind === 'upload' && reason === 'Courier identity checked separately'));
+});
+
+test('an exception cannot follow an account change or revoked permissions through retained handlers', async (t) => {
+  const panel = await setup(t, { view: 'transfers' });
+  panel.identity(human()); await panel.rerender();
+  await panel.change('Request an exception for unsigned content or an unknown signer', true);
+  await panel.change('Reason for the content exception', 'Reviewed by the first account');
+  await panel.change('Import folder on the server', 'C:/fixture/bundle');
+  const retained = panel.button('Import folder').props.onClick;
+  panel.identity(human('someone-else')); await panel.rerender();
+  assert.equal(panel.button('Import folder').props.disabled, true);
+  retained(); await panel.settle();
+  assert.ok(panel.calls.every(([kind]) => kind !== 'import'));
+  panel.permissions.delete('import');
+  retained(); await panel.settle();
+  assert.ok(panel.calls.every(([kind]) => kind !== 'import'));
+});
 
 test('viewing updates and transfers does not download; selection survives task switches', async (t) => {
   const panel = await setup(t);

@@ -3,6 +3,7 @@ import { IconSearch } from '@tabler/icons-react';
 import { useState, type ReactNode } from 'react';
 import type { ContentRow, HeldFile, LibraryCatalog, StigLibrary } from '../api/types';
 import { fmtBytes, fmtZonedTime } from '../lib/format';
+import { contentProvenance } from '../lib/contentAuthenticity';
 
 export const KIND_LABELS: Record<string, string> = {
   manual_stig: 'Manual STIG', srg: 'SRG', scap_benchmark: 'SCAP benchmark',
@@ -133,11 +134,16 @@ export function FileProvenance({ file }: { file: HeldFile }) {
   const upload = file.ingest?.upload;
   const at = upload?.imported_at ?? file.fetched_at;
   const by = upload?.imported_by ?? file.fetched_by;
+  const evidence = file.authenticity;
+  const provenance = contentProvenance(evidence);
   return <Stack gap={2}>
     <Text size="sm" fw={600}>{file.source === 'pulled' ? 'Downloaded' : file.source === 'bundled' ? 'Bundled reference' : file.source === 'uploaded' ? 'Uploaded locally' : 'Folder import'}</Text>
     <Text size="xs">{fmtZonedTime(at)}</Text>
     {by && <Text size="xs" c="dimmed">{by}</Text>}
-    {upload?.authenticity_verified === false && <Text size="xs" c="orange">Publisher authenticity not verified</Text>}
+    <Text size="xs" c={provenance.color}>{provenance.text}</Text>
+    {evidence?.signer && <Text size="xs">Recorded signer: {evidence.signer}{evidence.scope ? ` · Scope: ${evidence.scope}` : ''}</Text>}
+    {evidence?.key_sha256 && <Text size="xs" style={{ overflowWrap: 'anywhere' }}>Recorded key SHA-256: {evidence.key_sha256}</Text>}
+    {evidence?.status === 'human_override' && <Text size="xs">{evidence.override_by} · {evidence.override_reason}</Text>}
   </Stack>;
 }
 

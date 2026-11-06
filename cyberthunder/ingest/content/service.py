@@ -614,7 +614,8 @@ class ContentService:
                         "scope": config.scope}
         self.audit.append("content.manifest", actor, {"url": str(out), "bytes": out.stat().st_size, "sha256": digest,
                                                       "items": len(items)})
-        return dict(doc, path=str(out), sha256=digest, authenticity=authenticity)
+        return dict(doc, path=str(out), sha256=digest, authenticity=authenticity,
+                    download_text=sig.document_text(envelope))
 
     def import_dir(self, path: str | Path, actor: str, *, override_reason: str | None = None) -> dict:
         """Verify the complete bundle before parsing a single archive or publishing content."""

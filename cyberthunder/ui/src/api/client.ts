@@ -225,13 +225,14 @@ export const api = {
   content: () => get<HeldContent>('/ingest/content'),
   stigLibrary: () => get<StigLibrary>('/ingest/library'),
   saveLibraryPreferences: (body: LibraryPreferencesInput) => put<LibraryPreferences>('/ingest/library/preferences', body),
-  uploadContent: (file: File) => {
+  uploadContent: (file: File, overrideReason?: string) => {
     const form = new FormData();
     form.append('file', file);
+    if (overrideReason !== undefined) form.append('override_reason', overrideReason);
     return request<ContentUploadResult>('POST', '/ingest/content/upload', { form });
   },
   writeManifest: () => post<ContentManifest>('/ingest/manifest'),
-  importDir: (path: string) => post<ImportDirResult>('/ingest/import-dir', { path }),
+  importDir: (path: string, overrideReason?: string) => post<ImportDirResult>('/ingest/import-dir', { path, override_reason: overrideReason }),
   outbox: () => get<Outbox>('/outbox'),
   sync: () => post<SyncResult>('/outbox/sync'),
 

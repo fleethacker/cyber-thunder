@@ -718,6 +718,17 @@ export interface PullJob {
   finished_at: string | null;
 }
 
+export interface ContentAuthenticity {
+  status: string;
+  operator_attested?: boolean;
+  disa_signature?: boolean;
+  signer?: string;
+  key_sha256?: string;
+  scope?: string;
+  override_by?: string;
+  override_reason?: string;
+}
+
 export interface HeldFile {
   filename: string;
   product_key: string | null;
@@ -730,6 +741,7 @@ export interface HeldFile {
   fetched_at: string | null;
   fetched_by: string | null;
   source: 'pulled' | 'imported' | 'uploaded' | 'bundled';
+  authenticity?: ContentAuthenticity;
   benchmark_id?: string | null;
   benchmark_release?: string | null;
   ingest: {
@@ -749,7 +761,11 @@ export interface HeldContent {
 }
 
 export interface ContentManifest {
+  download_text?: string;
+  authenticity?: ContentAuthenticity;
   generated_at: string;
+  generated_by?: string;
+  index_source?: string;
   node: string | null;
   items: { filename: string; url: string; product_key: string | null; kind: string; version: number[] | null; expected_bytes?: number; expected_etag?: string }[];
   path: string;

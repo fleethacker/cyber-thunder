@@ -430,6 +430,9 @@ def test_manifest_export_is_signed_portable_file_for_each_backend(verified):
         result = ctx.ingest.content.write_manifest(human.actor)
     path = Path(result["path"])
     assert path.is_file() and result["authenticity"]["operator_attested"]
+    assert result["download_text"].encode("ascii") == path.read_bytes()
+    assert hashlib.sha256(result["download_text"].encode("ascii")).hexdigest() == result["sha256"]
+    assert set(json.loads(result["download_text"])) == {"protected", "payload", "signature"}
     doc, evidence = sig.verify_document(path.read_bytes(), "request", ctx.content_signature_config)
     assert doc["generated_by"] == human.actor and evidence["operator_attested"]
 

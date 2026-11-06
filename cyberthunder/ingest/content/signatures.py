@@ -571,6 +571,14 @@ def acceptance(ctx, actor, digest, size):
     return decide(ctx, base, actor, reason)
 
 
+def document_text(doc):
+    """Exact portable bytes, shared by the saved artifact and API download."""
+    text = json.dumps(doc, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    if len(text.encode("ascii")) > MAX_ENVELOPE:
+        _fail()
+    return text
+
+
 def atomic_document(path, doc):
     """Portable-file artifact even when application documents use SQLite."""
     path = Path(path).absolute()
@@ -578,9 +586,7 @@ def atomic_document(path, doc):
     _parents(path)
     if path.exists() or path.is_symlink():
         _node(path.lstat())
-    raw = json.dumps(doc, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
-    if len(raw) > MAX_ENVELOPE:
-        _fail()
+    raw = document_text(doc).encode("ascii")
     fd, name = tempfile.mkstemp(prefix=".content-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
