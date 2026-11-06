@@ -65,8 +65,14 @@ In quick, full and passive modes the inventory sources below are merged in as we
 | VMware Workstation | `vmrun list`, then each named `.vmx` read (displayName, guestOS, ethernet0 MAC) | in-scope target with `options.hypervisor: vmware` |
 
 Anything a source reports outside the swept scopes is dropped, except powered-off VMs, which have no
-address and come from a hypervisor that is already in scope. vCenter / ESXi inventory is a follow-up:
-it needs the vSphere API and a read-only role, and will plug in as one more source with the same shape.
+address and come from a hypervisor that is already in scope.
+
+vCenter/ESXi has a bounded read-only API source with explicit credentials and TLS trust.
+The [vSphere account-access guide](VSPHERE_ACCOUNT_ACCESS.md) describes provisioning,
+collection limits and saved-history ownership. The Assets [source-inventory view](VSPHERE_UI.md)
+can collect one authorized source and read that account's saved collections without a global
+sweep. Reported VMs do not become accepted targets and their addresses do not establish
+reachability or guest access. Actual vCenter/ESXi deployment acceptance remains open in DIS-01.
 
 Observations of one device (same MAC or same address) are merged before classification, so an asset can
 carry `nmap`, `switch_arp` and `hyperv` evidence at once. Virtual NIC prefixes (VMware, Hyper-V, KVM,

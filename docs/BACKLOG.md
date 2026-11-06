@@ -352,7 +352,7 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 
 | ID | Gap and today | Target | Done when | Effort | Step |
 |---|---|---|---|---|---|
-| DIS-01 | vCenter/ESXi inventory is a follow-up (`docs/DISCOVERY.md:66`) | vSphere source with a read-only role, same observation shape | A simulated vSphere fixture produces assets with hypervisor evidence | days | before fleet |
+| DIS-01 | Implemented bounded, read-only vSphere collection with explicit account bindings, original target/collector-owned history, sanitized failures and a searchable paged Assets view ([account access](VSPHERE_ACCOUNT_ACCESS.md), [UI](VSPHERE_UI.md)). JSON/SQLite source fixtures and native browser fixtures pass | Validate a provisioned read-only account against actual vCenter/ESXi; review permanent history revocation when remote-account mappings are retired | Dated live collection confirms host/VM evidence and unequal account visibility; failed/partial collection never establishes an empty inventory or guest reachability | remaining live acceptance and revocation policy | before fleet |
 
 Device identity at acceptance is ZT-30.
 
