@@ -76,8 +76,11 @@ instead. Its native OIDC session profile uses UDS HTTPS ingress at
 ## State and configuration
 
 The 10 GiB PVC holds inventory, audit records, findings, approvals and other
-application state at `/var/lib/cyberthunder`. Back it up regularly. Keep one
-replica and one API worker: state is file based. Recreate deployment strategy
+application state at `/var/lib/cyberthunder`. Back up the whole directory:
+documents use `CT_STATE_BACKEND=json` (default) or `sqlite`, while audit,
+inventory, proposals and other artifacts remain files under both backends.
+See [State](../../docs/STATE.md). Keep one replica and one API worker because
+verified browser sessions are local to the process. Recreate deployment strategy
 stops the old pod before starting its replacement, with brief downtime.
 Deleting the Deployment preserves the PVC; deleting the namespace deletes it.
 
@@ -86,17 +89,25 @@ existing Ollama service, set `CT_LLM_BACKEND=ollama` and `CT_LLM_URL` to its
 reachable cluster URL (localhost refers to this container). Other `CT_*`
 settings are documented in `cyberthunder/config.py`.
 
-Inject target credentials using Kubernetes Secrets (the transports expect
-`CT_CRED_<reference>` environment variables), or mount SSH keys read-only.
-Credentials and local state are excluded from the Docker build context.
-Network policy must allow access to the targets and any configured model server.
+Target credentials require an exact named-account policy binding for the target,
+environment and action. Fleet SSH/WinRM password references do not fall back to
+`CT_CRED_<reference>`: configure a protected `CT_CREDENTIAL_SOURCES` registry
+with explicit mounted-file or native Windows Credential Manager sources.
+SSH keys require protected regular files selected by the account's binding.
+The browser client's `CT_CRED_BROWSER_LOGIN` is a separate application login
+secret; it grants no target access. Credentials and local state are excluded
+from the Docker build context.
 
-The optional `cyberthunder-target-credentials` Secret is mounted read-only at
-`/etc/cyberthunder/targets` with mode `0444` so the nonroot process can read it
-without `fsGroup`. An `id_ed25519` entry is available
-at `/etc/cyberthunder/targets/id_ed25519` for the asset's SSH key file setting.
-See [VM credentials and UDS egress](../../packages/cyberthunder/README.md#ssh-access-to-an-external-vm)
-for provisioning and package deployment variables.
+The optional `cyberthunder-target-credentials` Secret still projects files at
+`/etc/cyberthunder/targets` with mode `0444`. Its `id_ed25519` path is **not a
+supported SSH key input**: the key reader rejects projected symlinks and
+group/world permissions. The package neither provisions protected target files
+and their registry nor copies this Secret into trusted files. Follow
+[Deployment credential provisioning](../../docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md)
+for native/container requirements and the remaining package gap. See
+[VM egress](../../packages/cyberthunder/README.md#ssh-access-to-an-external-vm)
+for package network variables; network access alone supplies no credentials.
+Network policy must allow access to the targets and any configured model server.
 
 The image supports the Python SSH and WinRM transports and includes kubectl
 v1.36.4 and digest-pinned Trivy v0.71.1. The deployment mounts a local-cluster kubeconfig and

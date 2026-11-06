@@ -218,12 +218,17 @@ The application image and SBOM are carried in the archive, so no public image
 registry is needed during deployment. The package is unsigned; the checksum
 verifies transfer integrity, not publisher identity.
 
-The app uses one replica, persistent file state, and template explanations by
-default. See [runtime configuration and scanning limitations](../../deploy/kubernetes/README.md).
+The app uses one replica and one API worker because verified browser sessions
+are process-local. Documents use `CT_STATE_BACKEND=json` (default) or `sqlite`;
+audit, inventory, proposals and other artifacts remain files on the PVC under
+both backends. Back up the whole state directory; see [State](../../docs/STATE.md).
+Template explanations are the default. See
+[runtime configuration and scanning limitations](../../deploy/kubernetes/README.md).
 Target and model-server egress must be explicitly allowed in the UDS Package for
 your environment. A non-default storage class requires updating the PVC manifest
-and rebuilding. SSO controls access; audit actions still use the app's configured
-actor name in Settings.
+and rebuilding. In rebuilt source, verified account identity, application roles
+and server policy control access and attribution; a configured actor name does
+not authorize an operation.
 
 ## SSH access to an external VM
 
@@ -242,29 +247,32 @@ Supply these values on subsequent upgrades too. UDS permits TCP egress only
 from the scanner to that CIDR and SSH port, alongside existing Kubernetes API
 access. This rule does not enable external Kubernetes API or WinRM access.
 
-The Deployment also mounts the optional `cyberthunder-target-credentials`
-Secret read-only at `/etc/cyberthunder/targets`, with mode `0444`. Create it
-using an existing key authorized on the target and a verified known-hosts file:
+The optional `cyberthunder-target-credentials` Secret remains mounted read-only
+at `/etc/cyberthunder/targets` with mode `0444`. **Do not select its projected
+`id_ed25519` as an SSH private key.** The protected key reader rejects symlinks
+and group/world permission bits. Changing only the mount mode does not provide
+a protected regular file or an account binding.
 
-```sh
-kubectl -n cyberthunder create secret generic cyberthunder-target-credentials \
-  --from-file=id_ed25519=/path/to/target-key \
-  --from-file=known_hosts=/path/to/verified-known-hosts
-```
+Provision a protected regular key through the storage administrator, then bind
+its absolute runtime path and remote username to the exact named account,
+target, environment and action in `auth/access.json`. Use a read-only target
+account with `sudo: false` for scans and a separately authorized apply account
+with only the remote privileges required by the reviewed fix. Retain verified
+SSH host trust. Inventory key fields and egress rules cannot supply the account
+grant. Fleet password references instead require an explicit protected
+`CT_CREDENTIAL_SOURCES` registry; `CT_CRED_*` target-password fallback is refused.
+The OIDC browser client secret remains a separate application credential.
 
-Set the asset's SSH key file to `/etc/cyberthunder/targets/id_ed25519`. The
-Secret is optional so installations that only scan the local cluster still
-start without target credentials. No Secret-read permission is added to the
-scanner's service account.
-
-Verified transports additionally require per-account bindings and their own
-file-trust rules. A projected Secret path is not a substitute for a protected
-regular credential file when those rules reject symlinks. Provision credentials
-using the supported transport procedure; never copy untrusted paths automatically
-to make them pass validation.
-
-The existing archives are unchanged; rebuild to include these source changes.
-For an already deployed package, use the [local QEMU repair patches](../../range/README.md#qemu-ssh-from-a-uds-deployment).
+See [Deployment credential provisioning](../../docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md)
+for file-based configuration examples, native alternatives and exact protection
+requirements. The package has no end-to-end target credential provisioner: it
+does not install those files, populate the registry or create remote accounts.
+The preflight validates application identity/policy, not target authentication.
+The [local QEMU repair patches](../../range/README.md#qemu-ssh-from-a-uds-deployment)
+describe legacy egress/Secret wiring and do not close this credential gap.
+The existing archives are unchanged; rebuilding alone does not provision
+credentials. Remaining provisioning/acceptance work is tracked in
+[BACKLOG.md](../../docs/BACKLOG.md), ZT-19 and ZT-13.
 
 ## Verify
 
