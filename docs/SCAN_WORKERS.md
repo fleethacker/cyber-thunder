@@ -2,7 +2,7 @@
 
 The opt-in scanner scheduler limits concurrent **host collections per run**. Detection,
 normalization, inventory updates, and findings publication stay on one coordinator.
-The default remains the existing serial scanner.
+The default retains serial collection; both modes share the reviewed publication guard.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -107,6 +107,32 @@ prove that its fresh budget starts at execution. A separate barrier test mutates
 request `ContextVar` in two overlapping workers: each sees its own value, and the
 caller retains its original value. No shared `Context` is entered concurrently.
 
+### Independent review hardening
+
+Both serial and worker publication now use a coordinator-local store view. Public store methods still own
+review/lifecycle locking; current target, account, session, credential binding, catalog
+read authority, and kill state are checked again at each actual document write, after
+lock admission. SQLite writer admission also precedes the final check. No shared store
+method is replaced. Authority loss before terminal run publication withdraws this run's
+staged observations, clears its successful facts/counts, restores owned pending freshness,
+and removes only raw directories promoted by this coordinator. Earlier findings are not
+copied or refreshed. Filesystem/store failures can also prevent withdrawal; this is not
+a crash-atomic transaction across raw files, findings, run documents and audit history.
+Review invalidation history remains conservative if a later publication stage fails.
+An incomplete host cannot replace an older open finding with an uncertain observation
+of the same identity and ownership. Those candidates are omitted and their IDs recorded
+in `retained_incomplete_observations`. A concurrent open observation appearing after
+this filtering is checked again during locked publication and causes withdrawal.
+
+Failed coordinator startup records a terminal error and releases the thread registry.
+Shutdown can see the starting caller before the new coordinator becomes alive. Worker
+startup exceptions also join children already launched, including a start implementation
+that raises after launching. Nonstandard collection/detection exceptions drain all
+children, clear staged results, record terminal target outcomes, then propagate.
+
+See [SCAN_WORKERS_REVIEW.md](SCAN_WORKERS_REVIEW.md) for independent negative
+calibration, focused receipts and remaining integration criteria.
+
 ## Remaining boundaries
 
 - A genuine whole-host wall-clock deadline needs cooperative cancellation and deadline
@@ -131,9 +157,10 @@ caller retains its original value. No shared `Context` is entered concurrently.
 - Existing report/UI summaries are findings-based and do not render the new scheduling
   fields. Consumers must inspect run status/results/coverage and scheduling metadata to
   distinguish unavailable hosts. Report/UI integration is deferred.
-- Default serial behavior remains unchanged, including its existing per-target
-  publication and stop semantics. The stricter timed-boundary and incomplete-host
-  behavior described here applies only to the opt-in scheduler.
+- Default collection remains serial with its existing stop boundaries and incremental
+  per-target publication. It shares the new locked authority checks and withdrawal
+  of uncommitted successes. Timed-boundary and incomplete-host handling described
+  here applies only to the opt-in scheduler.
 
 ## Validation
 

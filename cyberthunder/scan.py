@@ -8,8 +8,9 @@ and marks the targets it has not reached 'stopped', and nothing is proposed afte
 ScanRun lives at store.scans/<id>/run.json; findings at findings.json; raw artifacts under raw/<target_id>/.
 """
 from __future__ import annotations
+from contextlib import nullcontext
 from contextvars import copy_context
-from cyberthunder.control.principal import authorize, operation
+from cyberthunder.control.principal import authorize, current_principal, operation
 
 import logging
 import threading
@@ -121,9 +122,28 @@ class Scanner:
         if background:
             inherited = copy_context()
             th = threading.Thread(target=inherited.run, args=(self._run_quietly, run), name=f"scan-{run.id}", daemon=True)
-            with self._lock:
-                self._threads[run.id] = th
-            th.start()
+            from cyberthunder.scan_workers import tracked_thread
+            scheduled = self.ctx.settings.scan_max_workers != 1 or self.ctx.settings.scan_host_budget_s != 0
+            # Shutdown must see the caller while Thread.start is still admitting
+            # the coordinator, before is_alive() can expose the new thread.
+            admission = tracked_thread(self, threading.current_thread()) if scheduled else nullcontext()
+            with admission:
+                with self._lock:
+                    self._threads[run.id] = th
+                try:
+                    th.start()
+                except BaseException as exc:
+                    if th.ident is not None:
+                        th.join()
+                    else:
+                        run.status, run.error, run.finished_at = "error", str(exc), utcnow()
+                        for result in run.results.values():
+                            result.status, result.finished_at = "error", run.finished_at
+                            result.errors.append("scan coordinator did not start")
+                        self._save(run)
+                    with self._lock:
+                        self._threads.pop(run.id, None)
+                    raise
         else:
             self.run(run)
         return run
@@ -153,7 +173,7 @@ class Scanner:
                 self._save(run)
             log.exception("scan %s failed", run.id)
 
-    def _save(self, run: ScanRun) -> None:
+    def _save(self, run: ScanRun, *, publication=None) -> None:
         if run.authorization_scopes is None:
             previous = self.ctx.store.load_scan_run(run.id)
             run.authorization_scopes = (previous.get("authorization_scopes") if previous is not None else
@@ -168,9 +188,11 @@ class Scanner:
         # retry briefly rather than lose the progress update.
         for attempt in range(20):
             try:
-                self.ctx.store.save_scan_run(d)
+                (publication.store if publication is not None else self.ctx.store).save_scan_run(d)
                 return
             except PermissionError:
+                if publication is not None:
+                    publication.guard()  # only retry transient file sharing failures
                 if attempt == 19:
                     raise
                 time.sleep(0.05)
@@ -229,35 +251,52 @@ class Scanner:
                                                "rule_filter": run.rule_filter, "trigger": run.trigger}, subject=run.id)
         all_findings: list[Finding] = []
         updated: list[str] = []
+        publication = None
         try:
+            from cyberthunder.scan_workers import ScanPublication, collect_run
+            publication = ScanPublication(self, run, scheduled=scheduled)
             if scheduled:
-                from cyberthunder.scan_workers import collect_run
-                all_findings, updated = collect_run(self, run)
+                all_findings, updated = collect_run(self, run, publication)
             else:
                 for i, tid in enumerate(run.targets):
                     if self._stopped(run, i):
                         break
                     res = run.results.setdefault(tid, TargetScanResult(tid))
-                    found = self._scan_target(run, res)
+                    found = self._scan_target(run, res, publication=publication)
                     if found is not None:
                         all_findings.extend(found)
                         updated.append(tid)
                     run.findings_count = len(all_findings)
-                    ctx.store.save_findings(run.id, all_findings, meta=self._meta(run))
-                    self._save(run)
+                    publication.findings_attempted = True
+                    publication.store.save_findings(run.id, all_findings, meta=self._meta(run))
+                    self._save(run, publication=publication)
             run.summary = summarize(all_findings)
             run.findings_count = len(all_findings)
-            ctx.store.save_findings(run.id, all_findings, meta=self._meta(run))
+            if publication is not None:
+                publication.findings_attempted = True
+            (publication.store if publication is not None else ctx.store).save_findings(
+                run.id, all_findings, meta=self._meta(run))
             if not scheduled and run.status != "stopped":
                 if run.results and all(r.status == "error" for r in run.results.values()):
                     run.status, run.error = "error", "every target failed; see per-target errors"
                 else:
                     run.status = "done"
-        except Exception as e:  # noqa: BLE001
+            run.finished_at = utcnow()
+            self._save(run, publication=publication)
+        except BaseException as e:  # noqa: BLE001
+            if not scheduled and not isinstance(e, Exception):
+                raise
             log.exception("scan %s aborted", run.id)
             run.status, run.error = "error", str(e)
-        run.finished_at = utcnow()
-        self._save(run)
+            if publication is not None:
+                publication.abort(e)
+                all_findings, updated = [], []
+                if isinstance(e, KillSwitchEngaged):
+                    run.status = "stopped"
+            run.finished_at = utcnow()
+            self._save(run)
+            if not isinstance(e, Exception):
+                raise
         if updated:
             try:
                 ctx.save_inventory(actor, "inventory.update",
@@ -273,9 +312,19 @@ class Scanner:
                 ctx.killswitch.guard(f"scan.after:{run.id}", actor)
             except KillSwitchEngaged:
                 run.summary["after_scan"] = "skipped: kill switch engaged"
-                self._save(run)
+                if not scheduled:
+                    self._save(run)
             else:
-                self._after_scan(run, all_findings)
+                if publication is None:
+                    self._after_scan(run, all_findings)
+                else:
+                    try:
+                        publication.guard()
+                        self._after_scan(run, all_findings, publication=publication)
+                    except Exception:
+                        # Already committed observations remain historical evidence;
+                        # do not republish their facts after authority has expired.
+                        log.warning("post-scan work could not be published for %s", run.id)
         return run
 
     def _stopped(self, run: ScanRun, index: int) -> bool:
@@ -299,7 +348,7 @@ class Scanner:
             meta["scheduling"] = run.scheduling
         return meta
 
-    def _after_scan(self, run: ScanRun, findings: list[Finding]) -> None:
+    def _after_scan(self, run: ScanRun, findings: list[Finding], *, publication=None) -> None:
         ctx = self.ctx
         ingest = getattr(ctx, "ingest", None)
         rematch = getattr(ingest, "rematch_all", None) if ingest is not None else None
@@ -328,19 +377,22 @@ class Scanner:
                 run.summary["explanations_queued"] = 0
             except Exception as e:  # noqa: BLE001
                 run.summary["explain_error"] = str(e)
-        self._save(run)
+        self._save(run, publication=publication)
 
-    def _scan_target(self, run: ScanRun, res: TargetScanResult) -> list[Finding] | None:
+    def _scan_target(self, run: ScanRun, res: TargetScanResult, *, publication=None) -> list[Finding] | None:
         """Scan one target. Returns its findings, or None when it was skipped or failed."""
         ctx = self.ctx
         actor = run.requested_by
         tid = res.target_id
         res.status, res.started_at, res.errors = "running", utcnow(), []
-        self._save(run)
+        self._save(run, publication=publication)
         t0 = time.monotonic()
+        work = None
 
         def finish(status: str, *, outcome: str = "ok", findings: list[Finding] | None = None) -> None:
             res.status, res.finished_at = status, utcnow()
+            if work is not None:
+                work.status, work.errors = status, list(res.errors)
             fl = findings or []
             ctx.audit.append("scan.target", actor, {
                 "scan_id": run.id, "target": tid, "status": status, "findings": len(fl),
@@ -357,6 +409,36 @@ class Scanner:
                                                        "reason": str(e)}, subject=tid, outcome="blocked")
             finish("skipped", outcome="blocked")
             return None
+        if publication is not None:
+            from cyberthunder.scan_workers import HostWork, _configuration
+            from cyberthunder.inventory.host import persisted_target
+            principal = current_principal()
+            profile = (ctx.settings.auth_mode, ctx.settings.security_mode, ctx.settings.credential_sources)
+            configuration = _configuration(target)
+            resolver = ctx._credential_resolver()
+            fingerprint = resolver.fingerprint if resolver is not None else None
+            binding = (ctx.access.credential(principal, "scan", target).evidence()
+                       if ctx.settings.auth_mode != "dev" else None)
+
+            def guard():
+                # Serial collection keeps its existing stop boundaries. Publication
+                # shares current authority checks after lifecycle/writer admission.
+                if current_principal() != principal or profile != (
+                        ctx.settings.auth_mode, ctx.settings.security_mode, ctx.settings.credential_sources):
+                    raise PermissionError("scan identity or credential configuration changed")
+                current = persisted_target(ctx.inventory, tid, require_scope=True)
+                if _configuration(current) != configuration:
+                    raise PermissionError("target configuration changed during collection")
+                authorize(ctx, "scan", actor=actor, target=current)
+                check_record(ctx, run, "scan")
+                resolver = ctx._credential_resolver()
+                if (resolver.fingerprint if resolver is not None else None) != fingerprint:
+                    raise PermissionError("credential source configuration changed during collection")
+                if binding is not None and ctx.access.credential(principal, "scan", current).evidence() != binding:
+                    raise PermissionError("target account binding changed during collection")
+
+            work = HostWork(tid, started_at=res.started_at, target=target, guard=guard)
+            publication.works.append(work)
         try:
             adapter = ctx.adapter_for(target)
         except KeyError as e:
@@ -402,16 +484,30 @@ class Scanner:
             check_record(ctx, run, "scan")
             if collected.raw.get("catalog_rule_metadata", {}).get("snapshot_generation") is not None:
                 authorize(ctx, "read", actor=actor)
+            if work is not None:
+                work.guard()
+                work.collected, work.findings = collected, findings
+                normalized = workdir / "collected.json"
+                if not normalized.exists():
+                    work.normalized = normalized
             ctx.store.write_json(workdir / "collected.json", collected.to_dict())
             res.errors.extend(collected.errors)
             res.findings = len(findings)
             res.open = sum(1 for f in findings if f.is_open)
             res.facts = collected.facts.to_dict() if collected.facts is not None else None
-            ctx.inventory.update(tid, last_scan=utcnow())
+            written = utcnow()
+            if work is not None:
+                current = ctx.inventory.get(tid)
+                work.freshness = (current, current.last_scan, written)
+            ctx.inventory.update(tid, last_scan=written)
             finish("done", findings=findings)
             return findings
         except Exception as e:  # noqa: BLE001
             log.exception("scan of %s failed", tid)
+            if work is not None:
+                work.fail(e)
+                publication.discard(work)
+                res.facts, res.findings, res.open = None, 0, 0
             res.errors.append(f"collect: {e}")
             finish("error", outcome="error")
             return None
