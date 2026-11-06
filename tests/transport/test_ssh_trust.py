@@ -216,7 +216,7 @@ def test_event_sink_failure_aborts_before_authentication(ssh_keys, ssh_peer):
         assert peer.auth == []
 
 
-def test_settings_defaults_and_no_target_mode_override(ssh_keys, monkeypatch):
+def test_settings_defaults_and_no_target_mode_override(ssh_keys, monkeypatch, tmp_path):
     monkeypatch.setenv("CT_CRED_LOOPBACK", "p")
     target = Target("t", "t", "linux", address="localhost", credential_ref="LOOPBACK",
                     options={"security_mode": "range"})
@@ -224,6 +224,11 @@ def test_settings_defaults_and_no_target_mode_override(ssh_keys, monkeypatch):
     with pytest.raises(TrustError):
         SSHTransport.from_target(target, SimpleNamespace(security_mode="fleet"))
     target.options["host_key_sha256"] = key_fingerprint(ssh_keys[0])
+    with pytest.raises(TrustError) as error:
+        SSHTransport.from_target(target, SimpleNamespace(security_mode="fleet"))
+    assert error.value.code == "transport:credential_resolver_required"
+    target.credential_ref = None
+    target.options["key_file"] = str(tmp_path / "fixture-key")
     assert SSHTransport.from_target(target, SimpleNamespace(security_mode="fleet")).security_mode == "fleet"
 
 

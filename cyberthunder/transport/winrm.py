@@ -5,20 +5,23 @@ Windows adapter ships its scripts) is started directly, so it is not wrapped and
 Everything else goes through Session.run_ps.
 
 Target fields:
-  address, port (5985 http / 5986 https), username, credential_ref -> password from env CT_CRED_<ref>
+  address, port (5985 http / 5986 https), username, credential_ref -> opaque password reference
   options.transport        ntlm (range default) | kerberos (fleet default) | basic | credssp
   options.ssl              true for https; fleet defaults to HTTPS on port 5986
   options.cert_validation  validate (default) | ignore      (ignore only on an isolated range)
   options.ca_trust_path    CA bundle for https
   options.allow_insecure_range  explicit acknowledgement for insecure range connections
-The password is read from the environment when the transport is built and is never written anywhere.
+Account-bound resolver uses lease the password for each operation. Legacy range
+connections read CT_CRED_<ref> at construction; fleet references require a resolver.
 """
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 import ipaddress
 import re
 import time
+import weakref
 
 from .base import CommandResult, Transport, TransportError
 from .trust import (TrustError, TrustEvents, boolean, bound_account, ca_context, endpoint_host, endpoint_port,
@@ -69,7 +72,7 @@ class WinRMTransport(TrustEvents, Transport):
                  auth: str | None = None, ssl: bool | None = None, cert_validation: str = "validate",
                  ca_trust_path: str | None = None, operation_timeout_s: int = 60, read_timeout_s: int = 90,
                  session=None, security_mode: str = "range", allow_insecure_range: bool = False,
-                 guard=None, on_security_event=None):
+                 guard=None, on_security_event=None, credential_use=None):
         self._init_events(on_security_event)
         self.security_mode = resolve_security_mode(value=security_mode)
         auth = auth if auth is not None else ("kerberos" if self.security_mode == "fleet" else "ntlm")
@@ -82,11 +85,26 @@ class WinRMTransport(TrustEvents, Transport):
         self.port = endpoint_port(port if port is not None else (5986 if self.ssl else 5985))
         self.username = username
         self._password = password
+        self._credential_use = credential_use
+        if credential_use is not None:
+            from cyberthunder.security.secret_resolver import CredentialUse
+            if (not isinstance(credential_use, CredentialUse) or password is not None or session is not None
+                    or credential_use.security_mode != self.security_mode
+                    or auth != "ntlm" or credential_use.binding.provenance.target[3] != "winrm"
+                    or endpoint_host(credential_use.binding.provenance.target[4]) != self.host
+                    or (credential_use.binding.provenance.target[5] or (5986 if self.ssl else 5985)) != self.port
+                    or credential_use.binding.username != username):
+                raise TransportError("WinRM credential lease does not match this connection")
         self.auth = auth
         self.cert_validation = cert_validation
         self.ca_trust_path = ca_trust_path
         self.allow_insecure_range = boolean(allow_insecure_range, "allow_insecure_range")
-        self._guard = guard if guard is not None else lambda: None
+        def check_authorization():
+            if guard is not None:
+                guard()
+            if credential_use is not None:
+                credential_use.check()
+        self._guard = check_authorization
         self._tls_context = None
         if self.security_mode == "fleet":
             self._check_policy()
@@ -109,32 +127,45 @@ class WinRMTransport(TrustEvents, Transport):
         return f"{'https' if self.ssl else 'http'}://{host}:{self.port}/wsman"
 
     @classmethod
-    def from_target(cls, target, settings=None, *, guard=None, on_security_event=None) -> "WinRMTransport":
+    def from_target(cls, target, settings=None, *, guard=None, on_security_event=None,
+                    credential_use=None) -> "WinRMTransport":
         if not target.address:
             raise TransportError("WinRM target has no address")
         o = target.options or {}
         bound = bound_account(target)
         if bound and (o["credential_source"] != "environment" or o.get("transport") != "ntlm"
                       or not target.credential_ref or "key_file" in o or target.sudo is not False):
-            raise TrustError("transport:invalid_credential_binding", "Selected WinRM account requires an explicit NTLM environment credential without sudo")
+            raise TrustError("transport:invalid_credential_binding", "Selected WinRM account requires an explicit NTLM password reference without sudo")
         password = None
-        if target.credential_ref:
-            from cyberthunder.transport.ssh import credential_from_env
-            password = credential_from_env(target.credential_ref) if target.credential_ref else None
-        if bound and not password:
-            raise TrustError("transport:credential_unavailable", "Selected WinRM environment credential is unavailable")
         mode = resolve_security_mode(settings)
+        resolver_required = False
+        if credential_use is not None:
+            from cyberthunder.security.secret_resolver import CredentialUse
+            if not isinstance(credential_use, CredentialUse) or not bound:
+                raise TransportError("WinRM resolver requires an explicitly selected alias binding")
+            credential_use.matches_target(target)
+        elif target.credential_ref:
+            if mode == "fleet":
+                resolver_required = True
+            else:
+                from cyberthunder.transport.ssh import credential_from_env
+                password = credential_from_env(target.credential_ref)
+        if bound and not password and credential_use is None and not resolver_required:
+            raise TrustError("transport:credential_unavailable", "Selected WinRM environment credential is unavailable")
         auth = o.get("transport", "kerberos" if mode == "fleet" else "ntlm")
         if isinstance(auth, str):
             auth = auth.lower()
-        if password is None and auth != "kerberos":
+        if password is None and auth != "kerberos" and credential_use is None and not resolver_required:
             raise TransportError("Set the target's named CT_CRED credential in the environment for WinRM logon")
         ssl = o.get("ssl")
-        return cls(target.address, port=target.port, username=target.username, password=password, auth=auth,
+        result = cls(target.address, port=target.port, username=target.username, password=password, auth=auth,
                    ssl=ssl, cert_validation=o.get("cert_validation", "validate"),
                    ca_trust_path=o.get("ca_trust_path"), security_mode=mode,
                    allow_insecure_range=o.get("allow_insecure_range", False),
-                   guard=guard, on_security_event=on_security_event)
+                   guard=guard, on_security_event=on_security_event, credential_use=credential_use)
+        if resolver_required:
+            raise TrustError("transport:credential_resolver_required", "Fleet WinRM requires a configured credential resolver for password references")
+        return result
 
     def _check_policy(self):
         if self.security_mode == "fleet":
@@ -159,9 +190,11 @@ class WinRMTransport(TrustEvents, Transport):
             for code, message in exceptions:
                 self._event(code, message)
 
-    def _sess(self):
+    def _sess(self, *, lease=None):
         self._guard()
         self._check_policy()
+        if self._credential_use is not None and (lease is None or self._session is not None):
+            raise TransportError("WinRM resolver sessions require a scoped operation")
         if self._session is None:
             try:
                 import winrm  # pywinrm, in requirements
@@ -169,41 +202,91 @@ class WinRMTransport(TrustEvents, Transport):
                 raise TransportError("pywinrm is not installed") from None
             kw = dict(transport=self.auth, server_cert_validation=self.cert_validation,
                       operation_timeout_sec=self.operation_timeout_s, read_timeout_sec=self.read_timeout_s)
+            if lease is not None:
+                remaining = int(lease.remaining())
+                if remaining < 2:
+                    raise TransportError("WinRM credential lease has insufficient time remaining")
+                kw["read_timeout_sec"] = min(self.read_timeout_s, remaining)
+                kw["operation_timeout_sec"] = min(self.operation_timeout_s, kw["read_timeout_sec"] - 1)
             if self.ca_trust_path:
                 kw["ca_trust_path"] = self.ca_trust_path
             if self.security_mode == "fleet":
                 kw.update(proxy=None, kerberos_delegation=False, send_cbt=True)
-            auth = (self.username or "", self._password or "")
+            auth = (self.username or "", lease.secret.reveal() if lease is not None else self._password or "")
+            failure = False
+            session = None
             try:
                 session = winrm.Session(self.endpoint, auth=auth, **kw)
+                if lease is not None:
+                    sender = weakref.WeakMethod(session.protocol.transport.send_message)
+                    def send_message(*args, **kwargs):
+                        self._guard()
+                        lease.check()
+                        method = sender()
+                        if method is None:
+                            raise TransportError("WinRM session is closed")
+                        response = method(*args, **kwargs)
+                        lease.check()
+                        self._guard()
+                        return response
+                    session.protocol.transport.send_message = send_message
                 if self.security_mode == "fleet":
                     http_session = session.protocol.transport.build_session()
                     harden_winrm_session(http_session, endpoint=self.endpoint,
                                          ca_path=self.ca_trust_path, context=self._tls_context, event=self._event)
-                self._session = session
             except Exception:  # noqa: BLE001
+                failure = True
+            except BaseException:
+                self._close_session(session, discard_password=lease is not None)
+                raise
+            finally:
+                auth = None
+            if failure:
+                self._close_session(session, discard_password=lease is not None)
                 raise TransportError("WinRM session initialization failed; check configured authentication support") from None
+            if lease is not None:
+                return session
+            self._session = session
         return self._session
+
+    @contextmanager
+    def _operation_session(self):
+        if self._credential_use is None:
+            yield self._sess(), None
+        else:
+            with self._credential_use.lease() as lease:
+                session = self._sess(lease=lease)
+                try:
+                    yield session, lease
+                finally:
+                    self._close_session(session, discard_password=True)
 
     def run(self, command: str, *, timeout: int = 120, sudo: bool = False) -> CommandResult:
         t0 = time.time()
-        sess = self._sess()
         self._guard()
         m = ENCODED_RE.match(command)
-        try:
-            if m:
-                args = [*m.group(2).split(), "-EncodedCommand", m.group(3)]
-                r = sess.run_cmd(m.group(1), args)
-            else:
-                r = sess.run_ps(command)
-        except TransportError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            from requests.exceptions import SSLError
-            if isinstance(exc, SSLError):
+        with self._operation_session() as (sess, lease):
+            self._guard()
+            failure = None
+            try:
+                if m:
+                    args = [*m.group(2).split(), "-EncodedCommand", m.group(3)]
+                    r = sess.run_cmd(m.group(1), args)
+                else:
+                    r = sess.run_ps(command)
+            except TrustError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                from requests.exceptions import SSLError
+                from winrm.exceptions import AuthenticationError
+                failure = "tls" if isinstance(exc, SSLError) else "authentication" if isinstance(exc, AuthenticationError) else "command"
+            if failure == "tls":
                 self._event("transport:tls_failed", "WinRM TLS trust or handshake failed", "high")
                 raise TrustError("transport:tls_failed", "WinRM TLS trust or handshake failed") from None
-            raise TransportError("WinRM command failed") from None
+            if failure is not None:
+                if lease is not None and failure == "authentication":
+                    lease.authentication_failed()
+                raise TransportError("WinRM command failed") from None
         self._guard()
         return CommandResult(command, int(getattr(r, "status_code", 1)), _decode(getattr(r, "std_out", b"")),
                              _decode(getattr(r, "std_err", b"")), time.time() - t0, t0)
@@ -226,11 +309,25 @@ class WinRMTransport(TrustEvents, Transport):
 
     def close(self) -> None:
         s, self._session = self._session, None
+        self._close_session(s)
+
+    @staticmethod
+    def _close_session(s, *, discard_password=False):
         proto = getattr(s, "protocol", None)
         tr = getattr(proto, "transport", None)
         closer = getattr(tr, "close_session", None)
+        http_session = getattr(tr, "session", None)
         if callable(closer):
             try:
                 closer()
             except Exception:  # noqa: BLE001
                 pass
+        if discard_password:
+            # Release known provider-owned references, without claiming that
+            # immutable copies or NTLM internals can be securely zeroized.
+            if tr is not None and hasattr(tr, "password"):
+                tr.password = None
+            if tr is not None and hasattr(tr, "encryption"):
+                tr.encryption = None
+            if http_session is not None:
+                http_session.auth = None

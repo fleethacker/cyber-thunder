@@ -82,6 +82,8 @@ class Settings:
     # web
     auth_mode: str = field(default_factory=lambda: _env("CT_AUTH_MODE", "dev"))
     security_mode: str = field(default_factory=lambda: _env("CT_SECURITY_MODE", "range"))
+    # None alone is unconfigured: an explicit empty value must fail closed.
+    credential_sources: str | None = field(default_factory=lambda: os.environ.get("CT_CREDENTIAL_SOURCES"))
     step_up_max_age_s: int = field(default_factory=lambda: parse_max_age(os.environ.get("CT_STEP_UP_MAX_AGE_SECONDS")))
     step_up_acr_values: tuple[str, ...] = field(default_factory=lambda: parse_acr_values(os.environ.get("CT_STEP_UP_ACR_VALUES")))
     oidc_issuer: str = field(default_factory=lambda: _env("CT_OIDC_ISSUER", ""))

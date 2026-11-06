@@ -31,7 +31,7 @@ def test_bound_environment_reference_never_becomes_existing_key_file(tmp_path, m
     monkeypatch.chdir(tmp_path)
     (tmp_path / "SELECTED_ACCOUNT").write_text("private file must not be selected")
     monkeypatch.setenv("CT_CRED_SELECTED_ACCOUNT", "selected-password")
-    tr = make_transport(selected(), SimpleNamespace(security_mode="fleet"))
+    tr = make_transport(selected(), SimpleNamespace(security_mode="range"))
     assert tr._password == "selected-password" and tr._key is None
     assert tr._credential_bound and not tr.sudo_default
 
@@ -194,7 +194,7 @@ def test_bound_winrm_env_source_and_missing_secret_never_use_kerberos(tmp_path, 
     (tmp_path / "SELECTED_ACCOUNT").write_text("must-not-use")
     item = selected("winrm")
     item.options["ca_trust_path"] = certificates["ca"]
-    settings = SimpleNamespace(security_mode="fleet")
+    settings = SimpleNamespace(security_mode="range")
     monkeypatch.delenv("CT_CRED_SELECTED_ACCOUNT", raising=False)
     with pytest.raises(TrustError, match="environment credential is unavailable"):
         make_transport(item, settings)

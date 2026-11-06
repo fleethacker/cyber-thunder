@@ -24,6 +24,8 @@ log = logging.getLogger(__name__)
 class AppContext:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings.from_env()
+        # Validate explicit credential configuration before creating any state.
+        self._credential_resolver()
         from cyberthunder.security.step_up import FreshnessClock
         self.step_up_clock = FreshnessClock()
         # Trust configuration is mandatory when explicitly configured. Validate it
@@ -141,7 +143,22 @@ class AppContext:
         except (PermissionError, KeyError):
             return False
 
+    def _credential_resolver(self):
+        from cyberthunder.security.secret_resolver import load_registry
+        return load_registry(self.settings.credential_sources,
+                             security_mode=self.settings.security_mode, auth_mode=self.settings.auth_mode)
+
     def transport_for(self, target: Target) -> Transport:
+        resolver = self._credential_resolver()
+        registry_state = (self.settings.credential_sources, self.settings.security_mode, self.settings.auth_mode,
+                          resolver.fingerprint if resolver else None)
+
+        def registry_guard():
+            current = self._credential_resolver()
+            if (self.settings.credential_sources, self.settings.security_mode, self.settings.auth_mode,
+                    current.fingerprint if current else None) != registry_state:
+                raise PermissionError("credential source configuration changed; reconnect using current permissions")
+
         if self.settings.security_mode == "fleet" and "cpe_alias" in (target.options or {}):
             raise PermissionError("CPE aliases are limited to explicitly configured range validation")
         if self.settings.auth_mode != "dev":
@@ -168,6 +185,7 @@ class AppContext:
             configuration = {k: v for k, v in target.to_dict().items() if k not in {"last_scan", "notes", "added_at"}}
 
             def guard():
+                registry_guard()
                 if current_principal() != principal:
                     raise PermissionError("target connection belongs to another authenticated session")
                 current = persisted_target(self.inventory, target.id, require_scope=True)
@@ -181,9 +199,32 @@ class AppContext:
                     guard_kubeconfig(kube_binding)
 
             guard()
-            self.audit.append("credential.use", principal.actor, evidence, subject=target.id)
+            credential_use = None
+            if (resolver is not None and selected.transport in {"ssh", "winrm"}
+                    and selected.options.get("credential_source") == "environment"):
+                def credential_event(event):
+                    # Failures may follow revocation: preserve their attribution
+                    # without reauthorizing the failed operation or another user.
+                    if current_principal() != principal or not principal.verified:
+                        raise PermissionError("credential event belongs to another authenticated session")
+                    details = credential_use.event_details(event)
+                    self.audit.append(event.action, principal.actor, details, subject=target.id,
+                                      outcome="blocked" if event.action == "credential.failed" else "ok")
+
+                credential_use = resolver.bind(binding, principal=principal, target=target, purpose=action,
+                                               guard=guard, on_event=credential_event)
+            use_evidence = dict(evidence)
+            if credential_use is not None:
+                use_evidence["credential_source"] = credential_use.backend
+                use_evidence["registry_fingerprint"] = resolver.fingerprint
             transport = make_transport(selected, self.settings, guard=guard,
-                on_security_event=lambda event: self.record_transport_event(target, event))
+                on_security_event=lambda event: self.record_transport_event(target, event),
+                credential_use=credential_use)
+            try:
+                self.audit.append("credential.use", principal.actor, use_evidence, subject=target.id)
+            except BaseException:
+                transport.close()
+                raise
             if kube_binding is not None:
                 transport.account_binding = kube_binding
                 transport.account_guard = guard
@@ -194,6 +235,7 @@ class AppContext:
             transport.secondary_transport = secondary_transport
             return protect_transport(transport, guard, sudo_allowed=binding.sudo)
         return make_transport(target, self.settings,
+                              guard=registry_guard,
                               on_security_event=lambda event: self.record_transport_event(target, event))
 
     def record_transport_event(self, target: Target, event) -> None:
