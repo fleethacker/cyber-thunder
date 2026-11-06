@@ -20,23 +20,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/var/lib/cyberthunder \
     XDG_CACHE_HOME=/var/lib/cyberthunder/.cache \
     TRIVY_CACHE_DIR=/var/lib/cyberthunder/trivy-cache
-RUN KUBECTL_VERSION="$KUBECTL_VERSION" TARGETARCH="$TARGETARCH" python - <<'PYTHON'
-import hashlib
-import os
-from pathlib import Path
-import urllib.request
-
-version = os.environ["KUBECTL_VERSION"]
-arch = os.environ["TARGETARCH"]
-url = f"https://dl.k8s.io/release/{version}/bin/linux/{arch}/kubectl"
-binary = urllib.request.urlopen(url).read()
-expected = urllib.request.urlopen(url + ".sha256").read().decode().strip()
-if hashlib.sha256(binary).hexdigest() != expected:
-    raise RuntimeError("kubectl checksum mismatch")
-path = Path("/usr/local/bin/kubectl")
-path.write_bytes(binary)
-path.chmod(0o755)
-PYTHON
+COPY scripts/install_kubectl.py /tmp/install_kubectl.py
+RUN python /tmp/install_kubectl.py --version="$KUBECTL_VERSION" --arch="$TARGETARCH" \
+    && /usr/local/bin/kubectl version --client=true --output=json \
+    && rm /tmp/install_kubectl.py
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 WORKDIR /app
 COPY pyproject.toml requirements.txt ./

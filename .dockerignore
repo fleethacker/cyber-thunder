@@ -2,6 +2,9 @@
 !Dockerfile
 !pyproject.toml
 !requirements.txt
+!scripts/
+scripts/**
+!scripts/install_kubectl.py
 !cyberthunder/
 !cyberthunder/**
 cyberthunder/**/__pycache__
