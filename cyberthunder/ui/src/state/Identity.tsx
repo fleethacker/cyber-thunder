@@ -1,6 +1,6 @@
 import { Alert, Badge, Button, Card, Group, Loader, Stack, Text, Title } from '@mantine/core';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { sessionHeaders, setSessionIdentity, type SessionIdentity } from '../api/identity';
+import { sessionHeaders, setSessionIdentity, authorityKey, type SessionIdentity } from '../api/identity';
 import { PermissionProvider } from '../components/PermissionGate';
 
 interface IdentityContext {
@@ -25,6 +25,12 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
+  const authority = useRef(authorityKey(null));
+  const acceptIdentity = useCallback((value: SessionIdentity | null) => {
+    authority.current = authorityKey(value);
+    setSessionIdentity(value);
+    setIdentity(value);
+  }, []);
   const refresh = useCallback(async () => {
     const version = ++generation.current;
     setBusy(true);
@@ -37,23 +43,21 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
             || typeof value.principal.actor !== 'string' || typeof value.principal.name !== 'string'
             || !Array.isArray(value.principal.roles)))) throw new Error('Sign-in status could not be verified.');
       if (version !== generation.current) return;
-      setSessionIdentity(value);
-      setIdentity(value);
+      acceptIdentity(value);
       setError(null);
     } catch (e) {
       if (version !== generation.current) return;
-      setSessionIdentity(null);
-      setIdentity(null);
+      acceptIdentity(null);
       setError((e as Error).message);
     } finally { if (version === generation.current) setBusy(false); }
-  }, []);
+  }, [acceptIdentity]);
 
   useEffect(() => {
     void refresh();
-    const expire = () => { setIdentity(null); void refresh(); };
+    const expire = () => { acceptIdentity(null); void refresh(); };
     window.addEventListener('ct:session-expired', expire);
     return () => { generation.current++; window.removeEventListener('ct:session-expired', expire); };
-  }, [refresh]);
+  }, [refresh, acceptIdentity]);
 
   useEffect(() => {
     if (!identity?.authenticated) return;
@@ -62,17 +66,18 @@ export function IdentityBoundary({ children }: { children: ReactNode }) {
   }, [identity?.authenticated, refresh]);
 
   const logout = async () => {
+    const previousAuthority = authority.current;
     generation.current++;
     const response = await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin',
       headers: sessionHeaders('POST') });
+    if (previousAuthority !== authority.current) return;
     if (!response.ok) { setError('Sign-out failed. Retry to close this application session.'); return; }
-    setSessionIdentity(null);
-    setIdentity(null);
+    acceptIdentity(null);
     await refresh();
   };
 
   if (identity && (identity.mode === 'dev' || identity.authenticated)) {
-    return <IdentityProvider identity={identity} logout={logout}>
+    return <IdentityProvider key={authorityKey(identity)} identity={identity} logout={logout}>
       {children}
     </IdentityProvider>;
   }

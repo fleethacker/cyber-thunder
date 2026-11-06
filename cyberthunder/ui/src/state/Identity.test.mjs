@@ -38,7 +38,8 @@ test('the real identity provider connects account permissions to action controls
 function setup(t, fetcher) {
   const savedWindow = globalThis.window, savedFetch = globalThis.fetch;
   const events = new EventTarget();
-  globalThis.window = Object.assign(events, { setInterval: () => 1, clearInterval() {} });
+  globalThis.window = Object.assign(events, { setInterval: (fn) => { window.pollIdentity = fn; return 1; }, clearInterval() {},
+    location: { pathname: '/decisions', search: '?proposal=change', hash: '#impact', assign() {} } });
   globalThis.fetch = fetcher;
   metadata.setSessionIdentity(null);
   const app = mount((hooks) => evaluate(new URL('./Identity.tsx', import.meta.url), {
@@ -76,7 +77,7 @@ test('logout invalidates an outstanding status response before refreshing', asyn
   });
   await app.settle();
   const logout = app.find((n) => typeof n.props?.logout === 'function').props.logout;
-  window.dispatchEvent(new Event('ct:session-expired'));
+  window.pollIdentity();
   await app.settle();
   const closing = logout();
   await app.settle();
