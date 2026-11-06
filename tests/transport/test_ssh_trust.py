@@ -102,7 +102,8 @@ def test_no_implicit_keys_and_agent_only_explicit_interactive(monkeypatch, tmp_p
     monkeypatch.setattr(paramiko.SSHClient, "connect", lambda _self, *args, **kw: calls.append(kw))
     monkeypatch.setattr(paramiko.SSHClient, "load_system_host_keys", lambda *args: pytest.fail("implicit host trust"))
     key = tmp_path / "explicit_key"
-    key.write_text("fixture; connect is replaced")
+    ssh_keys[1].write_private_key_file(str(key))
+    key.chmod(0o600)
     kwargs = {"password": "p"} if credential == "password" else (
         {"key_filename": str(key)} if credential == "key" else {"interactive": True, "allow_agent": True})
     with SSHTransport("localhost", security_mode="fleet", host_key_sha256=key_fingerprint(ssh_keys[0]), **kwargs) as tr:
@@ -111,7 +112,8 @@ def test_no_implicit_keys_and_agent_only_explicit_interactive(monkeypatch, tmp_p
     assert calls[0]["allow_agent"] is (credential == "interactive_agent")
     assert calls[0]["auth_timeout"] == calls[0]["banner_timeout"] == calls[0]["channel_timeout"] == 20
     if credential == "key":
-        assert calls[0]["key_filename"] == str(key)
+        assert calls[0]["key_filename"] is None
+        assert calls[0]["pkey"].asbytes() == ssh_keys[1].asbytes()
 
 
 def test_no_credential_fails_before_network(monkeypatch):

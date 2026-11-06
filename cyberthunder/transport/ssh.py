@@ -1,6 +1,7 @@
 """SSH transport (paramiko). Inventory contains references, never passwords.
 
 Account-bound resolver uses lease one explicitly selected password source.
+Explicit key files use the shared native private-file reader and in-memory parsing.
 Legacy range resolution order for an unbound target:
   options.key_file                       -> private key path
   credential_ref that is an existing path -> private key path
@@ -47,6 +48,8 @@ class SSHTransport(TrustEvents, Transport):
         self.security_mode = resolve_security_mode(value=security_mode)
         self.host, self.port, self.username = endpoint_host(host), endpoint_port(port), username
         self._password, self._key = password, key_filename
+        if key_filename is not None and password is not None:
+            raise TransportError("SSH key files cannot be combined with a password")
         self._credential_use = credential_use
         if credential_use is not None:
             from cyberthunder.security.secret_resolver import CredentialUse
@@ -164,7 +167,7 @@ class SSHTransport(TrustEvents, Transport):
         check()
         if allow_agent is not None:
             boolean(allow_agent, "allow_agent")
-        use_agent = self.allow_agent and self.interactive and allow_agent is not False
+        use_agent = self._key is None and self.allow_agent and self.interactive and allow_agent is not False
         if not self._password and not self._key and not use_agent and self._credential_use is None:
             raise TransportError("SSH requires an explicit password, key file, or authorized interactive agent")
         client = paramiko.SSHClient()
@@ -181,8 +184,15 @@ class SSHTransport(TrustEvents, Transport):
                 if lease is not None:
                     limit = min(limit, lease.remaining())
                 password = lease.secret.reveal() if lease is not None else self._password
+                pkey = None
                 failure = None
                 try:
+                    if self._key is not None:
+                        from cyberthunder.security.ssh_keys import SSHKeyError, load_private_key
+                        try:
+                            pkey = load_private_key(self._key)
+                        except SSHKeyError:
+                            raise TrustError("transport:ssh_key_unavailable", "SSH private key is unavailable or unsafe") from None
                     # Resolution and its audit/authorization callbacks can take
                     # time or cancel the caller's separate bounded probe.
                     check()
@@ -194,7 +204,7 @@ class SSHTransport(TrustEvents, Transport):
                             raise TimeoutError("SSH connection deadline expired")
                     try:
                         client.connect(self.host, port=self.port, username=self.username, password=password,
-                                       key_filename=self._key, timeout=limit, banner_timeout=limit,
+                                       key_filename=None, pkey=pkey, timeout=limit, banner_timeout=limit,
                                        auth_timeout=limit, channel_timeout=limit, look_for_keys=False,
                                        allow_agent=use_agent)
                     except paramiko.BadHostKeyException:
@@ -213,6 +223,11 @@ class SSHTransport(TrustEvents, Transport):
                         handler = getattr(client.get_transport(), "auth_handler", None)
                         if handler is not None and hasattr(handler, "password"):
                             handler.password = None
+                    if pkey is not None:
+                        handler = getattr(client.get_transport(), "auth_handler", None)
+                        if handler is not None and hasattr(handler, "private_key"):
+                            handler.private_key = None
+                    pkey = None
                 if failure == "host_key":
                     self._event("discovery:identity_changed", "SSH host key differs from provisioned known_hosts", "high")
                     raise TrustError("discovery:identity_changed", "SSH host key does not match provisioned known_hosts") from None
