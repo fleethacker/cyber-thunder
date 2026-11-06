@@ -197,6 +197,16 @@ class Inventory:
             self._save_locked(p, own=own)
 
     def _save_locked(self, p: Path, *, own: bool) -> None:
+        if own:
+            for tid, target in self._targets.items():
+                previous = self._base.get(tid)
+                if previous is not None:
+                    before = Target.from_dict(previous)
+                    if any(getattr(before, field) != getattr(target, field)
+                           for field in ("environment", "address", "asset_type", "transport")):
+                        # Moving away and back must not reactivate decisions or exceptions
+                        # recorded for the prior authorization boundary or endpoint.
+                        target.authorization_id = uuid.uuid4().hex
         data = {"targets": [t.to_dict() for t in self._targets.values()]}
         if p.suffix in (".yaml", ".yml"):
             import yaml

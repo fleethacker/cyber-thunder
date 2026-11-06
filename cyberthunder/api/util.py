@@ -503,7 +503,7 @@ def link_state(ctx: "AppContext") -> dict:
     return Link(ctx.store, ctx.settings).state().to_dict()
 
 
-def outbox_pending(ctx: "AppContext") -> int:
+def outbox_pending(ctx: "AppContext") -> int | None:
     svc = getattr(ctx, "ingest", None)
     if svc is not None:
         try:
@@ -515,6 +515,9 @@ def outbox_pending(ctx: "AppContext") -> int:
             return len((to_plain(listing) or {}).get("pending", []))
         except Exception as e:  # noqa: BLE001
             log.debug("ingest outbox unavailable: %s", e)
+    if getattr(getattr(ctx, "settings", None), "auth_mode", "dev") != "dev":
+        # Never fall back from a denied filtered listing to unfiltered disk counts.
+        return None
     d = ctx.store.outbox_dir
     if not d.exists():
         return 0

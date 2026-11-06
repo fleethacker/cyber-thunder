@@ -11,15 +11,19 @@ from cyberthunder.security.resources import capture, check_record, visible_recor
 from tests.security.test_identity_boundary import verified_app, identity, headers
 
 
-@pytest.mark.parametrize("change", ["move", "delete", "reuse", "legacy"])
+@pytest.mark.parametrize("change", ["move", "move_back", "delete", "reuse", "legacy"])
 def test_saved_evidence_is_not_reclassified_from_current_inventory(verified_app, change):
     ctx, proposals, tokens, client, _ = verified_app
     original = ctx.inventory.get("alpha")
     finding = next(f for f in ctx.store.load_findings() if f.host == "alpha")
-    if change == "move":
+    if change in {"move", "move_back"}:
         original.environment = "beta"
         ctx.inventory.add(original)
         ctx.inventory.save()
+        if change == "move_back":
+            original.environment = "alpha"
+            ctx.inventory.add(original)
+            ctx.inventory.save()
     elif change in {"delete", "reuse"}:
         ctx.inventory.remove("alpha")
         ctx.inventory.save()

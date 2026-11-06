@@ -380,16 +380,30 @@ def _checklist_for(ctx, target_id: str) -> tuple[dict | None, str | None]:
         return None, None
     try:
         doc = svc.checklist_cklb(None, target_id)
+    except PermissionError:
+        raise
     except Exception as exc:  # noqa: BLE001  a missing checklist does not block the target report
         return None, str(exc) or type(exc).__name__
     return to_plain(doc), None
 
 
 def _build_report(ctx, target_id: str, actor: str) -> dict:
+    from cyberthunder.control.principal import authorize
+    from cyberthunder.security.resources import capture
+    from cyberthunder.report import access
+    authorize(ctx, "export", actor=actor)
+    with access.collecting(ctx):
+        access.artifact(ctx, capture(ctx, [target_id]), targets=[target_id])
+        return _render_target_report(ctx, target_id, actor)
+
+
+def _render_target_report(ctx, target_id: str, actor: str) -> dict:
     from cyberthunder.report import history
+    from cyberthunder.report import access
     target = ctx.inventory.get(target_id)
     history.import_existing(ctx)
     findings = [f for f in ctx.store.load_findings() if f.host == target_id]
+    access.observations(ctx, findings)
     checklist, checklist_error = _checklist_for(ctx, target_id)
     doc = {
         "report_id": ctx.store.new_id("report-"),
@@ -401,9 +415,12 @@ def _build_report(ctx, target_id: str, actor: str) -> dict:
         "summary": summarize(findings),
         "checklist": checklist,
         "checklist_error": checklist_error,
+        "targets": [target_id],
+        "authorization_scopes": access.finish(ctx, access.current_scopes(ctx)),
     }
     history.save(ctx, "target", doc, "json", report_id=doc["report_id"], targets=[target_id], actor=actor,
-                 generated_at=doc["generated_at"], scan_id=ctx.store.latest_scan_id())
+                 generated_at=doc["generated_at"], scan_id=None)
+    access.finish(ctx, doc["authorization_scopes"])
     ctx.store.write_json(_report_path(ctx, target_id), doc)
     ctx.audit.append("report.render", actor, {"kind": "target", "target": target_id, "findings": len(findings),
                                               "open": doc["open"]}, subject=target_id)
@@ -416,6 +433,8 @@ def get_target_report(target_id: str, ctx=CtxDep) -> dict:
     doc = ctx.store.read_json(_report_path(ctx, target_id))
     if not doc:
         raise KeyError(f"no report for {target_id!r}; POST /reports with {{\"target\": \"{target_id}\"}} to write one")
+    from cyberthunder.security.resources import check_record
+    check_record(ctx, doc, "export")
     return doc
 
 

@@ -109,6 +109,21 @@ def test_targets_and_findings_filter_before_counts_facets_and_pagination(verifie
     assert "beta" not in json.dumps(doc)
 
 
+def test_limited_account_status_does_not_need_global_history_access(verified_app):
+    ctx, _, tokens, client, _ = verified_app
+    before = len(ctx.audit)
+    h = headers(tokens)
+    response = client.get("/api/v1/status", headers=h)
+    assert response.status_code == 200, response.text
+    doc = response.json()
+    assert doc["global_details"] is False and doc["targets"] == 1
+    assert doc["audit"]["count"] is None and doc["outbox"]["pending"] is None
+    assert doc["link"] is None and doc["llm"] is None
+    assert "beta" not in json.dumps(doc)
+    assert len(ctx.audit) == before
+    assert client.get("/api/v1/whoami", headers=h).json()["principal"]["sub"] == "first-user"
+
+
 def test_cross_target_proposal_access_and_approval_are_denied(verified_app):
     ctx, proposals, tokens, client, _ = verified_app
     h = headers(tokens)

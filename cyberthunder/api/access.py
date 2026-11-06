@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import Request
 
 from cyberthunder.control.principal import authorize, current_operation, require_current
-from cyberthunder.control.roles import route_action
+from cyberthunder.control.roles import route_action, EXPORT_ROUTES
 
 
 def verified_mode(ctx) -> bool:
@@ -26,16 +26,19 @@ def require_resource(ctx, target, action: str | None = None) -> None:
 
 # These handlers filter before pagination/aggregation, or enforce each resource in their core service.
 SCOPED = {
+    ("GET", "/status"), ("GET", "/whoami"),
     ("GET", "/targets"), ("GET", "/findings"), ("GET", "/proposals"), ("GET", "/scans"),
     ("GET", "/scans/preflight"), ("GET", "/scans/{scan_id}"),
     ("POST", "/scans"), ("POST", "/scan"), ("POST", "/findings/explain"),
     ("POST", "/proposals/bulk"), ("POST", "/generate/explain"), ("POST", "/generate/propose"),
     ("POST", "/apply"), ("POST", "/rollback"), ("POST", "/reports"),
     ("GET", "/cluster/survey"), ("POST", "/cluster/baseline"),
+    ("POST", "/reports/queue"),
     ("GET", "/outbox"), ("POST", "/outbox/sync"),
     ("GET", "/cluster/risk"), ("GET", "/cluster/known-good"),
     ("POST", "/cluster/known-good/exceptions"), ("DELETE", "/cluster/known-good/exceptions/{exception_id}"),
 }
+SCOPED.update(("GET", path) for path in EXPORT_ROUTES)
 
 
 async def authorize_request(request: Request) -> None:

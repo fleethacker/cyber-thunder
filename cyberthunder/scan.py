@@ -363,7 +363,7 @@ class Scanner:
         """Mark Kubernetes findings covered by persistent site exceptions before summaries/proposals."""
         if target.asset_type != "kubernetes" or not findings:
             return []
-        matched = KubernetesKnownGoodState(self.ctx.store).apply(findings)
+        matched = KubernetesKnownGoodState(self.ctx.store, ctx=self.ctx).apply(findings)
         if matched:
             ids = sorted(set(matched))
             self.ctx.audit.append("known_good.apply", actor, {"target": target.id, "exceptions": ids,
