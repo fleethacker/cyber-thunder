@@ -120,6 +120,30 @@ def test_no_credential_fails_before_network(monkeypatch):
         SSHTransport("localhost", allow_insecure_range=True)._conn()
 
 
+def test_connector_agent_override_cannot_grant_interactive_access(monkeypatch):
+    calls = []
+    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda _self, *a, **kw: calls.append(kw))
+    with SSHTransport("localhost", password="p", allow_insecure_range=True) as tr:
+        client = tr.connect_client(allow_agent=True)
+        client.close()
+    assert calls[0]["allow_agent"] is False and calls[0]["look_for_keys"] is False
+
+
+def test_connector_combines_transport_authorization_with_probe_guard(monkeypatch):
+    connected, closed, probe_checks = [], [], []
+
+    def authorization():
+        if connected:
+            raise PermissionError("authorization revoked during connection")
+
+    monkeypatch.setattr(paramiko.SSHClient, "connect", lambda *a, **kw: connected.append(True))
+    monkeypatch.setattr(paramiko.SSHClient, "close", lambda *a: closed.append(True))
+    tr = SSHTransport("localhost", password="p", allow_insecure_range=True, guard=authorization)
+    with pytest.raises(PermissionError, match="revoked during connection"):
+        tr.connect_client(guard=lambda: probe_checks.append(True))
+    assert closed == [True] and probe_checks
+
+
 def test_inventory_cannot_enable_interactive_agent_by_itself(ssh_keys):
     target = Target("t", "t", "linux", address="localhost",
                     options={"host_key_sha256": key_fingerprint(ssh_keys[0]), "allow_agent": True, "interactive": True})

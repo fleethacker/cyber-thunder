@@ -125,37 +125,35 @@ def _process(argv, timeout, *, cwd=None, env=None, guard=lambda: None):
 
 
 def _ssh(transport, command, timeout, guard):
-    # Reuse the transport's resolved connection values, with explicit connect/auth/channel limits.
-    import paramiko
-
+    # Share host trust policy; keep bounded probes free of implicit identities.
     deadline = time.monotonic() + timeout
+
+    def check():
+        transport._guard()
+        guard()
+
+    check()
     if not transport._password and not transport._key:
         # Automatic agent/key discovery can try an unbounded number of identities.
         raise ReadFailure("explicit_ssh_credential_required")
-    client = paramiko.SSHClient()
-    client.load_system_host_keys()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client = transport.connect_client(timeout=min(3, timeout), guard=guard, allow_agent=False)
     try:
-        client.connect(transport.host, port=transport.port, username=transport.username,
-                       password=transport._password, key_filename=transport._key,
-                       timeout=min(3, timeout), auth_timeout=min(3, timeout),
-                       banner_timeout=min(3, timeout), channel_timeout=min(3, timeout),
-                       look_for_keys=False, allow_agent=False)
-        guard()
+        check()
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ReadFailure("timeout")
         channel = client.get_transport().open_session(timeout=remaining)
         try:
-            guard()
+            check()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ReadFailure("timeout")
             channel.settimeout(remaining)
             channel.exec_command(command)
-            guard()
+            check()
             out, err = bytearray(), bytearray()
             while True:
+                check()
                 if time.monotonic() >= deadline:
                     raise ReadFailure("timeout")
                 if channel.recv_ready():
@@ -164,6 +162,7 @@ def _ssh(transport, command, timeout, guard):
                     err.extend(channel.recv_stderr(4096))
                 _check_size(out, err)
                 if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+                    check()
                     return CommandResult("", channel.recv_exit_status(),
                                          out.decode("utf-8", "replace"), err.decode("utf-8", "replace"))
                 time.sleep(0.01)

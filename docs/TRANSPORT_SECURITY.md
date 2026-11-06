@@ -110,6 +110,16 @@ on subsequent channel calls; WinRM file writes recheck between chunks. Guard
 exceptions are preserved. Closing a session/channel remains possible after
 revocation. The callbacks do not themselves create an authenticated principal.
 
+The factory now exposes
+`make_transport(target, settings=None, *, guard=None, on_security_event=None)`.
+It forwards settings and these per-instance callbacks to SSH/WinRM construction;
+it does not change adapter construction for other transport kinds. The parent
+must continue to guard those kinds in its application authorization wrapper.
+Bind the operation's actor and target in callback closures using
+`AppContext.authorize(action, actor=actor, target=target)` and the existing fresh
+scope/kill checks. Transport policy does not infer an actor from `auth_mode` and
+does not store a principal in a mutable global.
+
 `SecurityEvent` in `transport/trust.py` is immutable and exposes
 `code`, `severity`, `message`, `verified=False`, and `to_dict()`. Each transport
 retains emitted events in `security_events` and logs the fixed code/message.
@@ -138,26 +148,29 @@ exceptions or persist exception contexts. Normal command results remain data;
 transport-generated error text and `check_output` failures omit command text and
 remote stdout/stderr.
 
-Concrete parent integration requests (outside this change's assigned files):
+Completed integration seams:
 
-1. Add the agreed settings field/environment variable. In
-   `transport/base.py:make_transport`, forward `settings` to both
-   `SSHTransport.from_target(target, settings)` and
-   `WinRMTransport.from_target(target, settings)`. The current factory drops
-   settings, so fleet is not globally active until this is integrated.
-2. In the application transport construction path, pass fresh authorization
+- `transport/base.py:make_transport` forwards the parent-owned settings to both
+  transport constructors. Fleet policy holds regardless of `auth_mode`
+  (`dev`, `oidc`, or `mesh`), and target options cannot downgrade it.
+- `remediation/dependencies_io.py:_ssh` now uses
+  `transport.connect_client(timeout=min(3, timeout), guard=guard, allow_agent=False)`.
+  The collector in `remediation/dependencies.py` already delegates to this helper
+  and needs no connector change. The helper keeps explicit credentials, deadline
+  accounting, bounded channel reads, output limits, scope/kill checks, and
+  channel/client cleanup. It also checks both the transport authorization callback
+  and the dependency callback while polling. Even an interactive transport cannot
+  use its agent for a dependency probe. No general command-recording, file-write,
+  or remediation path is used.
+
+Remaining parent integration requests:
+
+1. In the application transport construction path, pass fresh authorization
    `guard` and durable `on_security_event` callbacks. Persist the above findings
    and audit events with the target/principal context. Add application tests
    proving a range warning appears and a changed-key finding/audit survives the
    failed operation. Local logger output is not a durable audit substitute.
-3. In `remediation/dependencies_io.py:_ssh`, replace its independent
-   `SSHClient`/system-key loading/`AutoAddPolicy`/`connect` block with
-   `client = transport.connect_client(timeout=min(3, timeout), guard=guard)`.
-   Retain the explicit-credential check, overall deadline, bounded channel
-   reads, existing guard checks, and `finally: client.close()`. That existing
-   alternate client currently bypasses fleet trust. Update its fake client test
-   to declare an explicit range exception or supply provisioned trust.
-4. Make discovery/acceptance record an observed fingerprint separately from an
+2. Make discovery/acceptance record an observed fingerprint separately from an
    approved pin, require independent verification/authorization for acceptance,
    and bind target identity/options into any existing change/rollback guards.
    No discovery schema or UI changes are included here.
@@ -173,7 +186,7 @@ No live Windows, Linux, Cisco, Navy, or external target was contacted.
 | SSH pinned/provisioned trust | Real successful Paramiko handshake and command; plain and hashed known_hosts. | Authorized target provisioning and rotation workflow. |
 | Changed/unknown SSH key | Real changed-pin and changed-known_hosts failures with zero server authentication attempts; unknown endpoint refused before connect. Sanitized high-severity events asserted. | Durable finding/audit integration; discovery acceptance binding. |
 | No implicit SSH identity | Recorded Paramiko connect arguments for password, explicit key, and explicitly authorized interactive agent; no-credential failure before client creation. | Broader ZT-20 subprocess/kubeconfig work is outside this assignment. |
-| Fleet WinRM policy | Pre-session refusals for HTTP/5985, ignore, Basic/CredSSP, absent or invalid CA material. | Settings forwarding and deployed inventory migration. |
+| Fleet WinRM policy | Pre-session refusals for HTTP/5985, ignore, Basic/CredSSP, absent or invalid CA material; settings forwarded by the factory. | Deployed inventory migration. |
 | Actual WinRM TLS path | Real pywinrm/requests HTTPS exchange with correct DNS and IP SAN; untrusted, expired, wrong-DNS/IP, DNS-only-for-IP, and CN-only certificates fail with zero HTTP requests. | Real domain authentication/WinRM SOAP execution and deployment CA policy. |
 | Range exceptions | Explicitly acknowledged real loopback HTTP and ignored-certificate HTTPS exchanges; structured unverified warnings. | Persistent target warning findings in the application. |
 | Redirects/environment | Real HTTP downgrade redirect refused; environment proxy/CA settings cannot replace fleet trust; another endpoint is refused before a socket opens. | Deployment egress policy is separate. |
@@ -200,6 +213,30 @@ Recorded on 2026-11-05: the transport command passed **114 tests** in 17.05 s;
 the affected-caller command passed **165 tests** in 59.48 s, with 73 existing
 FastAPI/Starlette deprecation warnings. `git diff --check` passed. These are
 focused Windows/shared-runtime results, not the full integrated gate.
+
+For the factory/dependency integration commit, repeat only affected checks:
+
+```powershell
+& 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts='' -q tests/transport/test_factory.py tests/engine/test_dependencies_io.py tests/engine/test_dependencies.py tests/transport/test_ssh_trust.py::test_no_implicit_keys_and_agent_only_explicit_interactive tests/transport/test_ssh_trust.py::test_no_credential_fails_before_network tests/transport/test_ssh_trust.py::test_guard_failure_after_handshake_closes_client_without_translation tests/transport/test_ssh_trust.py::test_connector_agent_override_cannot_grant_interactive_access tests/transport/test_ssh_trust.py::test_connector_combines_transport_authorization_with_probe_guard
+```
+
+These added checks use protocol fixtures, not new live handshakes: factory
+fleet refusal/defaults and isolated callbacks; dependency pin mismatch,
+unknown/changed known_hosts rejection before simulated authentication; forced
+agent disablement; cancellation/deadline/resource cleanup and output limits;
+transport authorization revocation during connection and dependency reads.
+
+The integration command passed **158 tests** in 33.13 s. A final check before
+returning SSH evidence was then added so authorization revoked during the last
+read cannot return evidence. Its affected regression command passed **17 tests**
+(21 deselected) in 2.34 s:
+
+```powershell
+& 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts='' -q tests/engine/test_dependencies_io.py -k 'ssh or dependency_probe'
+```
+
+The original real-handshake regression results above were retained without
+repeating those handshakes for this integration-only change.
 
 The existing fake WinRM transport factory now explicitly acknowledges its range
 exception. Unrelated range declaration/credential tests retain their previous

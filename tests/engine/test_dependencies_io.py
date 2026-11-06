@@ -179,7 +179,7 @@ def test_ssh_fixed_credentials_bounded_reads_and_guard(monkeypatch):
         closed = False
 
         def load_system_host_keys(self):
-            pass
+            pytest.fail("dependency probe loaded implicit host trust")
 
         def set_missing_host_key_policy(self, policy):
             pass
@@ -199,7 +199,8 @@ def test_ssh_fixed_credentials_bounded_reads_and_guard(monkeypatch):
 
     client = Client()
     monkeypatch.setattr(paramiko, "SSHClient", lambda: client)
-    transport = SSHTransport("fixture", password="private-password")
+    transport = SSHTransport("fixture", password="private-password", allow_insecure_range=True,
+                             interactive=True, allow_agent=True)
     guards = []
     assert io.read_command(transport, "fixed-read", timeout=2, guard=lambda: guards.append(True)) == "facts"
     assert connection["auth_timeout"] <= 2 and connection["banner_timeout"] <= 2
@@ -207,6 +208,181 @@ def test_ssh_fixed_credentials_bounded_reads_and_guard(monkeypatch):
     assert client.closed and channel.closed and len(guards) >= 5
     with pytest.raises(io.ReadFailure, match="explicit_ssh_credential_required"):
         io.read_command(SSHTransport("fixture"), "fixed-read", timeout=2, guard=lambda: None)
+
+
+@pytest.mark.parametrize("mode", ["pin_mismatch", "unknown_host", "changed_host"])
+def test_dependency_ssh_cannot_bypass_host_trust(monkeypatch, tmp_path, mode):
+    import paramiko
+    from cyberthunder.transport.trust import TrustError, key_fingerprint
+
+    # No socket is opened: fake negotiation invokes the real trust policy before auth.
+    approved, offered = paramiko.RSAKey.generate(1024), paramiko.RSAKey.generate(1024)
+    calls, events = [], []
+
+    class Client(paramiko.SSHClient):
+        def load_system_host_keys(self, *args):
+            pytest.fail("dependency probe loaded implicit host trust")
+
+        def connect(self, hostname, **kwargs):
+            calls.append("connect")
+            expected = self.get_host_keys().lookup(hostname)
+            if expected:
+                raise paramiko.BadHostKeyException(hostname, offered, approved)
+            self._policy.missing_host_key(self, hostname, offered)
+            calls.append("authenticated")
+
+        def close(self):
+            calls.append("closed")
+            super().close()
+
+    monkeypatch.setattr(paramiko, "SSHClient", Client)
+    if mode == "pin_mismatch":
+        trust = {"host_key_sha256": key_fingerprint(approved)}
+    else:
+        path = tmp_path / "known_hosts"
+        host = "other.invalid" if mode == "unknown_host" else "fixture"
+        path.write_text(f"{host} {approved.get_name()} {approved.get_base64()}\n")
+        trust = {"known_hosts": str(path)}
+    tr = SSHTransport("fixture", password="private-password", security_mode="fleet",
+                      on_security_event=events.append, **trust)
+    with pytest.raises(TrustError) as error:
+        io.read_command(tr, "must-not-run", timeout=2, guard=lambda: None)
+    assert error.value.code == ("transport:unknown_host_key" if mode == "unknown_host" else "discovery:identity_changed")
+    assert "authenticated" not in calls and calls[-1] == "closed"
+    assert len(events) == 1 and events[0].severity == "high"
+
+
+@pytest.fixture
+def dependency_ssh_probe(monkeypatch):
+    calls = []
+    clock = [0.0]
+    monkeypatch.setattr(io.time, "monotonic", lambda: clock[0])
+
+    class Channel:
+        data = b"facts"
+        done = True
+
+        def settimeout(self, timeout):
+            calls.append(("channel_timeout", timeout))
+
+        def exec_command(self, command):
+            calls.append(("exec", command))
+
+        def recv_ready(self):
+            return bool(self.data)
+
+        def recv(self, limit):
+            calls.append(("recv", limit))
+            data, self.data = self.data, b""
+            return data
+
+        def recv_stderr_ready(self):
+            return False
+
+        def exit_status_ready(self):
+            return self.done
+
+        def recv_exit_status(self):
+            return 0
+
+        def close(self):
+            calls.append(("channel_closed",))
+
+    channel = Channel()
+
+    class Client:
+        def get_transport(self):
+            return self
+
+        def open_session(self, *, timeout):
+            calls.append(("open", timeout))
+            return channel
+
+        def close(self):
+            calls.append(("client_closed",))
+
+    transport = SSHTransport("fixture", password="private-password", allow_insecure_range=True)
+
+    def connector(**kwargs):
+        calls.append(("connect", kwargs))
+        return Client()
+
+    monkeypatch.setattr(transport, "connect_client", connector)
+    return SimpleNamespace(transport=transport, calls=calls, clock=clock, channel=channel)
+
+
+def test_dependency_probe_uses_shared_connector_and_keeps_read_bounds(dependency_ssh_probe):
+    probe = dependency_ssh_probe
+    guard = lambda: None
+    assert io.read_command(probe.transport, "fixed-read", timeout=10, guard=guard) == "facts"
+    assert probe.calls[0] == ("connect", {"timeout": 3, "guard": guard, "allow_agent": False})
+    assert ("recv", 4096) in probe.calls
+    assert probe.calls[-2:] == [("channel_closed",), ("client_closed",)]
+
+
+@pytest.mark.parametrize("stage", ["connected", "opened", "reading"])
+@pytest.mark.parametrize("error_type", [KillSwitchEngaged, PermissionError])
+def test_dependency_probe_cancellation_still_closes_resources(dependency_ssh_probe, stage, error_type):
+    probe = dependency_ssh_probe
+    trigger = {"connected": "connect", "opened": "open", "reading": "recv"}[stage]
+    guards_after_recv = 0
+
+    def guard():
+        nonlocal guards_after_recv
+        if any(call[0] == trigger for call in probe.calls):
+            guards_after_recv += 1
+            raise error_type("revoked")
+
+    probe.channel.done = stage != "reading"
+    with pytest.raises(error_type, match="revoked"):
+        io.read_command(probe.transport, "fixed-read", timeout=2, guard=guard)
+    assert probe.calls[-1] == ("client_closed",)
+    if stage != "connected":
+        assert probe.calls[-2] == ("channel_closed",)
+    if stage != "reading":
+        assert not any(call[0] == "exec" for call in probe.calls)
+    assert guards_after_recv == 1
+
+
+@pytest.mark.parametrize("stage", ["connected", "opened", "reading"])
+def test_dependency_probe_deadline_closes_resources(dependency_ssh_probe, stage, monkeypatch):
+    probe = dependency_ssh_probe
+    trigger = {"connected": "connect", "opened": "open", "reading": "recv"}[stage]
+
+    def guard():
+        if any(call[0] == trigger for call in probe.calls):
+            probe.clock[0] = 3
+
+    probe.channel.done = stage != "reading"
+    monkeypatch.setattr(io.time, "sleep", lambda duration: None)
+    with pytest.raises(io.ReadFailure, match="timeout"):
+        io.read_command(probe.transport, "fixed-read", timeout=2, guard=guard)
+    assert probe.calls[-1] == ("client_closed",)
+    if stage != "connected":
+        assert probe.calls[-2] == ("channel_closed",)
+
+
+def test_dependency_probe_output_limit_preserved(dependency_ssh_probe):
+    probe = dependency_ssh_probe
+    probe.channel.data = b"x" * (io.MAX_OUTPUT + 1)
+    with pytest.raises(io.ReadFailure, match="output_limit"):
+        io.read_command(probe.transport, "fixed-read", timeout=2, guard=lambda: None)
+    assert probe.calls[-2:] == [("channel_closed",), ("client_closed",)]
+
+
+@pytest.mark.parametrize("finished", [False, True])
+def test_dependency_probe_rechecks_transport_authorization_during_reads(dependency_ssh_probe, monkeypatch, finished):
+    probe = dependency_ssh_probe
+
+    def authorization():
+        if any(call[0] == "recv" for call in probe.calls):
+            raise PermissionError("principal revoked")
+
+    monkeypatch.setattr(probe.transport, "_guard", authorization)
+    probe.channel.done = finished
+    with pytest.raises(PermissionError, match="principal revoked"):
+        io.read_command(probe.transport, "fixed-read", timeout=2, guard=lambda: None)
+    assert probe.calls[-2:] == [("channel_closed",), ("client_closed",)]
 
 
 @pytest.mark.parametrize("failure", ["timeout", "exception", "permission", "stderr", "call_limit", "time_limit"])

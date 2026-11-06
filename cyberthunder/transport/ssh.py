@@ -84,14 +84,26 @@ class SSHTransport(TrustEvents, Transport):
                    interactive=interactive, allow_agent=options.get("allow_agent", False),
                    guard=guard, on_security_event=on_security_event)
 
-    def connect_client(self, *, timeout=None, guard=None):
-        """New policy-checked client; the caller must close it (also for bounded reads)."""
+    def connect_client(self, *, timeout=None, guard=None, allow_agent=None):
+        """New policy-checked client; callers close it, including on bounded reads.
+
+        allow_agent=False restricts an otherwise authorized interactive agent;
+        True never grants agent access absent the instance's authorization.
+        """
         import paramiko
 
         self._guard()
-        check = guard if guard is not None else self._guard
+
+        def check():
+            self._guard()
+            if guard is not None:
+                guard()
+
         check()
-        if not self._password and not self._key and not self.allow_agent:
+        if allow_agent is not None:
+            boolean(allow_agent, "allow_agent")
+        use_agent = self.allow_agent and self.interactive and allow_agent is not False
+        if not self._password and not self._key and not use_agent:
             raise TransportError("SSH requires an explicit password, key file, or authorized interactive agent")
         client = paramiko.SSHClient()
         try:
@@ -105,7 +117,7 @@ class SSHTransport(TrustEvents, Transport):
                 client.connect(self.host, port=self.port, username=self.username, password=self._password,
                                key_filename=self._key, timeout=limit, banner_timeout=limit,
                                auth_timeout=limit, channel_timeout=limit, look_for_keys=False,
-                               allow_agent=self.allow_agent and self.interactive)
+                               allow_agent=use_agent)
             except paramiko.BadHostKeyException:
                 self._event("discovery:identity_changed", "SSH host key differs from provisioned known_hosts", "high")
                 raise TrustError("discovery:identity_changed", "SSH host key does not match provisioned known_hosts") from None
