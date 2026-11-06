@@ -1,4 +1,4 @@
-# Container build portability
+# Container build portability and reviewed dependencies
 
 The root `Dockerfile` builds the UI and installs Trivy and kubectl for the
 unprivileged application image. Its kubectl install uses an explicitly copied
@@ -7,7 +7,16 @@ builder has been exercised; BuildKit execution remains untested locally. No
 Dockerfile heredoc or buildx install is required. A legacy build previously reported success while silently skipping
 the heredoc body, leaving kubectl absent.
 
-The default kubectl version remains `v1.36.4`. `KUBECTL_VERSION` accepts stable
+The Dockerfile pins Python 3.12.16 on Debian Trixie, Node 22.23.4 (UI build stage
+only), and Trivy 0.76.2 by exact multi-platform registry digest. The runtime
+upgrades pip to 26.3 using a reviewed wheel hash before installing the application.
+See [the vulnerability review](CONTAINER_VULNERABILITY_REVIEW.md) for evidence,
+remaining findings, and the distinction between image and partial-source scans.
+Application dependencies still follow `pyproject.toml`; these pins do not make
+the entire dependency resolution reproducible.
+
+The default kubectl version is `v1.36.6`, within the existing 1.36 minor.
+`KUBECTL_VERSION` accepts stable
 `v1.MINOR.PATCH` release names (no prereleases, URLs, leading zeros or path
 components). Missing upstream releases fail the build. Explicit `TARGETARCH`
 accepts only `amd64` or `arm64`. BuildKit supplies it automatically after the
@@ -28,6 +37,11 @@ replaces `/usr/local/bin/kubectl`. Failure preserves any previous executable and
 removes the temporary file. The destination is fixed; build arguments cannot
 select arbitrary files, URLs or credentials. Checksums downloaded from the same
 release service provide integrity checking, not independent release signing.
+The Dockerfile additionally checks the installed binary against the reviewed
+`KUBECTL_SHA256_AMD64` or `KUBECTL_SHA256_ARM64` build argument before executing it.
+Changing the version requires reviewing and updating its architecture checksum;
+overriding the version alone fails closed. For cross builds, the installer and
+execution check must agree with the stage's native/emulated architecture.
 
 The build must then successfully execute
 `/usr/local/bin/kubectl version --client=true --output=json`. This checks presence
@@ -35,13 +49,16 @@ and executability without contacting a cluster. Network access is needed only
 to obtain public build dependencies; this check and the runtime smoke can run
 without networking. `.dockerignore` admits only this installer from `scripts/`.
 
-For the supported local legacy builder, explicitly select the local socket and
-cap build execution at one CPU (choose a unique local tag):
+Review the official registry manifest and image creation time, then explicitly
+pull the exact `FROM` references before building. A cached floating tag is not
+evidence that its base is current. For the supported local legacy builder,
+explicitly select the local socket and cap execution at one CPU (choose a unique
+local tag):
 
 ```sh
 DOCKER_BUILDKIT=0 docker --host unix:///var/run/docker.sock build \
   --cpu-quota 100000 --cpu-period 100000 --force-rm \
-  --tag cyberthunder-local:container-portability .
+  --tag cyberthunder-local:container-hardening .
 ```
 
 Leave `TARGETARCH` unset to exercise native fallback, or add
@@ -64,6 +81,15 @@ JSON/SQLite API/state operation; retain image ID, source revision, command,
 output, elapsed time and cleanup receipt. Unit tests alone do not establish a
 working container or cross-architecture execution.
 
+After a scanner upgrade, run the existing vulnerability engine/parser tests and
+exercise the real binary against a copy of the retained offline database,
+including a positive calibration. Compare complete image archives using the
+same scanner and database, empty ignore file, no network, and one scanner core.
+Retain raw reports with unfixed findings and verify the rebuilt UI against the
+committed bundle. Never infer zero image vulnerabilities from a partial source
+or package inventory scan.
+
 The separate root `Containerfile` uses the distribution's `kubernetes-client`
-package and contains no kubectl heredoc. It is unchanged by this fix and is not
+package and contains no kubectl heredoc. It retains its older base and Trivy
+pin, is unchanged by this Dockerfile hardening, and is not
 covered by a Dockerfile-only image smoke.

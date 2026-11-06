@@ -191,3 +191,17 @@ def test_docker_build_copies_installer_and_checks_executable_without_heredoc():
     assert "!scripts/" in patterns and "!scripts/install_kubectl.py" in patterns
     assert patterns.index("!scripts/") < patterns.index("scripts/**") < patterns.index("!scripts/install_kubectl.py")
     assert "!scripts/**" not in patterns
+
+
+def test_docker_build_requires_reviewed_digests_before_running_tools():
+    source = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    images = re.findall(r"(?m)^FROM (\S+)", source)
+    assert len(images) == 3
+    assert all(re.fullmatch(r"[^@]+:[^@]+@sha256:[a-f0-9]{64}", image) for image in images)
+    assert "ARG KUBECTL_VERSION=v1.36.6\n" in source
+    for arch in ("AMD64", "ARM64"):
+        assert re.search(rf"(?m)^ARG KUBECTL_SHA256_{arch}=[a-f0-9]{{64}}$", source)
+        assert f'echo "$KUBECTL_SHA256_{arch}  /usr/local/bin/kubectl"' in source
+    assert source.index("sha256sum --check --strict") < source.index("kubectl version --client")
+    assert "pip==26.3 --hash=sha256:" in source
+    assert "--require-hashes --only-binary=:all: -r /tmp/pip-pin.txt" in source

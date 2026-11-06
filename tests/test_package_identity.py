@@ -33,7 +33,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 BUILDS = ("Dockerfile", "Containerfile")
-TRIVY_IMAGE = "aquasec/trivy:0.71.1@sha256:53570e6911c2361ebe7995228088cf83a6b9b73e7f3cdca44bd8f8f425e80fa7"
+TRIVY_IMAGES = {
+    "Dockerfile": "aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb",
+    "Containerfile": "aquasec/trivy:0.71.1@sha256:53570e6911c2361ebe7995228088cf83a6b9b73e7f3cdca44bd8f8f425e80fa7",
+}
 
 
 def docker_defaults(filename):
@@ -49,7 +52,7 @@ def docker_defaults(filename):
 @pytest.mark.parametrize("filename", BUILDS)
 def test_builds_pin_supported_scanner_and_guarded_single_worker(filename):
     source = (ROOT / filename).read_text(encoding="utf-8")
-    assert re.search(r"(?m)^FROM (\S+) AS trivy$", source).group(1) == TRIVY_IMAGE
+    assert re.search(r"(?m)^FROM (\S+) AS trivy$", source).group(1) == TRIVY_IMAGES[filename]
     environment, _ = docker_defaults(filename)
     assert environment["CT_HOST"] == "0.0.0.0"
     assert environment["CT_PORT"] == "8000" and environment["WEB_CONCURRENCY"] == "1"
