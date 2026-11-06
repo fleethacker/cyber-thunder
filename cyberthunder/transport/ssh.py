@@ -12,6 +12,7 @@ Bound targets resolve only their selected credential_source and enforce their su
 from __future__ import annotations
 
 from contextlib import ExitStack
+from dataclasses import replace
 import os
 import re
 import shlex
@@ -143,7 +144,7 @@ class SSHTransport(TrustEvents, Transport):
             raise TrustError("transport:credential_resolver_required", "Fleet SSH requires a configured credential resolver for password references")
         return result
 
-    def connect_client(self, *, timeout=None, guard=None, allow_agent=None):
+    def connect_client(self, *, timeout=None, guard=None, allow_agent=None, deadline=None):
         """New policy-checked client; callers close it, including on bounded reads.
 
         allow_agent=False restricts an otherwise authorized interactive agent;
@@ -151,12 +152,14 @@ class SSHTransport(TrustEvents, Transport):
         """
         import paramiko
 
-        self._guard()
-
         def check():
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("SSH connection deadline expired")
             self._guard()
             if guard is not None:
                 guard()
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("SSH connection deadline expired")
 
         check()
         if allow_agent is not None:
@@ -173,7 +176,8 @@ class SSHTransport(TrustEvents, Transport):
             check()
             limit = self.connect_timeout if timeout is None else min(timeout, self.connect_timeout)
             with ExitStack() as leases:
-                lease = leases.enter_context(self._credential_use.lease()) if self._credential_use is not None else None
+                use = replace(self._credential_use, guard=check) if self._credential_use is not None else None
+                lease = leases.enter_context(use.lease()) if use is not None else None
                 if lease is not None:
                     limit = min(limit, lease.remaining())
                 password = lease.secret.reveal() if lease is not None else self._password
@@ -184,6 +188,10 @@ class SSHTransport(TrustEvents, Transport):
                     check()
                     if lease is not None:
                         limit = min(limit, lease.remaining())
+                    if deadline is not None:
+                        limit = min(limit, deadline - time.monotonic())
+                        if limit <= 0:
+                            raise TimeoutError("SSH connection deadline expired")
                     try:
                         client.connect(self.host, port=self.port, username=self.username, password=password,
                                        key_filename=self._key, timeout=limit, banner_timeout=limit,
@@ -215,7 +223,10 @@ class SSHTransport(TrustEvents, Transport):
             check()
             return client
         except BaseException:
-            client.close()
+            try:
+                client.close()
+            except Exception:
+                pass
             raise
 
     def _conn(self):

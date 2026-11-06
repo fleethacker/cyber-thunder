@@ -491,17 +491,106 @@ node ID and reason, not a module-wide allowance.
   a blocking callback or already executing remote operation. Python and SDK
   copies cannot be reliably zeroized. An authenticated SSH connection keeps
   operation guards and reads a rotated password on its next connection.
-- **Bounded dependency collection is not integrated with these leases.** The
-  existing `remediation/dependencies_io.py::_ssh` requires `_password` or `_key`,
-  so it refuses resolver-backed SSH with `explicit_ssh_credential_required`.
-  Its `_winrm` calls `_sess()` without an operation lease, which also refuses.
-  These paths fail closed before networking; do not count dependency probes as
-  working resolver integration. That module is outside the requested diff and
-  is unchanged. The SSH `connect_client(guard=...)` interface itself now checks
-  its caller's guard after credential resolution.
+- Bounded dependency collection was outside the initial review and refused
+  resolver-backed SSH/WinRM at `8367ed5`. The bounded follow-up below resolves
+  that integration limit, preserving fresh guards and failure semantics.
 
 Parent integration must retain the registry validation in `AppContext.__init__`
 alongside independently developed callbacks, and retain transport forwarding,
 registry reload guards and backend audit attribution. The parent CLI token
 store and person/access-policy changes belong to their own contexts. No push,
 live provisioning or additional work is part of this review handoff.
+
+## Bounded dependency collection follow-up
+
+This separate change starts from review commit `8367ed5`. It touches only
+`remediation/dependencies_io.py`, narrowly required SSH/WinRM transport support,
+dependency-reader tests and this document. Context, configuration, CLI token
+stores, person mapping, access policy, CI policy and other workers' files are
+outside the change.
+
+`read_command` starts its absolute monotonic deadline before the initial
+authorization callback. Scope, account, principal, kill and time checks surround
+credential acquisition, connection, channel/protocol operations and output
+acceptance. A slow guard or connection consumes the original allowance; neither
+starts a fresh timeout. Nonpositive/nonfinite budgets are refused. The existing
+64 KiB combined stdout/stderr limit remains, and malformed completion/exit status,
+timeouts, nonzero exits, provider failures and cleanup failures return no
+collected evidence. Public provider/permission errors are sanitized without
+exception chaining. Kill signals and fixed host-trust failures retain their
+control-flow semantics.
+
+SSH now accepts an actual `CredentialUse` as its explicit credential source.
+`connect_client(..., deadline=absolute_monotonic_time)` is the only added SSH
+parameter; it checks the caller's guard during resolution and caps authentication
+timeouts by the remaining budget. The password never moves into `_password` or
+`_key`, implicit agent/key discovery stays disabled, and the connection is local
+to the bounded read. Its lease closes after authentication; subsequent reads
+continue to check account/principal authorization and the original read deadline.
+A new bounded read creates a new connection and observes source rotation.
+
+WinRM uses `bounded_reader(guard=..., deadline=..., cleanup_timeout=3)` to acquire
+one operation lease and one newly constructed trusted session. It never falls
+back from a resolver to legacy credentials and refuses a cached/injected session.
+The private operation exposes only shell creation, command execution and single
+receive-frame polling to the collector. Every collection send and its result
+are guarded, with short HTTP connect/read timeouts capped by the remaining read
+and lease budgets. Transport-wide timeout settings and `_session` are not reused
+or mutated. The existing fleet TLS, endpoint and proxy restrictions still apply.
+
+The operation saves the shell/command identifiers before the post-operation
+authorization check, so revocation just after creation can still release those
+exact resources. Cleanup permanently disables collection and has a separate
+three-second budget for at most two SOAP sends: terminate the owned command and
+delete the owned shell. The cleanup validator accepts only those actions, exact
+resource IDs and expected SOAP bodies. Receive, new Command, foreign identifiers,
+a missing/changed HTTP session or an exhausted budget are refused. Cleanup uses
+the existing session without acquiring or revealing another credential; it can
+run after scope, kill or lease revocation without authorizing more collection.
+The HTTP session is then closed and known SDK password, encryption and HTTP-auth
+references are dropped, including `Protocol.password`.
+
+Cleanup failure invalidates an otherwise successful read. If collection already
+failed or was cancelled, cleanup still runs and cannot replace the original kill
+signal with an ordinary provider error. The dependency engine records failed or
+uncertain reads as unknown/incomplete, without adding collected facts or edges.
+An unacknowledged creation response may leave no usable remote resource ID;
+session closure is still attempted, but remote cleanup is not asserted.
+
+These bounds govern request admission, timeouts, accepted output and evidence.
+They do not forcibly interrupt a blocking OS/SDK call, guarantee remote command
+termination or bound every SDK-internal response allocation. Late responses and
+failed cleanup are never accepted as evidence. Python/SDK copies are not claimed
+to be securely zeroized, and live endpoint behavior remains deployment acceptance.
+
+### Focused follow-up validation
+
+Four calibrated tests failed on the pre-fix review commit, with exactly the
+expected SSH `explicit_ssh_credential_required` and WinRM missing-operation-lease
+refusals. Those same JSON/SQLite cases now verify success and source rotation.
+Additional cases cover deadlines during initial/credential guards, connection
+and reads; cancellation before authentication; principal/scope/account/generation
+revocation; lease expiry; output limits; malformed and failed exits; sanitized
+provider/permission errors; cleanup failure and timeout; and incomplete dependency
+packets. Real installed WinRM SDK tests construct and parse SOAP with fake
+responses, reject cleanup-time Receive/foreign IDs, and retain uncertainty for
+unacknowledged shell creation. No remote endpoint or user vault is accessed.
+
+```sh
+CT_STATE_BACKENDS=json,sqlite PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest \
+  tests/engine/test_dependencies_credentials.py tests/engine/test_dependencies_io.py \
+  tests/engine/test_dependencies.py tests/security/test_secret_transport_integration.py \
+  tests/security/test_credential_registry.py tests/transport \
+  -o addopts= -q --tb=short -p no:cacheprovider --junitxml=RECEIPT.xml
+```
+
+Final JUnit, source hashes, counts and exact skip lists are retained in
+`.build/dependency-resolver-*`. The final selection passed **528 tests, zero
+skips, zero failures/errors on each platform**, including **118 cases** in the
+new credential-reader module. Both JSON and SQLite execute. The exact skip
+ID/reason list is `[]` on Windows and `[]` on Linux; this follow-up needs no new
+platform allowances. Windows uses Python 3.12.10. Native Linux uses
+Python 3.12.16 in `/home/joshua/dependency-resolver-followup-8367ed5` on ext4;
+source/receipt transfer alone uses `/mnt/c`. These are focused receipts, separate
+from the parent-owned full gate and CI allowances. No full gate or push is part
+of this follow-up.

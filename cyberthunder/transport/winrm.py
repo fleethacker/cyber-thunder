@@ -17,11 +17,14 @@ connections read CT_CRED_<ref> at construction; fleet references require a resol
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
+from dataclasses import replace
 import ipaddress
+import math
 import re
 import time
 import weakref
+import xml.etree.ElementTree as ET
 
 from .base import CommandResult, Transport, TransportError
 from .trust import (TrustError, TrustEvents, boolean, bound_account, ca_context, endpoint_host, endpoint_port,
@@ -190,7 +193,7 @@ class WinRMTransport(TrustEvents, Transport):
             for code, message in exceptions:
                 self._event(code, message)
 
-    def _sess(self, *, lease=None):
+    def _sess(self, *, lease=None, bounded=None):
         self._guard()
         self._check_policy()
         if self._credential_use is not None and (lease is None or self._session is not None):
@@ -208,6 +211,9 @@ class WinRMTransport(TrustEvents, Transport):
                     raise TransportError("WinRM credential lease has insufficient time remaining")
                 kw["read_timeout_sec"] = min(self.read_timeout_s, remaining)
                 kw["operation_timeout_sec"] = min(self.operation_timeout_s, kw["read_timeout_sec"] - 1)
+            if bounded is not None:
+                bounded.check()
+                kw.update(operation_timeout_sec=1, read_timeout_sec=2)
             if self.ca_trust_path:
                 kw["ca_trust_path"] = self.ca_trust_path
             if self.security_mode == "fleet":
@@ -217,7 +223,9 @@ class WinRMTransport(TrustEvents, Transport):
             session = None
             try:
                 session = winrm.Session(self.endpoint, auth=auth, **kw)
-                if lease is not None:
+                if bounded is not None:
+                    bounded.attach(session)
+                elif lease is not None:
                     sender = weakref.WeakMethod(session.protocol.transport.send_message)
                     def send_message(*args, **kwargs):
                         self._guard()
@@ -244,10 +252,54 @@ class WinRMTransport(TrustEvents, Transport):
             if failure:
                 self._close_session(session, discard_password=lease is not None)
                 raise TransportError("WinRM session initialization failed; check configured authentication support") from None
-            if lease is not None:
+            if lease is not None or bounded is not None:
                 return session
             self._session = session
         return self._session
+
+    @contextmanager
+    def bounded_reader(self, *, guard, deadline, cleanup_timeout=3):
+        """One guarded lease/session; cleanup can only release this read's IDs."""
+        from cyberthunder.security.secret_resolver import CredentialUse
+        if (not callable(guard) or not isinstance(deadline, (int, float)) or not math.isfinite(deadline)
+                or isinstance(cleanup_timeout, bool) or not isinstance(cleanup_timeout, (int, float))
+                or not 0 < cleanup_timeout <= 3):
+            raise TransportError("Invalid WinRM bounded read limits")
+        if self._session is not None:
+            raise TransportError("WinRM bounded reads cannot reuse a session")
+        operation = _BoundedWinRMRead(self, guard, deadline, cleanup_timeout)
+        operation.check()
+        with ExitStack() as stack:
+            if self._credential_use is not None:
+                if not isinstance(self._credential_use, CredentialUse):
+                    raise TransportError("WinRM bounded read requires a credential use")
+                use = replace(self._credential_use, guard=operation.authorize)
+                operation.lease = stack.enter_context(use.lease())
+            session = self._sess(lease=operation.lease, bounded=operation)
+            failed = False
+            try:
+                operation.check()
+                yield operation
+            except Exception as error:
+                failed = True
+                from winrm.exceptions import AuthenticationError
+                if operation.lease is not None and isinstance(error, AuthenticationError):
+                    operation.lease.authentication_failed()
+                raise
+            except BaseException:
+                failed = True
+                raise
+            finally:
+                try:
+                    try:
+                        operation.cleanup()
+                    finally:
+                        self._close_session(session, discard_password=True, strict=True)
+                except Exception:
+                    # Cleanup cannot make a cancelled/denied read successful or
+                    # replace its kill signal with an ordinary provider failure.
+                    if not failed:
+                        raise
 
     @contextmanager
     def _operation_session(self):
@@ -312,17 +364,18 @@ class WinRMTransport(TrustEvents, Transport):
         self._close_session(s)
 
     @staticmethod
-    def _close_session(s, *, discard_password=False):
+    def _close_session(s, *, discard_password=False, strict=False):
         proto = getattr(s, "protocol", None)
         tr = getattr(proto, "transport", None)
         closer = getattr(tr, "close_session", None)
         http_session = getattr(tr, "session", None)
+        failed = False
         try:
             if callable(closer):
                 try:
                     closer()
                 except Exception:  # noqa: BLE001
-                    pass
+                    failed = True
         finally:
             if discard_password:
                 # Release known provider-owned references even if cancellation
@@ -333,3 +386,156 @@ class WinRMTransport(TrustEvents, Transport):
                     tr.encryption = None
                 if http_session is not None:
                     http_session.auth = None
+                if proto is not None and hasattr(proto, "password"):
+                    proto.password = None
+        if failed and strict:
+            raise TransportError("WinRM session cleanup failed") from None
+
+
+class _BoundedWinRMRead:
+    """Private operation capability; no unguarded collection or reusable session."""
+
+    def __init__(self, owner, guard, deadline, cleanup_timeout):
+        self.owner, self.guard, self.deadline = owner, guard, deadline
+        self.cleanup_timeout = cleanup_timeout
+        self.lease = self.session = self.sender = self.http = None
+        self.shell = self.command = None
+        self.collecting, self.cleaning = True, False
+        self.cleanup_deadline, self.cleanup_sends = 0, 0
+        self.cleanup_action = None
+
+    def authorize(self):
+        if time.monotonic() >= self.deadline:
+            raise TimeoutError("WinRM bounded read deadline expired")
+        self.owner._guard()
+        self.guard()
+        if time.monotonic() >= self.deadline:
+            raise TimeoutError("WinRM bounded read deadline expired")
+
+    def check(self):
+        if not self.collecting:
+            raise TransportError("WinRM bounded collection is closed")
+        self.authorize()
+        if self.lease is not None:
+            self.lease.check()
+        if time.monotonic() >= self.deadline:
+            raise TimeoutError("WinRM bounded read deadline expired")
+
+    def attach(self, session):
+        self.session = session
+        self.sender = weakref.WeakMethod(session.protocol.transport.send_message)
+        session.protocol.transport.send_message = self.send_message
+
+    def send_message(self, *args, **kwargs):
+        provider = self.session.protocol.transport
+        if self.collecting:
+            self.check()
+            remaining = self.deadline - time.monotonic()
+            if self.lease is not None:
+                remaining = min(remaining, self.lease.remaining())
+        else:
+            # Only cleanup()/the two SDK release methods enter this state. Never
+            # acquire another lease or rebuild a missing/changed HTTP session.
+            if (not self.cleaning or self.cleanup_sends >= 2 or self.http is None
+                    or provider.session is not self.http):
+                raise TransportError("WinRM cleanup session is unavailable")
+            self._validate_cleanup(args[0] if len(args) == 1 and not kwargs else None)
+            self.cleanup_sends += 1
+            remaining = self.cleanup_deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("WinRM bounded operation deadline expired")
+        # Requests applies this per connect/read; leave room for both phases.
+        provider.read_timeout_sec = min(1.5, remaining / 2)
+        self.session.protocol.operation_timeout_sec = 1
+        sender = self.sender()
+        if sender is None:
+            raise TransportError("WinRM session is closed")
+        response = sender(*args, **kwargs)
+        self.http = provider.session
+        if not self.collecting and time.monotonic() >= self.cleanup_deadline:
+            raise TimeoutError("WinRM cleanup deadline expired")
+        # The caller captures returned IDs before the post-operation guard, so
+        # revocation after creation still permits release of those exact IDs.
+        return response
+
+    def _validate_cleanup(self, message):
+        """Never let the cleanup exception send Receive/Command or foreign IDs."""
+        env = "{http://www.w3.org/2003/05/soap-envelope}"
+        wsa = "{http://schemas.xmlsoap.org/ws/2004/08/addressing}"
+        wsman = "{http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd}"
+        rsp = "{http://schemas.microsoft.com/wbem/wsman/1/windows/shell}"
+        valid = False
+        try:
+            if not isinstance(message, (str, bytes)) or len(message) > 16384:
+                raise ValueError
+            root = ET.fromstring(message)
+            actions = root.findall(f"{env}Header/{wsa}Action")
+            selectors = root.findall(f"{env}Header/{wsman}SelectorSet/{wsman}Selector")
+            body = root.find(env + "Body")
+            valid = (root.tag == env + "Envelope" and len(root) == 2
+                     and len(root.findall(env + "Header")) == len(root.findall(env + "Body")) == 1
+                     and len(actions) == len(selectors) == 1
+                     and actions[0].text == self.cleanup_action and selectors[0].attrib == {"Name": "ShellId"}
+                     and selectors[0].text == self.shell and body is not None)
+            if valid and self.cleanup_action.endswith("/Signal"):
+                signal = body.find(rsp + "Signal")
+                valid = (len(body) == 1 and signal is not None and signal.attrib == {"CommandId": self.command}
+                         and len(signal) == 1 and signal[0].tag == rsp + "Code"
+                         and signal[0].text == "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/signal/terminate")
+            elif valid:
+                valid = len(body) == 0
+        except (ValueError, TypeError, ET.ParseError):
+            valid = False
+        if not valid:
+            raise TransportError("WinRM cleanup message was refused") from None
+
+    def open(self):
+        self.check()
+        self.shell = self._identifier(self.session.protocol.open_shell(noprofile=True, codepage=65001))
+        self.check()
+
+    def run(self, program, arguments):
+        self.check()
+        self.command = self._identifier(self.session.protocol.run_command(self.shell, program, arguments))
+        self.check()
+
+    @staticmethod
+    def _identifier(value):
+        if not isinstance(value, str) or not 0 < len(value) <= 512 or any(ord(c) < 32 for c in value):
+            raise TransportError("WinRM resource identity is unavailable")
+        return value
+
+    def receive(self):
+        self.check()
+        try:
+            result = self.session.protocol.get_command_output_raw(self.shell, self.command)
+        finally:
+            self.check()
+        return result
+
+    def cleanup(self):
+        self.collecting = False
+        self.cleanup_deadline = time.monotonic() + self.cleanup_timeout
+        self.cleaning = True
+        failed = False
+        try:
+            for method, args, kwargs, action in (
+                (self.session.protocol.cleanup_command, (self.shell, self.command), {},
+                 "http://schemas.microsoft.com/wbem/wsman/1/windows/shell/Signal"),
+                (self.session.protocol.close_shell, (self.shell,), {"close_session": False},
+                 "http://schemas.xmlsoap.org/ws/2004/09/transfer/Delete"),
+            ):
+                if self.shell is None or len(args) == 2 and self.command is None:
+                    continue
+                try:
+                    self.cleanup_action = action
+                    if time.monotonic() >= self.cleanup_deadline:
+                        raise TimeoutError
+                    method(*args, **kwargs)
+                except Exception:
+                    failed = True
+        finally:
+            self.cleaning = False
+            self.cleanup_action = None
+        if failed:
+            raise TransportError("WinRM bounded read cleanup failed") from None
