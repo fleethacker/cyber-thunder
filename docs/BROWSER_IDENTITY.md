@@ -243,7 +243,11 @@ need affinity to their own in-memory sessions; cross-process sessions are not
 implemented. Deployment-level request limits are still required.
 
 Expiration uses the greater elapsed wall/monotonic interval, so suspend or clock
-corrections cannot extend session lifetimes. Backward clock movement beyond the
+corrections cannot extend session lifetimes. Monotonic reads bracket each wall
+sample: rollback is measured against the start of that interval, while expiry
+advances through its end. A scheduler pause after the wall read cannot falsely
+latch clock failure. Reversed or nonfinite samples still fail closed.
+Backward clock movement beyond the
 ID verifier's allowed skew (minimum 10 ms sampling tolerance) invalidates all
 local sessions/transactions and latches rejection until service recreation.
 Access expiry is enforced without additional token-skew grace and checked again
@@ -282,15 +286,20 @@ ensure the lease index is removed with its session, and checked that neither
 guards nor passive polling renew idle timestamps. Regression tests cover copied
 thread contexts rejecting the next command after logout, guard expiry/replacement,
 refresh without revival, service loss, and status polling through refresh to idle
-expiry. No parent-owned files or previous verifier code were changed.
+expiry. A clock-sampling follow-up reproduced three failures before applying
+bracketed reads: false rollback after a scheduler pause for both live and expired
+sessions, and failure to reject a reversed monotonic interval. The tests also
+verify that elapsed time includes the entire pause and that ordinary sampling
+can resume without a false clock-failure latch. No parent-owned files or previous
+verifier code were changed.
 
 ```powershell
 $env:PYTHONPATH = 'C:/Users/joshu/.codex/worktrees/oidc-validation/cyber-thunder'
 & 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest tests/security/test_sessions.py -o addopts= -q --tb=short
 ```
 
-Measured after the lease/passive-idle follow-up on Windows CPython 3.12.10:
-**114 passed** in 80.13 seconds, no skips. One existing FastAPI/Starlette
+Measured after the lease/passive-idle and clock-sampling follow-ups on Windows CPython 3.12.10:
+**117 passed** in 62.58 seconds, no skips. One existing FastAPI/Starlette
 test-client deprecation warning concerns its httpx backend; it is not a runtime
 session warning. The staged whitespace check passed. This is focused session
 acceptance, not a full application or Linux gate.

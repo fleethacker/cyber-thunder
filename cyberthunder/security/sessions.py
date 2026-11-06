@@ -252,11 +252,16 @@ class SessionService:
             raise AuthenticationError() from None
 
     def _now(self):
-        wall, mono = time.time(), time.monotonic()
+        before = time.monotonic()
+        wall = time.time()
+        mono = time.monotonic()
+        earliest = self._wall + before - self._mono
         projected = self._wall + mono - self._mono
         tolerance = max(0.01, self.config.id_token_config.clock_skew_s)
-        if (self._clock_failed or not math.isfinite(wall) or not math.isfinite(mono)
-                or mono < self._mono or wall + tolerance < projected):
+        # Bracket the wall sample so a scheduler pause after it cannot look like
+        # rollback. Still count time through the end of the sampling interval.
+        if (self._clock_failed or not all(math.isfinite(t) for t in (wall, before, mono, earliest, projected))
+                or before < self._mono or mono < before or wall + tolerance < earliest):
             self._clock_failed = True
             self._sessions.clear()
             self._lease_index.clear()

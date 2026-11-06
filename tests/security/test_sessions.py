@@ -501,6 +501,55 @@ def test_system_suspend_expires_session_and_transaction(configured, provider, mo
     assert len(provider.posts) == 1
 
 
+@pytest.mark.parametrize("idle_timeout", [30, 120])
+def test_scheduler_pause_after_wall_sample_is_not_clock_rollback(configured, provider, monkeypatch, idle_timeout):
+    config, access = configured
+    service = SessionService(replace(config, idle_timeout_s=idle_timeout), OIDCValidator(access))
+    headers = authenticated(service, provider)
+    _, guard = service.resolve_session_with_lease(headers)
+    wall, mono, elapsed = service._wall, service._mono, service._elapsed
+    sample = {"mono": mono + 1}
+
+    def wall_before_pause():
+        # The wall value is captured, then the thread is descheduled for 90s
+        # before it can read monotonic again. Time must advance through the
+        # pause, but this is not a backward wall-clock correction.
+        sample["mono"] = mono + 91
+        return wall + 1
+
+    monkeypatch.setattr(sessions.time, "monotonic", lambda: sample["mono"])
+    monkeypatch.setattr(sessions.time, "time", wall_before_pause)
+    if idle_timeout == 30:
+        with pytest.raises(PermissionError):
+            guard()
+        assert not service._sessions and not service._lease_index
+    else:
+        assert guard() is None
+        assert service._sessions and service._lease_index
+    assert not service._clock_failed
+    assert service._elapsed == pytest.approx(elapsed + 91)
+    assert service._wall == pytest.approx(wall + 91)
+    # The next normal sample sees wall time at the end of the pause.
+    monkeypatch.setattr(sessions.time, "time", lambda: wall + 91)
+    if idle_timeout == 120:
+        assert guard() is None
+
+
+def test_reversed_monotonic_sample_bracket_latches_rejection(service, monkeypatch):
+    wall, mono = service._wall, service._mono
+    sample = {"mono": mono + 2}
+
+    def reversed_sample():
+        sample["mono"] = mono + 1
+        return wall + 2
+
+    monkeypatch.setattr(sessions.time, "monotonic", lambda: sample["mono"])
+    monkeypatch.setattr(sessions.time, "time", reversed_sample)
+    with pytest.raises(AuthenticationError):
+        service._now()
+    assert service._clock_failed
+
+
 def test_token_expiry_rechecked_after_verification(service, provider, monkeypatch):
     provider.expires_in = 1
     headers = authenticated(service, provider)
