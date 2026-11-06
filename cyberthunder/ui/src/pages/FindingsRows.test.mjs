@@ -47,13 +47,14 @@ test('Findings retains semantic table rows, a detail button, and the separate re
   let result;
   const panel = mount((hooks) => {
     const libHooks = evaluate(new URL('../lib/hooks.ts', import.meta.url), { react: hooks, '../api/client': { errorText } });
+    const query = evaluate(new URL('../lib/findingsQuery.ts', import.meta.url), { './hooks': libHooks });
     return evaluate(new URL('./Findings.tsx', import.meta.url), {
       react: hooks, '@mantine/core': ui, '@mantine/hooks': { useDebouncedValue: (value) => [value] },
       '@mantine/notifications': { notifications: { show() {} } }, '../api/client': { errorText, api: { findings: async () => result } },
       '../components/common': ui, '../components/FindingDrawer': ui, '../components/FindingAssurance': ui,
       '../components/FindingReassessment': ui,
       '../lib/findingAssurance': { CONFIDENCE_LABELS: {}, REVIEW_LABELS: {} }, '../lib/format': format,
-      '../lib/hooks': libHooks, '../lib/findingRow': rowHelpers,
+      '../lib/findingsQuery': query, '../lib/findingRow': rowHelpers,
     }).default;
   });
   result = { findings: [finding], total: 1, unfiltered_total: 1, offset: 0, facets: { confidence: [], review: [] } };

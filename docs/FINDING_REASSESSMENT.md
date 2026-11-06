@@ -57,6 +57,45 @@ Original `collected_at`, `source`, and `scan_id` remain unchanged. The added
 observation scan ID is included only if that entire run is readable and belongs
 to the same persisted target generation.
 
+## Filtering and observation-time ordering
+
+`GET /api/v1/findings?reassessment=not_reassessed,unknown&sort_by=observed_at&sort_dir=asc`
+selects either reassessment state and orders the matching observations from oldest
+to newest. `reassessment` accepts `not_reassessed`, `no_known_gap`, and `unknown`,
+using the same CSV, OR-within/AND-across filter semantics as the other finding
+filters. Invalid values or sort directions return `400` with a string `detail`.
+
+The list derives this exact `ReassessmentView` for every authorized observation
+before reassessment filtering, sorting, or pagination. `total` counts matches;
+`unfiltered_total`, `summary`, and `facets.reassessment` describe the entire
+authorized selected view. An empty page or a filter with no matches still has
+the full-view facets. Named historical views keep their existing whole-run read
+requirement and cutoff, including when no rows match.
+
+`sort_by=observed_at` compares the helper's `observation.observed_at` instants,
+normalizing time zones. Unknown, invalid, and timezone-free observation times
+stay last in both directions. Ties always use finding ID ascending, including
+unknown-time rows. `sort_by=collected_at` remains the separate, existing
+collection-time sort. Reassessment states do not change either recorded time.
+
+The UI names the filters **Not reassessed**, **No known gap**, and **Unknown**.
+No known gap does not establish freshness, complete coverage, or a current pass.
+It offers **Observation time** and **Collection time** as separate sorts and uses
+the API annotations and facets directly. Filters and sorting persist with
+existing browser preferences, scoped separately for each signed-in account;
+development-mode preferences retain their existing keys. Clear filters and quick
+views clear reassessment selections; Reset defaults also restores priority order.
+Old servers without the reassessment facet pause these controls while retaining
+saved preferences. Selected states missing from a new view remain clearable at zero.
+
+Only returned rows receive explanation, fix, and proposal decoration. History is
+rechecked after those reads; revoked history rebuilds selection, counts, and page
+boundaries. Revoked off-page findings are removed and the entire authorized view
+is rebuilt, including summary and facets. Revoked access to a decorated page
+finding or the whole previously readable view fails the response closed.
+Queries initiate no explanations, proposals, scans, or persistence. The helper
+algorithm, original scanner result, confidence, reviews, and approvals are unchanged.
+
 ## Scope and ordering
 
 - The helper uses the existing persisted artifact ownership and account read
@@ -135,7 +174,8 @@ No release gate, deployment, or immediate-release dependency is introduced.
 The helper keeps only a request-local run index and lazily reads each selected
 run's observations once. It never creates a state directory, writes a document,
 stores credentials, migrates a schema, appends audit records, or caches across
-accounts. Existing list filtering, sorting, counts, and pagination are unchanged.
+accounts. The shared query layer uses these annotations for the complete authorized
+view before filtering and pagination; no new storage backend or index is added.
 
 ## Validation and limits
 
@@ -147,15 +187,14 @@ false-positive reviews, approved/verified proposals, and rollback semantics.
 UI tests render the panel and drawer, exercise the table integration, and check
 accessible controls, missing metadata, escaping, and unchanged decision controls.
 
-This batch deliberately adds no reassessment filter or sort: a correct global
-facet requires deriving every visible row before existing query pagination,
-which belongs to the shared query layer outside this batch's file ownership.
-The existing collection-time sort stays available; it does not sort provenance
-observation times or reassessment state. A follow-on query change
-should consume this exact helper and test complete-view counts and pagination;
-it must not infer status or timestamps in the UI. Dedicated cluster/import
-reassessment and additional producer mappings also remain follow-on work.
-These remaining query and producer capabilities are tracked in BACKLOG UI-04.
+The query follow-up tests JSON/SQLite combined filters, complete-view counts and
+pagination, account-specific visibility, revocation during storage/history/page
+reads, historical cutoffs, observation-time ties and unknown times. UI interaction
+tests cover persistence, reset, account changes, unavailable features, and late
+responses. Query receipts (commands, logs, JUnit XML, and source hashes) are kept
+under `.build/reassessment-query/`. Validation is focused, not a full release gate
+or a general performance claim. Dedicated cluster/import reassessment and
+additional producer mappings remain open in BACKLOG UI-04.
 
 Implementation receipts are retained under `.build/finding-reassessment-next/`
 in the implementation worktree. Independent review receipts are retained under

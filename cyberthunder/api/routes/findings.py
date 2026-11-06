@@ -8,7 +8,7 @@ from cyberthunder.api.errors import MappedRoute, feature
 from cyberthunder.api.schemas import ExplainBatchBody, ExplainBody
 from cyberthunder.api.util import ActorDep, CtxDep, finding_plus, proposal_plus, to_plain
 from cyberthunder.findings.reassessment import ReassessmentView
-from cyberthunder.security.resources import check_record, visible_record
+from cyberthunder.security.resources import check_record
 
 router = APIRouter(tags=["findings"], route_class=MappedRoute)
 
@@ -26,26 +26,14 @@ def _check_history(ctx, scan_id: str) -> None:
 def list_findings(ctx=CtxDep, scan_id: str | None = None, host: str | None = None, status: str | None = None,
                   severity: str | None = None, source: str | None = None, asset_type: str | None = None,
                   category: str | None = None, benchmark: str | None = None, benchmark_release: str | None = None,
-                  confidence: str | None = None, review: str | None = None,
+                  confidence: str | None = None, review: str | None = None, reassessment: str | None = None,
                   sort_by: str = "default", sort_dir: str = "asc",
                   q: str | None = None, limit: int = Query(200, ge=1, le=5000), offset: int = Query(0, ge=0)) -> dict:
-    result = util.list_findings(ctx, scan_id=scan_id, limit=limit, offset=offset, host=host, status=status,
+    return util.list_findings(ctx, scan_id=scan_id, limit=limit, offset=offset, host=host, status=status,
                               severity=severity, source=source, asset_type=asset_type, q=q, category=category,
                               benchmark=benchmark, benchmark_release=benchmark_release,
-                              confidence=confidence, review=review,
+                              confidence=confidence, review=review, reassessment=reassessment,
                               sort_by=sort_by, sort_dir=sort_dir)
-    if result["findings"]:
-        reassessment = ReassessmentView(ctx, scan_id=scan_id)
-        annotations = reassessment.assess_many(result["findings"])
-        for finding, annotation in zip(result["findings"], annotations):
-            finding["reassessment"] = annotation
-        for finding in result["findings"]:
-            check_record(ctx, finding)
-    if scan_id:
-        _check_history(ctx, scan_id)
-    elif result["scan_id"] and not visible_record(ctx, ctx.store.load_scan_run(result["scan_id"]) or {}):
-        result["scan_id"] = None
-    return result
 
 
 @router.post("/findings/explain")

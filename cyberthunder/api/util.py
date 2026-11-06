@@ -17,7 +17,8 @@ from fastapi import Depends, Header, HTTPException
 
 from cyberthunder.api.deps import get_actor, get_ctx
 from cyberthunder.control.approvals import AGENT_ACTORS, Proposal
-from cyberthunder.findings.current import CurrentFindings, policy_block_reason
+from cyberthunder.findings.current import CurrentFindings, policy_block_reason, timestamp
+from cyberthunder.findings.reassessment import ReassessmentView
 from cyberthunder.findings.schema import (
     RE_CVE, RE_GROUP_ID, RE_STIG_ID, RE_STIG_RULE, Finding, Severity, Status, summarize,
 )
@@ -314,7 +315,8 @@ def _split(v: str | None) -> set[str]:
 MISSING = "__missing__"
 CATEGORIES = ("stig", "cve", "hunt", "other")
 SORT_FIELDS = {"default", "severity", "host", "asset_type", "category", "title", "rule_id", "rule_version", "source",
-               "collected_at", "benchmark", "benchmark_release", "confidence", "review"}
+               "collected_at", "observed_at", "benchmark", "benchmark_release", "confidence", "review"}
+REASSESSMENT_LABELS = {"not_reassessed": "Not reassessed", "no_known_gap": "No known gap", "unknown": "Unknown"}
 CONFIDENCE_ORDER = {"low": 1, "medium": 2, "high": 3}
 REVIEW_ORDER = {"unreviewed": 0, "needs_investigation": 1, "confirmed": 2, "false_positive": 3, "not_applicable": 4,
                 "risk_accepted": 5, "risk_expired": 6, "risk_reopened": 7, "risk_revoked": 8}
@@ -364,7 +366,7 @@ def _filter_values(value: str | None) -> set[str]:
     return {_facet_value(item) for item in rows[0]}
 
 
-def finding_facets(findings: list[Finding], assurance: dict | None = None) -> dict:
+def finding_facets(findings: list[Finding], assurance: dict | None = None, *, reassessments: dict | None = None) -> dict:
     """Options and counts from the complete view, independent of filters and pagination."""
     facets: dict[str, dict[str, dict]] = {name: {} for name in (
         "host", "asset_type", "source", "status", "severity", "category", "benchmark", "benchmark_release")}
@@ -387,6 +389,11 @@ def finding_facets(findings: list[Finding], assurance: dict | None = None) -> di
             for value in values:
                 entry = facets[name].setdefault(value, {"value": value, "label": value.replace("_", " ").capitalize(), "count": 0})
                 entry["count"] += 1
+    facets["reassessment"] = {}
+    for f in findings:
+        value = (reassessments or {}).get(f.id, {}).get("status", "unknown")
+        entry = facets["reassessment"].setdefault(value, {"value": value, "label": REASSESSMENT_LABELS[value], "count": 0})
+        entry["count"] += 1
     return {name: sorted(options.values(), key=lambda o: (o["value"] == MISSING, o["value"]))
             for name, options in facets.items()}
 
@@ -430,7 +437,8 @@ def filter_findings(findings: list[Finding], *, host: str | None = None, status:
     return out
 
 
-def sort_findings(findings: list[Finding], sort_by: str, sort_dir: str, *, assurance: dict | None = None) -> list[Finding]:
+def sort_findings(findings: list[Finding], sort_by: str, sort_dir: str, *, assurance: dict | None = None,
+                  reassessments: dict | None = None) -> list[Finding]:
     if sort_by not in SORT_FIELDS:
         raise ValueError(f"unknown sort field {sort_by!r}")
     if sort_dir not in {"asc", "desc"}:
@@ -454,6 +462,8 @@ def sort_findings(findings: list[Finding], sort_by: str, sort_dir: str, *, assur
             return tuple(sorted(finding_categories(f)))
         if sort_by == "collected_at":
             return _parse_ts(f.collected_at)
+        if sort_by == "observed_at":
+            return timestamp((reassessments or {}).get(f.id, {}).get("observation", {}).get("observed_at"))
         return (getattr(f, sort_by) or "").strip().casefold() or None
 
     # Missing/invalid values remain last in both directions; ties always use ascending finding id.
@@ -489,18 +499,66 @@ def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset:
     assurance = {f.id: finding_assurance(ctx, f, now=assessed_at, reviews=reviews) for f in all_f}
     confidence_filter = _filter_values(filters.pop("confidence", None))
     review_filter = _filter_values(filters.pop("review", None))
+    reassessment_filter = _filter_values(filters.pop("reassessment", None))
     if confidence_filter - {"high", "medium", "low", "unknown"}:
         raise ValueError("unknown confidence grade")
     if review_filter - set(REVIEW_ORDER):
         raise ValueError("unknown review disposition")
+    if reassessment_filter - set(REASSESSMENT_LABELS):
+        raise ValueError("unknown reassessment status")
     sel = filter_findings(now, **filters)
     sel = [f for f in sel if (not confidence_filter or assurance[f.id]["confidence"]["grade"] in confidence_filter)
            and (not review_filter or review_filter & review_filter_values(assurance[f.id]["review"]))]
-    sel = sort_findings(sel, sort_by, sort_dir, assurance=assurance)
-    page = sel[offset: offset + limit]
-    return {"findings": [finding_plus(ctx, scanned.get(f.id, f), assurance=assurance[f.id], lifecycle=lifecycle) for f in page], "total": len(sel), "scan_id": sid,
+    # Derive from immutable observations for the entire authorized view. Page decoration
+    # (explanation/fix/proposal lookups) is deliberately separate from query derivation.
+    history = ReassessmentView(ctx, scan_id=scan_id)
+    observations = [f.to_dict() for f in all_f]
+    annotations = history.assess_many(observations)
+    while True:
+        readable = [f for f in all_f if visible_record(ctx, f)]
+        if len(readable) != len(all_f):
+            if not readable:
+                raise PermissionError("finding is unavailable to this account")
+            # Off-page observations still influence summary and facets. Remove revoked
+            # contributors and rebuild the authorized view, not just its returned rows.
+            all_f = readable
+            allowed = {f.id for f in all_f}
+            now = [f for f in now if f.id in allowed]
+            sel = [f for f in sel if f.id in allowed]
+            observations = [f.to_dict() for f in all_f]
+            annotations = history.assess_many(observations)
+            continue
+        reassessments = {f.id: annotation for f, annotation in zip(all_f, annotations)}
+        selected = [f for f in sel if not reassessment_filter or reassessments[f.id]["status"] in reassessment_filter]
+        selected = sort_findings(selected, sort_by, sort_dir, assurance=assurance, reassessments=reassessments)
+        page = [finding_plus(ctx, scanned[f.id], assurance=assurance[f.id], lifecycle=lifecycle)
+                for f in selected[offset: offset + limit]]
+        # Storage reads in page decoration or baseline/history checks can race revocation.
+        # Re-derive filters, counts and page boundaries if readable history has changed.
+        if scan_id:
+            check_record(ctx, ctx.store.load_scan_run(scan_id) or {})
+        baseline = (ctx.store.load_scan_run(sid) or {}) if sid and not scan_id else None
+        if baseline is not None and not visible_record(ctx, baseline):
+            sid = None
+        checked = history.assess_many(observations)
+        for finding in page:
+            check_record(ctx, finding)
+        if checked != annotations:
+            annotations = checked
+            continue
+        if scan_id:
+            check_record(ctx, history.runs.get(scan_id, {}))
+        elif sid and not visible_record(ctx, baseline):
+            sid = None
+        if any(not visible_record(ctx, f) for f in all_f):
+            continue
+        break
+    for finding in page:
+        finding["reassessment"] = reassessments[finding["id"]]
+    return {"findings": page, "total": len(selected), "scan_id": sid,
             "view": "scan" if scan_id else "current", "summary": summarize(now), "limit": limit, "offset": offset,
-            "unfiltered_total": len(now), "facets": finding_facets(now, assurance), "sort_by": sort_by, "sort_dir": sort_dir}
+            "unfiltered_total": len(now), "facets": finding_facets(now, assurance, reassessments=reassessments),
+            "sort_by": sort_by, "sort_dir": sort_dir}
 
 
 # -- link / outbox fallbacks ----------------------------------------------------------------------

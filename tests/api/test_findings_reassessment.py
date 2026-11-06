@@ -70,6 +70,12 @@ def test_decisions_confidence_and_rollback_semantics_are_unchanged(client, ctx, 
     for field in ("scanner_status", "status", "review", "remediated", "rollback", "needs_rescan", "proposal", "evidence", "collected_at"):
         assert after[field] == before[field], field
     assert after["confidence"] == before["confidence"]
+    page = client.get(URL, params={"reassessment": "not_reassessed", "sort_by": "observed_at",
+                                   "status": after["status"], "review": after["review"]["disposition"]}).json()
+    assert page["total"] == page["summary"]["total"] == 1
+    assert page["summary"]["by_status"][after["status"]] == 1
+    for field in ("reassessment", "scanner_status", "status", "confidence", "review", "remediated", "rollback", "needs_rescan", "proposal"):
+        assert page["findings"][0][field] == after[field], field
     assert ctx.store.load_findings("base")[0].to_dict() == observations
     if lifecycle == "rolled_back":
         assert after["needs_rescan"] and after["status"] == "not_reviewed" and after["remediated"] is None

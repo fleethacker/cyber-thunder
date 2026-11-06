@@ -81,7 +81,7 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/scans/{id}` | → ScanRun |
 
 ## Findings
-| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&category&benchmark&benchmark_release&confidence&review&q&sort_by&sort_dir&limit=200&offset=0` → `{findings: [Finding+], total, unfiltered_total, scan_id, view, summary, facets, sort_by, sort_dir, limit, offset}`. Filters and sorting run before pagination; see query contract below |
+| GET | `/findings` | `?scan_id&host&status&severity&source&asset_type&category&benchmark&benchmark_release&confidence&review&reassessment&q&sort_by&sort_dir&limit=200&offset=0` → `{findings: [Finding+], total, unfiltered_total, scan_id, view, summary, facets, sort_by, sort_dir, limit, offset}`. Filters and sorting run before pagination; see query contract below |
 |---|---|---|
 | GET | `/findings/{id}` | → Finding+ |
 | GET | `/findings/{id}/review` | `?scan_id` optional historical view → summary and ordered review history |
@@ -115,15 +115,24 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
   `false_positive`, `not_applicable`, `needs_investigation`, `risk_accepted`, `risk_expired`,
   `risk_reopened` and `risk_revoked`. The review facet is independent of scanner status.
   Risk status facets can overlap the effective ordinary disposition and must not be summed as disjoint counts.
+- `reassessment` accepts `not_reassessed`, `no_known_gap`, `unknown`, with CSV OR semantics.
+  These are the exact read-only [reassessment annotations](FINDING_REASSESSMENT.md), derived for
+  every authorized observation before filtering/pagination. No known gap does not establish freshness,
+  complete coverage, or a current pass. Named history retains its whole-run read boundary and cutoff.
+  Revoked history during query/page reads rebuilds counts and selection; revoked off-page finding
+  authority removes that contributor and rebuilds summary/facets too. Revoked page authority fails closed.
 - `q` is a case-insensitive substring of title, machine/host ID, rule ID, rule version, group ID,
   reference identifiers (including CVEs and STIGs), source, benchmark, or release.
 - `sort_by` accepts `default`, `severity`, `host`, `asset_type`, `category`, `title`, `rule_id`,
-  `rule_version`, `source`, `collected_at`, `benchmark`, `benchmark_release`, `confidence`, `review`.
+  `rule_version`, `source`, `collected_at`, `observed_at`, `benchmark`, `benchmark_release`, `confidence`, `review`.
   `sort_dir` is `asc` (default) or `desc`. The omitted/default sort preserves severity descending,
   open first, host, then rule version or rule ID; it accepts only `asc` as its direction token.
-  Explicit sorts use case-insensitive text, numeric severity, UTC-normalized observation time,
+  Explicit sorts use case-insensitive text, numeric severity, UTC-normalized timestamps,
   or the alphabetically sorted tuple of category names. Ties use finding ID ascending in either
   direction. Missing/invalid values, including unknown severity, come last for explicit sorts.
+  `observed_at` sorts the helper's `reassessment.observation.observed_at` rather than `collected_at`;
+  unknown or timezone-free observation times remain last in either direction, with ID ties ascending.
+  `collected_at` keeps the existing collection-time behavior.
   Confidence orders Low/Medium/High with Unknown last in either direction; review orders Unreviewed,
   Needs investigation, Confirmed, False positive, Not applicable, Risk accepted.
   Expired/reopened/revoked risk filters retain their ordinary effective disposition for sorting.

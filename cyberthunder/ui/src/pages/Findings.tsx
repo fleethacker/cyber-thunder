@@ -12,7 +12,7 @@ import { ConfidenceBadge, ReviewBadge } from '../components/FindingAssurance';
 import { FindingReassessment } from '../components/FindingReassessment';
 import { CONFIDENCE_LABELS, REVIEW_FILTER_LABELS } from '../lib/findingAssurance';
 import { fmtTime, fmtZonedTime, statusColor } from '../lib/format';
-import { useLocalPref } from '../lib/hooks';
+import { FINDING_SORTS, REASSESSMENT_LABELS, useFindingsPref } from '../lib/findingsQuery';
 import { findingResultLabel, findingRowHandlers } from '../lib/findingRow';
 
 const PAGE = 200;
@@ -22,15 +22,6 @@ const LABELS: Record<string, string> = {
   open: 'Failed / open', not_a_finding: 'Passed', not_applicable: 'Not applicable',
   not_reviewed: 'Not assessed', error: 'Collection error', __missing__: 'Not recorded',
 };
-const SORTS: { value: FindingSort; label: string }[] = [
-  { value: 'default', label: 'Default priority' }, { value: 'severity', label: 'Severity' },
-  { value: 'host', label: 'Machine' }, { value: 'asset_type', label: 'Asset type' },
-  { value: 'category', label: 'Category' }, { value: 'title', label: 'Title' },
-  { value: 'rule_id', label: 'Rule ID' }, { value: 'rule_version', label: 'STIG ID / rule version' }, { value: 'source', label: 'Source' },
-  { value: 'collected_at', label: 'Observation time' }, { value: 'benchmark', label: 'Benchmark' },
-  { value: 'benchmark_release', label: 'Release' },
-  { value: 'confidence', label: 'Evidence confidence' }, { value: 'review', label: 'Human review' },
-];
 
 // Quote CSV values so names such as "Release 1, January" remain a single selection.
 const csv = (values: string[]) => values.map((v) => `"${v.replace(/"/g, '""')}"`).join(',');
@@ -40,20 +31,21 @@ function Yes({ v, tip }: { v: boolean; tip: string }) {
 }
 
 export default function Findings() {
-  const [q, setQ] = useLocalPref('ct.f.q', '');
+  const [q, setQ] = useFindingsPref('ct.f.q', '');
   const [dq] = useDebouncedValue(q, 300);
-  const [status, setStatus] = useLocalPref<string[]>('ct.f.status', ['open']);
-  const [severity, setSeverity] = useLocalPref<string[]>('ct.f.sev', []);
-  const [source, setSource] = useLocalPref<string[]>('ct.f.src', []);
-  const [assetType, setAssetType] = useLocalPref<string[]>('ct.f.type', []);
-  const [host, setHost] = useLocalPref<string[]>('ct.f.host', []);
-  const [category, setCategory] = useLocalPref<string[]>('ct.f.category', []);
-  const [benchmark, setBenchmark] = useLocalPref<string[]>('ct.f.benchmark', []);
-  const [release, setRelease] = useLocalPref<string[]>('ct.f.release', []);
-  const [confidence, setConfidence] = useLocalPref<string[]>('ct.f.confidence', []);
-  const [review, setReview] = useLocalPref<string[]>('ct.f.review', []);
-  const [sortBy, setSortBy] = useLocalPref<FindingSort>('ct.f.sort', 'default');
-  const [sortDir, setSortDir] = useLocalPref<SortDirection>('ct.f.direction', 'asc');
+  const [status, setStatus] = useFindingsPref<string[]>('ct.f.status', ['open']);
+  const [severity, setSeverity] = useFindingsPref<string[]>('ct.f.sev', []);
+  const [source, setSource] = useFindingsPref<string[]>('ct.f.src', []);
+  const [assetType, setAssetType] = useFindingsPref<string[]>('ct.f.type', []);
+  const [host, setHost] = useFindingsPref<string[]>('ct.f.host', []);
+  const [category, setCategory] = useFindingsPref<string[]>('ct.f.category', []);
+  const [benchmark, setBenchmark] = useFindingsPref<string[]>('ct.f.benchmark', []);
+  const [release, setRelease] = useFindingsPref<string[]>('ct.f.release', []);
+  const [confidence, setConfidence] = useFindingsPref<string[]>('ct.f.confidence', []);
+  const [review, setReview] = useFindingsPref<string[]>('ct.f.review', []);
+  const [reassessment, setReassessment] = useFindingsPref<string[]>('ct.f.reassessment', []);
+  const [sortBy, setSortBy] = useFindingsPref<FindingSort>('ct.f.sort', 'default');
+  const [sortDir, setSortDir] = useFindingsPref<SortDirection>('ct.f.direction', 'asc');
   const [page, setPage] = useState(1);
   const [drawer, setDrawer] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -65,12 +57,15 @@ export default function Findings() {
   // Capability comes from server facets, including on an empty findings view.
   const confidenceAvailable = data?.facets?.confidence !== undefined;
   const reviewAvailable = data?.facets?.review !== undefined;
-  const sortAvailable = (sortBy !== 'confidence' || confidenceAvailable) && (sortBy !== 'review' || reviewAvailable);
+  const reassessmentAvailable = data?.facets?.reassessment !== undefined;
+  const sortAvailable = (sortBy !== 'confidence' || confidenceAvailable) && (sortBy !== 'review' || reviewAvailable)
+    && (sortBy !== 'observed_at' || reassessmentAvailable);
   const effectiveSort = sortAvailable ? sortBy : 'default';
   const query: FindingsQuery = {
     q: dq, status: csv(status), severity: csv(severity), source: csv(source), asset_type: csv(assetType),
     host: csv(host), category: csv(category), benchmark: csv(benchmark), benchmark_release: csv(release),
     confidence: confidenceAvailable ? csv(confidence) : undefined, review: reviewAvailable ? csv(review) : undefined,
+    reassessment: reassessmentAvailable ? csv(reassessment) : undefined,
     sort_by: effectiveSort, sort_dir: effectiveSort === 'default' ? 'asc' : sortDir, limit: PAGE, offset: (page - 1) * PAGE,
   };
   const queryKey = JSON.stringify(query);
@@ -96,6 +91,7 @@ export default function Findings() {
     { key: 'severity', label: 'Severity', value: severity, set: setSeverity },
     { key: 'confidence', label: 'Evidence confidence', value: confidence, set: setConfidence },
     { key: 'review', label: 'Human review', value: review, set: setReview },
+    { key: 'reassessment', label: 'Reassessment', value: reassessment, set: setReassessment },
     { key: 'host', label: 'Machine', value: host, set: setHost },
     { key: 'asset_type', label: 'Asset type', value: assetType, set: setAssetType },
     { key: 'source', label: 'Source', value: source, set: setSource },
@@ -103,8 +99,10 @@ export default function Findings() {
     { key: 'benchmark_release', label: 'Release', value: release, set: setRelease },
   ];
   const optionLabel = (key: FindingFacet, value: string, fallback: string) => {
-    const labels: Record<string, string> = key === 'confidence' ? CONFIDENCE_LABELS : key === 'review' ? REVIEW_FILTER_LABELS : LABELS;
-    return ['category', 'severity', 'status', 'confidence', 'review'].includes(key) || value === '__missing__' ? labels[value] ?? fallback : fallback;
+    const labels: Record<string, string> = key === 'confidence' ? CONFIDENCE_LABELS : key === 'review' ? REVIEW_FILTER_LABELS
+      : key === 'reassessment' ? REASSESSMENT_LABELS : LABELS;
+    return (['category', 'severity', 'status', 'confidence', 'review', 'reassessment'].includes(key) || value === '__missing__')
+      && Object.prototype.hasOwnProperty.call(labels, value) ? labels[value] : fallback;
   };
   const options = (key: FindingFacet, selected: string[]) => {
     const result = (data?.facets?.[key] ?? []).map((o) => ({
@@ -124,7 +122,7 @@ export default function Findings() {
     setPage(1);
   };
   const reset = () => { quickView('open'); setSortBy('default'); setSortDir('asc'); };
-  const activeQuickView = !q && !severity.length && !source.length && !assetType.length && !host.length && !benchmark.length && !release.length && !confidence.length && !review.length
+  const activeQuickView = !q && !severity.length && !source.length && !assetType.length && !host.length && !benchmark.length && !release.length && !confidence.length && !review.length && !reassessment.length
     ? (!status.length && !category.length ? 'all' : status.length === 1 && status[0] === 'open'
       ? (!category.length ? 'open' : category.length === 1 ? category[0] : '') : '') : '';
   const explainAll = async () => {
@@ -164,14 +162,16 @@ export default function Findings() {
             rightSection={q ? <ActionIcon variant="subtle" aria-label="Clear search" onClick={() => { setQ(''); setPage(1); }}><IconX size={16} /></ActionIcon> : undefined} />
           <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="sm">
             {axes.map((a) => <MultiSelect key={a.key} label={a.label} data={options(a.key, a.value)} value={a.value}
-              disabled={(a.key === 'confidence' && !confidenceAvailable) || (a.key === 'review' && !reviewAvailable)}
+              disabled={(a.key === 'confidence' && !confidenceAvailable) || (a.key === 'review' && !reviewAvailable) || (a.key === 'reassessment' && !reassessmentAvailable)}
               onChange={(value) => { setPage(1); a.set(value); }} searchable clearable placeholder={a.value.length ? undefined : 'All'} nothingFoundMessage="No matching options" />)}
           </SimpleGrid>
           {data && (!confidenceAvailable || !reviewAvailable) && <Text size="sm" c="dimmed">This server has not reported all confidence and review features. Missing values appear as Unknown or Unreviewed. Unavailable filters and sorts are paused until the server is upgraded; saved preferences are retained.</Text>}
+          {data && !reassessmentAvailable && <Text size="sm" c="dimmed">Reassessment filtering and observation-time sorting are unavailable on this server. Saved preferences are retained.</Text>}
+          <Text size="sm" c="dimmed">Not reassessed means a later attempt did not reassess the observation. No known gap does not establish freshness, complete coverage or a current pass. Unknown means the available history cannot establish reassessment. Observation time uses the recorded evidence time; collection time records when it was collected.</Text>
           <Group justify="space-between" align="flex-end">
             <Text size="xs" c="dimmed" maw={620}>Option counts cover the full view. Categories can overlap. Current result includes verified fixes. Original scanner observations, evidence confidence and human review are shown separately.</Text>
             <Group gap="sm">
-              <Select label="Sort by" data={SORTS.map((s) => ({ ...s, disabled: (s.value === 'confidence' && !confidenceAvailable) || (s.value === 'review' && !reviewAvailable) }))} value={sortBy} allowDeselect={false} w={190}
+              <Select label="Sort by" data={FINDING_SORTS.map((s) => ({ ...s, disabled: (s.value === 'confidence' && !confidenceAvailable) || (s.value === 'review' && !reviewAvailable) || (s.value === 'observed_at' && !reassessmentAvailable) }))} value={sortBy} allowDeselect={false} w={190}
                 onChange={(v) => { setSortBy((v ?? 'default') as FindingSort); if (v === 'default') setSortDir('asc'); setPage(1); }} />
               <Select label="Direction" data={[{ value: 'asc', label: 'Ascending' }, { value: 'desc', label: 'Descending' }]} value={sortDir}
                 disabled={sortBy === 'default'} allowDeselect={false} w={150} onChange={(v) => { setSortDir((v ?? 'asc') as SortDirection); setPage(1); }} />

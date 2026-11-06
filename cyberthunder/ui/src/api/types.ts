@@ -222,9 +222,9 @@ export interface FindingsPage {
 }
 
 export type FindingCategory = 'stig' | 'cve' | 'hunt' | 'other';
-export type FindingFacet = 'host' | 'asset_type' | 'source' | 'status' | 'severity' | 'category' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review';
+export type FindingFacet = 'host' | 'asset_type' | 'source' | 'status' | 'severity' | 'category' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review' | 'reassessment';
 export interface FindingFacetOption { value: string; label: string; count: number }
-export type FindingSort = 'default' | 'severity' | 'host' | 'asset_type' | 'category' | 'title' | 'rule_id' | 'rule_version' | 'source' | 'collected_at' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review';
+export type FindingSort = 'default' | 'severity' | 'host' | 'asset_type' | 'category' | 'title' | 'rule_id' | 'rule_version' | 'source' | 'collected_at' | 'observed_at' | 'benchmark' | 'benchmark_release' | 'confidence' | 'review';
 export type SortDirection = 'asc' | 'desc';
 export type FindingsQuery = Partial<Record<FindingFacet | 'scan_id' | 'q', string>> & {
   sort_by?: FindingSort; sort_dir?: SortDirection; limit?: number; offset?: number;
