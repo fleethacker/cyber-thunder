@@ -32,7 +32,17 @@ const findingSummary = finding => ({ status: finding.status, scanner_status: fin
 const observation = ({ review, confidence, fix, explanation, remediated, rollback, needs_rescan,
   proposal, status, scanner_status, ...raw }) => ({ ...raw, status: scanner_status });
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const proposalRecord = ({ finding, policy, ...record }) => record;
+const proposalRecord = ({ finding, policy, maintenance, ...record }) => {
+  if (maintenance !== undefined) {
+    // This projection is recalculated on each read. Keep its decision fields
+    // in the comparison, but not the observation time of that read.
+    const { checked_at, ...decision } = maintenance;
+    assert.equal(typeof checked_at, 'string');
+    assert.ok(Number.isFinite(Date.parse(checked_at)));
+    return { ...record, maintenance: decision };
+  }
+  return record;
+};
 async function proposalRecords() {
   return (await get('proposals')).proposals.map(proposalRecord).sort((a, b) => a.id.localeCompare(b.id));
 }
