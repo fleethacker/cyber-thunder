@@ -79,8 +79,13 @@ def _read_available(stream):
                 return b""
             raise ReadFailure("invalid_output")
         return stream.read(min(4096, available.value)) if available.value else None
-    import select
-    return stream.read(4096) if select.select([stream], [], [], 0)[0] else None
+    import selectors
+    # The platform selector handles descriptors above select's fixed ceiling.
+    # Close its own kernel resource after every nonblocking readiness check.
+    with selectors.DefaultSelector() as readiness:
+        readiness.register(stream, selectors.EVENT_READ)
+        ready = readiness.select(timeout=0)
+    return stream.read(4096) if ready else None
 
 
 def _process(argv, timeout, *, cwd=None, env=None, guard=lambda: None):

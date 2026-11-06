@@ -19,7 +19,7 @@ from cyberthunder.transport.winrm import WinRMTransport
 from .test_dependencies import ACTOR, HOST, SYSTEMD, seed, wire
 
 
-def test_subprocess_bounds_and_unicode():
+def test_subprocess_bounds_and_unicode(large_pipe_descriptors):
     result = io._process([sys.executable, "-B", "-c", "print('operational')"], 3)
     assert result.exit_code == 0 and result.stdout.strip() == "operational"
     with pytest.raises(io.ReadFailure, match="output_limit"):
