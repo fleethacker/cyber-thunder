@@ -72,4 +72,5 @@ def serve(host: str | None = None, port: int | None = None, ctx: AppContext | No
     bind = host or ctx.settings.host
     validate_bind(ctx.settings, bind)
     uvicorn.run(create_app(ctx), host=bind, port=port or ctx.settings.port, log_level="info",
-                ssl_certfile=ctx.settings.tls_cert, ssl_keyfile=ctx.settings.tls_key, proxy_headers=False)
+                ssl_certfile=ctx.settings.tls_cert, ssl_keyfile=ctx.settings.tls_key, proxy_headers=False,
+                workers=1)
