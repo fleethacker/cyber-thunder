@@ -27,7 +27,7 @@ def policy_file(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": 1, "entries": [{"issuer": "https://id.example", "subject": "alice",
                     "node_actions": ["read"], "grants": [{"actions": sorted(access.ACTIONS - access.NODE_ONLY_ACTIONS),
-                                                           "target_ids": ["host-a"]}]}]}),
+                                                           "target_ids": ["host-a"], "environments": ["default"]}]}]}),
                     encoding="utf-8")
     if os.name == "posix":
         path.chmod(0o600)
