@@ -107,6 +107,31 @@ before proposing. This mode uses case-folded typed names and records
 Persisted protected records cannot bypass the rule by turning that setting off,
 and development approvals cannot be upgraded into verified decisions.
 
+## UI approval review
+
+The decision queue and review dialog display the server's required count, distinct
+recorded human approvals, remaining approvals and proposal state. A successful
+approval response can leave the proposal proposed; it stays in the queue without
+an Apply action. Selected reviews advance after a recorded partial vote while
+leaving unfinished proposals selected. Only a returned approved state is presented
+as approved. Existing proposal audit events refresh other reviewers' changes.
+
+Public session issuer/subject metadata explains proposer and duplicate refusals;
+existing capability checks still apply, and the server remains the authority.
+Expandable provenance shows the original proposer, each approver, decision time,
+assessment acknowledgement and binding digests. It does not render session tokens
+or raw identity objects. Explicit development rules are labelled unverified;
+ordinary development retains its single-approval workflow.
+
+After the first vote, later reviewers must acknowledge the exact attached receipt
+or explicitly repeat the recorded no-assessment choice with their own reason.
+Protected approved proposals expose the receipt without a single-person refresh.
+Expired or changed bound assessments require a new proposal and fresh approvals.
+The UI consumes the existing proposal fields and public `/auth/status` metadata;
+it sends no count, severity or identity override. Source tests cover partial/final
+decisions, identity refusals, permission loss, receipt binding and legacy behavior.
+The combined application build and multi-person enclave acceptance remain separate.
+
 ## Acceptance and limits
 
 Focused tests cover JSON and SQLite document backends, direct gate and engine

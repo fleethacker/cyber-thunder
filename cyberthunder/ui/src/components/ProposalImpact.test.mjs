@@ -2,6 +2,7 @@ import { permissionFixture } from './permissionTestSupport.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { evaluate, helpers, mount, proposal, ui } from '../lib/rollbackTestSupport.mjs';
+import { approvalFixture, protectedProposal, vote, session } from '../lib/approvalTestSupport.mjs';
 
 async function setup(t, state, flags = {}) {
   const calls = [];
@@ -12,6 +13,7 @@ async function setup(t, state, flags = {}) {
     '@mantine/core': ui, '../lib/format': { fmtAgo: () => 'earlier', fmtZonedTime: (value) => value, label: (value) => value },
     '../lib/proposalHistory': helpers, '../lib/findingAssurance': { isSuppressed: () => false },
     './PermissionGate': permissions.imports, './ApplyTimeline': ui, './CitationChips': ui, './ProposalDiff': ui, './ProposalPlan': ui, './FixPanel': ui, './common': ui,
+    './ApprovalProgress': ui, '../lib/proposalApprovals': approvalFixture(flags.identity),
   }).ProposalCard, { p: proposal(state, 'change'), actions, ...flags });
   t.after(() => panel.unmount());
   await panel.settle();
@@ -47,4 +49,28 @@ test('active impact controls respect action and busy gates, while historical rec
   await history.click('View impact receipt');
   assert.deepEqual(history.calls, [['impact', 'change', true]]);
   assert.ok(!history.nodes().some((node) => node.type === 'Button' && ['Approve', 'Apply', 'Review impact before apply', 'Assess impact'].includes(node.props.children)));
+});
+
+test('partial proposal has no apply action and proposer or duplicate cannot invoke approve', async (t) => {
+  const p = protectedProposal({ approvals: [vote()], assessment: vote().assessment });
+  for (const identity of [session(), session('proposer')]) {
+    const panel = await setup(t, 'proposed', { p, identity });
+    assert.equal(panel.button('Approve').props.disabled, true);
+    assert.match(panel.button('Approve').props.reason, /already recorded|You proposed/);
+    panel.button('Approve').props.onClick(); await panel.settle();
+    assert.deepEqual(panel.calls, []);
+    assert.ok(!panel.nodes().some(n => n.type === 'Button' && n.props.children === 'Apply'));
+  }
+  const next = await setup(t, 'proposed', { p, identity: session('reviewer-2') });
+  await next.click('Approve');
+  assert.deepEqual(next.calls, [['approve', 'change']]);
+});
+
+test('protected approved card keeps apply separate and offers only the bound impact receipt', async (t) => {
+  const p = protectedProposal({ state: 'approved', approvals: [vote(), vote('reviewer-2')], assessment: vote().assessment });
+  const panel = await setup(t, 'approved', { p, identity: session('reviewer-2') });
+  await panel.click('View impact receipt');
+  assert.deepEqual(panel.calls, [['impact', 'change', true]]);
+  await panel.click('Apply');
+  assert.deepEqual(panel.calls.at(-1), ['apply', 'change']);
 });

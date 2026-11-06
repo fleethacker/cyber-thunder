@@ -18,6 +18,7 @@ import { RollbackConfirmation } from '../components/RollbackConfirmation';
 import { actorProblem } from '../components/ActorChip';
 import { ageSeconds, severityRank } from '../lib/format';
 import { isSuppressed } from '../lib/findingAssurance';
+import { approvalBlockReason, approvalReceiptOnly, approvalResult } from '../lib/proposalApprovals';
 import { useAsync, useInterval, useLocalPref } from '../lib/hooks';
 import { useAppState, useAuditListener } from '../state/AppState';
 import { canRequestRollback, HISTORY_STATES, matchesProposalDates, matchesProposalSearch, newestProposalFirst, QUEUE_STATES } from '../lib/proposalHistory';
@@ -26,7 +27,7 @@ const SHOWN_AFTER_ACTION = ['applied', 'verified', 'failed', 'rolled_back', 'den
 
 type Sort = 'severity' | 'host' | 'age';
 const impactPermission = (p: ProposalPlus, inspectOnly: boolean): PermissionRequirement =>
-  inspectOnly ? 'plan' : [p.state === 'approved' ? 'review' : 'approve', 'plan'];
+  approvalReceiptOnly(p) ? 'read' : inspectOnly ? 'plan' : [p.state === 'approved' ? 'review' : 'approve', 'plan'];
 
 type ImpactSession = { proposal: ProposalPlus; inspectOnly: boolean; batch: boolean; saved?: boolean };
 
@@ -50,7 +51,7 @@ export default function Decisions() {
   const [rollbackError, setRollbackError] = useState<string | null>(null);
   const [impact, setImpact] = useState<ImpactSession | null>(null);
   const impactRef = useRef<ImpactSession | null>(null);
-  const [reviewBatch, setReviewBatch] = useState<{ ids: string[]; completed: number } | null>(null);
+  const [reviewBatch, setReviewBatch] = useState<{ ids: string[]; completed: number; approved: number } | null>(null);
   const [watchingRollback, setWatchingRollback] = useState<Set<string>>(new Set());
   const rollbackRequests = useRef(new Set<string>());
   const [pollErrors, setPollErrors] = useState<Record<string, string>>({});
@@ -185,12 +186,16 @@ export default function Decisions() {
     if (impactRef.current || inFlight.current.has(p.id) || rollbackFor || denyFor || drawer) return;
     const historical = !['proposed', 'approved'].includes(p.state);
     if (!historical && !can(impactPermission(p, inspectOnly))) { setActionError(permissionReason(impactPermission(p, inspectOnly))); return; }
-    if (!historical && actionBlockRef.current) { setActionError(actionBlockRef.current); return; }
-    const session = { proposal: p, inspectOnly: historical || inspectOnly, batch };
+    if (!historical && !approvalReceiptOnly(p) && actionBlockRef.current) { setActionError(actionBlockRef.current); return; }
+    if (!inspectOnly && p.state === 'proposed') {
+      const reason = approvalBlockReason(p, actor);
+      if (reason) { setActionError(reason); return; }
+    }
+    const session = { proposal: p, inspectOnly: historical || inspectOnly || approvalReceiptOnly(p), batch };
     impactRef.current = session;
     setImpact(session);
     setActionError(null);
-  }, [rollbackFor, denyFor, drawer]);
+  }, [rollbackFor, denyFor, drawer, actor]);
 
   const closeImpact = () => { impactRef.current = null; setImpact(null); };
   const recordImpact = (p: ProposalPlus) => {
@@ -199,10 +204,12 @@ export default function Decisions() {
     session.saved = true;
     upsert(p);
     setTouched((current) => new Set(current).add(p.id));
-    if (!session.inspectOnly && session.proposal.state === 'proposed' && p.state === 'approved') {
-      setSelected((current) => { const next = new Set(current); next.delete(p.id); return next; });
-      if (session.batch) setReviewBatch((current) => current && current.ids[current.completed] === p.id
-        ? { ...current, completed: current.completed + 1 } : current);
+    if (!session.inspectOnly && session.proposal.state === 'proposed') {
+      const result = approvalResult(session.proposal, p);
+      notifications.show({ color: result.approved ? 'green' : result.recorded ? 'blue' : 'yellow', message: result.message });
+      if (result.approved) setSelected((current) => { const next = new Set(current); next.delete(p.id); return next; });
+      if (session.batch && result.recorded) setReviewBatch((current) => current && current.ids[current.completed] === p.id
+        ? { ...current, completed: current.completed + 1, approved: current.approved + Number(result.approved) } : current);
     }
   };
 
@@ -285,7 +292,9 @@ export default function Decisions() {
     if (actionBlockRef.current) { setActionError(actionBlockRef.current); return; }
     const proposals = visible.filter((p) => selected.has(p.id) && p.state === 'proposed');
     if (!proposals.length || proposals.some((p) => inFlight.current.has(p.id))) return;
-    setReviewBatch({ ids: proposals.map((p) => p.id), completed: 0 });
+    const blocked = proposals.map(p => approvalBlockReason(p, actor)).find(Boolean);
+    if (blocked) { setActionError(blocked); return; }
+    setReviewBatch({ ids: proposals.map((p) => p.id), completed: 0, approved: 0 });
     openImpact(proposals[0], false, true);
   };
   const continueReviews = () => {
@@ -374,11 +383,11 @@ export default function Decisions() {
         <Stack gap="xs"><Text size="sm">{requested ? `${requested.id} is shown below regardless of saved filters. Its current state is ${requested.state.replace(/_/g, ' ')}.` : list.loading ? 'Loading the linked proposal…' : list.error ? 'The linked proposal could not be checked. Refresh to retry.' : `Proposal ${requestedId} was not found on this node.`}</Text>
           <Group><Button variant="light" size="xs" onClick={clearRequested}>Clear selected proposal</Button></Group></Stack>
       </Alert>}
-      {requested && <ProposalCard p={requested} actions={actions} busy={busy.has(requested.id) || watchingRollback.has(requested.id)} actionsDisabled={!!actionBlock || !!impact} focused />}
+      {requested && <ProposalCard p={requested} actor={actor} actions={actions} busy={busy.has(requested.id) || watchingRollback.has(requested.id)} actionsDisabled={!!actionBlock || !!impact} focused />}
 
       {reviewBatch && <Alert color="blue" title="Selected proposal reviews" role="status">
         <Stack gap="xs">
-          <Text size="sm">{reviewBatch.completed} of {reviewBatch.ids.length} approved. Each proposal needs its own review and decision. Unprocessed proposals remain selected.</Text>
+          <Text size="sm">{reviewBatch.completed} of {reviewBatch.ids.length} reviews recorded; {reviewBatch.approved} proposals approved. Proposals needing another person's approval remain in the queue. Unfinished proposals remain selected.</Text>
           {reviewBatch.completed < reviewBatch.ids.length && <Text size="sm">Review {reviewBatch.completed + 1} of {reviewBatch.ids.length}: {reviewBatch.ids[reviewBatch.completed]}</Text>}
           <Group>
             {reviewBatch.completed < reviewBatch.ids.length && <PermissionButton action={['approve', 'plan']} variant="light" disabled={!!impact || !!actionBlock} onClick={continueReviews}>Continue selected reviews</PermissionButton>}
@@ -427,6 +436,7 @@ export default function Decisions() {
             visible.map((p, i) => (
               <div key={p.id} onMouseDown={() => setFocus(i)}>
                 <ProposalCard
+                  actor={actor}
                   p={p}
                   actions={actions}
                   busy={busy.has(p.id) || watchingRollback.has(p.id)}

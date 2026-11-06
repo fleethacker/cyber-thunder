@@ -41,6 +41,7 @@ const hooksFor = (...responses) => {
   return { useAsync: () => asyncState(responses[i++]), useInterval() {}, useLocalPref: (_key, value) => React.useState(value) };
 };
 const cards = source('./ProposalCard.tsx', {
+  './ApprovalProgress': source('./ApprovalProgress.tsx'),
   '../lib/proposalHistory': helpers, '../lib/findingAssurance': assurance,
   './ApplyTimeline': { ApplyTimeline: empty }, './CitationChips': { CitationChips: empty },
   './ProposalDiff': { DiffButton: () => h(Mantine.Button, {}, 'Diff') },

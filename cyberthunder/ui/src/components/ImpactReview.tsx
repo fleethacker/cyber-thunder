@@ -1,11 +1,14 @@
 import { Alert, Badge, Button, Checkbox, Group, Modal, Stack, Text, Textarea } from '@mantine/core';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, errorText } from '../api/client';
 import type { ImpactReceipt, ProposalPlus } from '../api/types';
 import { fmtZonedTime, label } from '../lib/format';
+import { approvalBlockReason, approvalReceiptOnly, fixedApprovalAssessment } from '../lib/proposalApprovals';
 import { useAppState } from '../state/AppState';
 import { actorProblem } from './ActorChip';
 import { Collapsible, JsonView } from './common';
+import { ApprovalProgress } from './ApprovalProgress';
+import { usePermissions } from './PermissionGate';
 
 function Items({ title, items }: { title: string; items: string[] }) {
   if (!items.length) return null;
@@ -14,7 +17,7 @@ function Items({ title, items }: { title: string; items: string[] }) {
   </Stack></Stack>;
 }
 
-export function ImpactDetails({ receipt, historical = false }: { receipt: ImpactReceipt; historical?: boolean }) {
+export function ImpactDetails({ receipt, historical = false, fixed = false }: { receipt: ImpactReceipt; historical?: boolean; fixed?: boolean }) {
   const a = receipt.assessment;
   return <Stack gap="sm">
     <Group><Badge color={{ unknown: 'gray', low: 'blue', medium: 'orange', high: 'red', critical: 'red' }[a.risk_level]}>
@@ -30,7 +33,8 @@ export function ImpactDetails({ receipt, historical = false }: { receipt: Impact
     {receipt.freshness.stale && <Alert color="orange" title={historical ? 'Historical assessment' : 'Assessment needs refreshing'}>
       {receipt.freshness.reasons.map(label).join('; ')}. {historical
         ? 'This receipt records the earlier decision and does not describe current readiness.'
-        : 'Collect another assessment before attaching it to a decision.'}
+        : fixed ? 'Create a new proposal and collect fresh approvals for a new assessment.'
+          : 'Collect another assessment before attaching it to a decision.'}
     </Alert>}
     <Alert color="yellow" title="Limited evidence">
       This assessment is advisory. It does not prove the change will succeed. Unobserved dependencies and later target changes can affect the outcome.
@@ -55,6 +59,8 @@ export function ImpactReview({ proposal, onClose, onChanged, inspectOnly = false
   proposal: ProposalPlus | null; onClose: () => void; onChanged: (p: ProposalPlus) => void; inspectOnly?: boolean;
 }) {
   const { actor, status } = useAppState();
+  const permission = usePermissions();
+  const generation = useRef(0);
   const [receipt, setReceipt] = useState<ImpactReceipt | null>(null);
   const [loading, setLoading] = useState(false);
   const [assessing, setAssessing] = useState(false);
@@ -66,33 +72,42 @@ export function ImpactReview({ proposal, onClose, onChanged, inspectOnly = false
   const [note, setNote] = useState('');
   const id = proposal?.id;
   const historical = !!proposal && !['proposed', 'approved'].includes(proposal.state);
-  const selectedReceiptId = historical ? proposal?.assessment?.id : null;
+  const receiptOnly = !!proposal && approvalReceiptOnly(proposal);
+  const fixedAssessment = !!proposal && (fixedApprovalAssessment(proposal) || receiptOnly);
+  const readOnly = inspectOnly || receiptOnly || historical;
+  const selectedReceiptId = historical || fixedAssessment ? proposal?.assessment?.id : null;
   useEffect(() => {
+    generation.current++;
     let live = true;
     setReceipt(null); setError(null); setAck(false); setBypass(false); setNote(''); setStoredOnly(false);
     if (!id) return;
-    if (historical && !selectedReceiptId) { setLoading(false); return; }
+    if ((historical || fixedAssessment) && !selectedReceiptId) { setLoading(false); return; }
     setLoading(true);
     const request = selectedReceiptId ? api.impactReceipt(selectedReceiptId).then(assessment => ({ assessment })) : api.latestImpact(id);
     void request.then(r => { if (live) setReceipt(r.assessment); })
       .catch(e => { if (live) setError(errorText(e)); }).finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [id, historical, selectedReceiptId]);
+  }, [id, historical, fixedAssessment, selectedReceiptId, proposal?.state]);
   const problem = actorProblem(actor) || (!status ? 'Node status is unavailable.' : status.kill.engaged ? 'The kill switch is engaged.' : null);
   const busy = loading || assessing || saving;
   const isApproved = proposal?.state === 'approved';
-  const fresh = !!receipt && !receipt.freshness.stale && Date.parse(receipt.valid_until) > Date.now();
-  const canSave = !problem && !busy && note.trim().length >= 10 &&
-    ((bypass && !isApproved) || (!!receipt && fresh && ack));
+  const saveActions = [isApproved ? 'review' : 'approve', 'plan'];
+  const approvalProblem = proposal?.state === 'proposed' ? approvalBlockReason(proposal, actor) : null;
+  const fresh = !!receipt && receipt.proposal_id === id && (!selectedReceiptId || receipt.id === selectedReceiptId)
+    && !receipt.freshness.stale && Date.parse(receipt.valid_until) > Date.now();
+  const mayBypass = !isApproved && (!fixedAssessment || proposal?.assessment?.status === 'not_assessed');
+  const canSave = !readOnly && !problem && !approvalProblem && permission.can(saveActions) && !busy && note.trim().length >= 10 &&
+    ((bypass && mayBypass) || (!!receipt && fresh && ack));
   async function assess() {
-    if (!proposal || problem || busy) return;
+    if (!proposal || problem || busy || historical || fixedAssessment || !permission.can('plan')) return;
+    const version = generation.current;
     setAssessing(true); setError(null); setAck(false); setBypass(false);
-    try { setReceipt(await api.assessImpact(proposal.id, !storedOnly)); }
+    try { const result = await api.assessImpact(proposal.id, !storedOnly); if (version === generation.current) setReceipt(result); }
     catch (e) { setError(errorText(e)); }
     finally { setAssessing(false); }
   }
   async function save() {
-    if (!proposal || !canSave) return;
+    if (!proposal || !canSave || !permission.can(saveActions) || (!isApproved && approvalBlockReason(proposal, actor))) return;
     setSaving(true); setError(null);
     try {
       const result = isApproved ? await api.reviewImpact(proposal.id, receipt!.id, note.trim())
@@ -102,30 +117,38 @@ export function ImpactReview({ proposal, onClose, onChanged, inspectOnly = false
     finally { setSaving(false); }
   }
   return <Modal opened={!!proposal} onClose={() => { if (!busy) onClose(); }} size="xl"
-    closeOnClickOutside={!busy} closeOnEscape={!busy} title={inspectOnly ? 'Change impact' : isApproved ? 'Review refreshed assessment' : 'Review before approval'}>
+    closeOnClickOutside={!busy} closeOnEscape={!busy} title={inspectOnly || receiptOnly ? 'Change impact' : isApproved ? 'Review refreshed assessment' : 'Review before approval'}>
     <Stack>
       <Text fw={600}>{proposal?.title} · {proposal?.target?.name ?? proposal?.host}</Text>
+      {proposal && <ApprovalProgress proposal={proposal} actor={actor} />}
       {problem && <Alert color="orange">{problem}</Alert>}
+      {!readOnly && !permission.can(saveActions) && <Alert color="orange">{permission.reason(saveActions)}</Alert>}
       {error && <Alert color="red">{error}</Alert>}
       {loading && <Text>Loading saved assessment...</Text>}
-      {receipt ? <ImpactDetails receipt={receipt} historical={historical} /> : !loading && <Alert color="yellow" title={error || selectedReceiptId ? 'Assessment unavailable' : 'Not assessed'}>
+      {receipt ? <ImpactDetails receipt={receipt} historical={historical} fixed={fixedAssessment} /> : !loading && <Alert color="yellow" title={error || selectedReceiptId ? 'Assessment unavailable' : 'Not assessed'}>
         {selectedReceiptId ? 'This decision has an attached assessment, but its receipt could not be displayed.'
           : error ? 'The saved assessment could not be checked. Its status is unknown.'
           : historical ? 'No dependency assessment was attached to this earlier decision.' : 'Dependency and disruption assessment has not been recorded for this proposal.'}
       </Alert>}
+      {fixedAssessment && <Alert color="blue" title="Assessment bound to recorded approvals">
+        {proposal?.assessment?.status === 'reviewed'
+          ? 'Every approver must review this exact attached receipt. A missing, stale or changed assessment requires a new proposal and fresh approvals.'
+          : 'Earlier approvals explicitly recorded no dependency assessment. Any remaining approver must make the same choice and record their own reason.'}
+        {' '}To change the assessment, cancel this proposal and create a new one.
+      </Alert>}
       {proposal?.assessment?.note && <Text size="sm">Recorded review note: {proposal.assessment.note}</Text>}
-      {!historical && <>
+      {!historical && !fixedAssessment && <>
       <Checkbox label="Use stored declarations only; do not contact the target" checked={storedOnly} disabled={busy}
         onChange={e => setStoredOnly(e.currentTarget.checked)} />
-      <Button loading={assessing} disabled={!!problem || loading || saving} onClick={() => void assess()}>
+      <Button loading={assessing} disabled={!!problem || loading || saving || !permission.can('plan')} onClick={() => void assess()}>
         {receipt ? 'Refresh dependency assessment' : 'Collect and assess dependencies'}
       </Button>
       {assessing && <Text size="sm">Reading bounded dependency evidence and waiting for the configured model. This can take several minutes. No fix is being applied.</Text>}
       </>}
-      {!inspectOnly && !historical && <>
+      {!readOnly && <>
         {receipt && <Checkbox label="I reviewed the risks, unknowns, checks and rollback limitations" checked={ack}
           disabled={busy || !fresh || bypass} onChange={e => setAck(e.currentTarget.checked)} />}
-        {!isApproved && <Checkbox label="Proceed without a dependency assessment and record my reason" checked={bypass}
+        {mayBypass && <Checkbox label="Proceed without a dependency assessment and record my reason" checked={bypass}
           disabled={busy} onChange={e => { setBypass(e.currentTarget.checked); setAck(false); }} />}
         <Textarea label={bypass ? 'Reason for proceeding without assessment' : 'Review note and treatment of unresolved dependencies'}
           description="At least 10 characters; saved with the decision." required minRows={2} maxLength={2000}

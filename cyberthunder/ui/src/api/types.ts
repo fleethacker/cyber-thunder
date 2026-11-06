@@ -212,6 +212,20 @@ export interface HistoryEntry {
 
 export interface TargetBrief { id: string; name: string; asset_type: string | null; simulated: boolean; known?: boolean }
 
+export interface ApprovalAssessment {
+  status: 'reviewed' | 'not_assessed'; id: string | null; note: string;
+  risk_level?: string; has_unknowns?: boolean; model_used?: boolean; valid_until?: string;
+  evidence_sha256?: string; fix_sha256?: string; target_binding_sha256?: string;
+}
+export interface ProposalApproval {
+  id: string; actor: string; principal: RecordedPrincipalEvidence; approved_at: string; note: string | null;
+  requirements_sha256: string; payload_sha256: string; assessment: ApprovalAssessment; assessment_sha256: string;
+}
+export interface ApprovalRequirements {
+  version: number; ruleset: string; mode: 'verified' | 'unverified_dev'; required_approvals: number;
+  payload_sha256: string; source: { severity: Severity; finding_id: string; finding_sha256: string; fix_sha256: string };
+}
+
 export interface Proposal {
   id: string;
   finding_id: string;
@@ -230,8 +244,12 @@ export interface Proposal {
   decision_note: string | null;
   before_state_ref: string | null;
   history: HistoryEntry[];
-  assessment?: { status: 'reviewed' | 'not_assessed'; id: string | null; note: string;
-    risk_level?: string; has_unknowns?: boolean; model_used?: boolean; valid_until?: string } | null;
+  assessment?: ApprovalAssessment | null;
+  proposed_by?: string | null;
+  proposed_principal?: RecordedPrincipalEvidence | null;
+  required_approvals?: number | null;
+  approval_requirements?: ApprovalRequirements | null;
+  approvals?: ProposalApproval[];
 }
 
 export interface ImpactEvidence {

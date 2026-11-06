@@ -2,6 +2,82 @@ import { permissionFixture } from '../components/permissionTestSupport.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ApiError, browser, errorText, evaluate, helpers, mount, proposal, ui } from '../lib/rollbackTestSupport.mjs';
+import { approvalFixture, protectedProposal, vote, session } from '../lib/approvalTestSupport.mjs';
+
+test('partial approval refreshes queue state and advances selected reviews without claiming approved', async (t) => {
+  const one = protectedProposal({ id: 'one' }), two = protectedProposal({ id: 'two' });
+  const panel = await setup(t, { rows: [one, two], identity: session() });
+  await panel.change('Select proposed (2)', true);
+  panel.nodes().find(n => n.type === 'Button' && Array.isArray(n.props.children) && n.props.children[0] === 'Review selected (').props.onClick();
+  await panel.settle();
+  const review = panel.impact(), partial = { ...one, approvals: [vote()], assessment: vote().assessment };
+  review.onChanged(partial); review.onClose(); await panel.settle();
+  assert.equal(panel.card('one').props.p.state, 'proposed');
+  assert.equal(panel.card('one').props.p.approvals.length, 1);
+  assert.equal(panel.card('one').props.selected, true);
+  assert.equal(panel.notices.at(-1).color, 'blue');
+  assert.match(panel.notices.at(-1).message, /1 of 2; 1 remaining.*still proposed/);
+  await panel.click('Continue selected reviews');
+  assert.equal(panel.impact().proposal.id, 'two');
+  panel.impact().onClose(); await panel.settle();
+  await panel.click('End selected reviews');
+  await panel.action('one', 'approve');
+  assert.equal(panel.impact(), undefined);
+  assert.ok(panel.nodes().some(n => n.props?.error?.includes('already recorded')));
+  // The existing audit refresh also picks up another person's final decision.
+  panel.update([{ ...partial, state: 'approved', approvals: [vote(), vote('reviewer-2')] }, two]);
+  await panel.event({ action: 'proposal.approved', subject: 'one', outcome: 'ok', data: {} });
+  await panel.tick();
+  assert.equal(panel.card('one').props.p.state, 'approved');
+  assert.equal(panel.card('one').props.p.approvals.length, 2);
+});
+
+test('final and one-person protected approvals use server state and deselect the completed proposal', async (t) => {
+  const env = browser(t);
+  for (const count of [1, 2]) {
+    const p = protectedProposal({ approvals: count === 2 ? [vote()] : [] });
+    p.required_approvals = p.approval_requirements.required_approvals = count;
+    const panel = await setup(t, { rows: [p], identity: session('reviewer-2'), env });
+    await panel.change('Select proposed (1)', true);
+    await panel.action('change', 'approve');
+    const review = panel.impact();
+    review.onChanged({ ...p, state: 'approved', approvals: [...p.approvals, vote('reviewer-2')] });
+    review.onClose(); await panel.settle();
+    assert.equal(panel.card('change').props.p.state, 'approved');
+    assert.equal(panel.card('change').props.selected, false);
+    assert.equal(panel.notices.at(-1).color, 'green');
+    assert.match(panel.notices.at(-1).message, /server marked this proposal approved/);
+  }
+});
+
+test('unchanged success response does not count a review or clear its selection', async (t) => {
+  const p = protectedProposal();
+  const panel = await setup(t, { rows: [p], identity: session() });
+  await panel.change('Select proposed (1)', true);
+  await panel.action('change', 'approve');
+  const review = panel.impact(); review.onChanged(p); review.onClose(); await panel.settle();
+  assert.equal(panel.card('change').props.selected, true);
+  assert.equal(panel.notices.at(-1).color, 'yellow');
+  assert.match(panel.notices.at(-1).message, /No additional approval was confirmed/);
+});
+
+test('queue denies proposer and duplicate shortcuts but preserves read-only protected receipts', async (t) => {
+  const env = browser(t);
+  const p = protectedProposal({ approvals: [vote()], assessment: vote().assessment });
+  for (const identity of [session(), session('proposer')]) {
+    const panel = await setup(t, { rows: [p], identity, env });
+    await panel.action('change', 'approve'); await panel.key('a');
+    assert.equal(panel.impact(), undefined);
+    assert.deepEqual(panel.calls, [['list']]);
+    assert.ok(panel.nodes().some(n => /already recorded|You proposed/.test(n.props?.error ?? '')));
+  }
+  const panel = await setup(t, { rows: [{ ...p, state: 'approved' }], identity: session(), env,
+    context: { actor: '', status: { kill: { engaged: true } } } });
+  panel.permissions.actions = ['read']; await panel.rerender();
+  await panel.action('change', 'impact', false);
+  assert.equal(panel.impact().inspectOnly, true);
+  assert.equal(panel.impact().proposal.assessment.id, 'shared-receipt');
+});
 
 async function setup(t, options = {}) {
   const env = options.env ?? browser(t, options.values);
@@ -35,6 +111,7 @@ async function setup(t, options = {}) {
       '../components/PermissionGate': permissions.imports,
       '../lib/format': { ageSeconds: (at) => -Date.parse(at), severityRank: () => 1 }, '../lib/findingAssurance': assurance,
       '../lib/hooks': libHooks, '../lib/proposalHistory': helpers,
+      '../lib/proposalApprovals': approvalFixture(options.identity),
       '../state/AppState': { useAppState: () => context, useAuditListener: (fn) => { listener = fn; } },
     }).default;
   });
@@ -230,7 +307,7 @@ test('sequential approval removes only completed selections and cancellation kee
   assert.equal(panel.card('one').props.selected, false);
   assert.equal(panel.card('two').props.selected, true);
   assert.equal(panel.card('three').props.selected, true);
-  const progress = panel.nodes().find((node) => node.type === 'Text' && Array.isArray(node.props.children) && node.props.children.includes(' approved. Each proposal needs its own review and decision. Unprocessed proposals remain selected.'));
+  const progress = panel.nodes().find((node) => node.type === 'Text' && Array.isArray(node.props.children) && node.props.children.includes(' reviews recorded; '));
   assert.equal(progress.props.children[0], 1);
   await panel.click('Continue selected reviews');
   assert.equal(panel.impact().proposal.id, 'two');

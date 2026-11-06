@@ -4,7 +4,8 @@ export interface SessionIdentity {
   authenticated: boolean;
   login_available: boolean;
   csrf_token?: string;
-  principal?: { actor: string; name: string; roles: string[]; kind: string; expires_at?: number } | null;
+  principal?: { actor: string; name: string; roles: string[]; kind?: string; expires_at?: number;
+    issuer?: string; subject?: string; source?: string; verified?: boolean } | null;
   permissions: string[];
 }
 

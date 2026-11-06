@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { errorText, evaluate, mount, proposal, ui } from '../lib/rollbackTestSupport.mjs';
+import { permissionFixture } from './permissionTestSupport.mjs';
+import { approvalFixture, protectedProposal, vote, session } from '../lib/approvalTestSupport.mjs';
 
 const ackLabel = 'I reviewed the risks, unknowns, checks and rollback limitations';
 const bypassLabel = 'Proceed without a dependency assessment and record my reason';
@@ -16,16 +18,97 @@ const receipt = (id = 'latest', extra = {}) => ({
   freshness: { stale: false, reasons: [], unknowns: [] }, ...extra,
 });
 
+test('a first successful approval returns the partial proposal unchanged to the queue', async (t) => {
+  const p = protectedProposal(), result = { ...p, approvals: [vote()], assessment: vote().assessment };
+  const panel = await setup(t, { proposal: p, result, identity: session(), receipt: receipt('shared-receipt') });
+  await panel.change(noteLabel, 'Checked management access and recovery.');
+  await panel.change(ackLabel, true);
+  await panel.click('Approve reviewed change');
+  assert.equal(panel.changes[0].state, 'proposed');
+  assert.equal(panel.changes[0].approvals.length, 1);
+  assert.equal(panel.closed(), 1);
+  assert.deepEqual(panel.calls.at(-1), ['approve', 'change', undefined, 'shared-receipt', 'Checked management access and recovery.']);
+});
+
+test('a second reviewer reads and acknowledges the exact existing receipt, never latest', async (t) => {
+  const p = protectedProposal({ approvals: [vote()], assessment: vote().assessment });
+  const result = { ...p, state: 'approved', approvals: [vote(), vote('reviewer-2')] };
+  const panel = await setup(t, { proposal: p, result, identity: session('reviewer-2'), receipt: receipt('shared-receipt') });
+  assert.deepEqual(panel.calls, [['receipt', 'shared-receipt']]);
+  assert.ok(!panel.nodes().some(n => n.props?.label === bypassLabel));
+  assert.ok(!panel.nodes().some(n => n.type === 'Button' && /Refresh|Collect/.test(n.props.children)));
+  await panel.change(noteLabel, 'Independent review of this same receipt.');
+  assert.equal(panel.button('Approve reviewed change').props.disabled, true);
+  await panel.change(ackLabel, true);
+  await panel.click('Approve reviewed change');
+  assert.equal(panel.changes[0].state, 'approved');
+  assert.deepEqual(panel.calls.at(-1), ['approve', 'change', undefined, 'shared-receipt', 'Independent review of this same receipt.']);
+});
+
+test('a missing or stale bound receipt cannot be replaced or bypassed', async (t) => {
+  const p = protectedProposal({ approvals: [vote()], assessment: vote().assessment });
+  for (const options of [{ readError: 'Receipt unavailable' }, { receipt: receipt('shared-receipt', { valid_until: '2000-01-01T00:00:00Z' }) },
+    { receipt: receipt('unrelated') }, { receipt: receipt('shared-receipt', { proposal_id: 'another-proposal' }) }]) {
+    const panel = await setup(t, { proposal: p, identity: session('reviewer-2'), ...options });
+    await panel.change(noteLabel, 'Reviewed the recorded change and dependencies.');
+    assert.equal(panel.button('Approve reviewed change').props.disabled, true);
+    panel.button('Approve reviewed change').props.onClick(); await panel.settle();
+    assert.deepEqual(panel.calls, [['receipt', 'shared-receipt']]);
+    assert.ok(!panel.nodes().some(n => n.props?.label === bypassLabel));
+  }
+});
+
+test('explicit no-assessment approvals require each reviewer to opt in with their own reason', async (t) => {
+  const assessment = { status: 'not_assessed', id: null, note: 'First reviewer accepted these unknowns.' };
+  const p = protectedProposal({ approvals: [vote('reviewer-1', { assessment })], assessment });
+  const panel = await setup(t, { proposal: p, identity: session('reviewer-2') });
+  assert.deepEqual(panel.calls, []);
+  assert.equal(panel.control(bypassLabel).props.checked, false);
+  assert.equal(panel.control(noteLabel).props.value, '');
+  await panel.change(bypassLabel, true);
+  await panel.change(reasonLabel, 'I separately accept the documented unknowns.');
+  await panel.click('Approve as not assessed');
+  assert.deepEqual(panel.calls, [['approve', 'change', undefined, undefined, 'I separately accept the documented unknowns.']]);
+});
+
+test('proposer, duplicate and revoked capability cannot save even through a retained handler', async (t) => {
+  for (const identity of [session('proposer'), session()]) {
+    const p = protectedProposal({ approvals: [vote()], assessment: vote().assessment });
+    const panel = await setup(t, { proposal: p, identity, receipt: receipt('shared-receipt') });
+    await panel.change(noteLabel, 'Attempt to repeat approval with a different note.');
+    await panel.change(ackLabel, true);
+    assert.equal(panel.button('Approve reviewed change').props.disabled, true);
+    panel.button('Approve reviewed change').props.onClick(); await panel.settle();
+    assert.deepEqual(panel.calls, [['receipt', 'shared-receipt']]);
+  }
+  const panel = await setup(t, { proposal: protectedProposal(), identity: session(), receipt: receipt('shared-receipt') });
+  await panel.change(noteLabel, 'Independent review of the current evidence.');
+  await panel.change(ackLabel, true);
+  const save = panel.button('Approve reviewed change').props.onClick;
+  panel.permissions.actions = ['read', 'plan'];
+  save(); await panel.settle();
+  assert.deepEqual(panel.calls, [['latest', 'change']]);
+});
+
+test('protected approved records expose their receipt without re-review or collection', async (t) => {
+  const p = protectedProposal({ state: 'approved', approvals: [vote(), vote('reviewer-2')], assessment: vote().assessment });
+  const panel = await setup(t, { proposal: p, identity: session('reviewer-2'), receipt: receipt('shared-receipt') });
+  assert.deepEqual(panel.calls, [['receipt', 'shared-receipt']]);
+  assert.ok(!panel.nodes().some(n => ['Button', 'Checkbox', 'Textarea'].includes(n.type)));
+});
+
 async function setup(t, options = {}) {
   const p = options.proposal ?? proposal('proposed', 'change');
   const calls = [], changes = [];
+  const permissions = permissionFixture();
+  const approvals = approvalFixture(options.identity);
   let closed = 0;
   const context = { actor: 'IT1 Operator', status: { kill: { engaged: false } } };
   const api = {
     async latestImpact(id) { calls.push(['latest', id]); if (options.readError) throw new Error(options.readError); return { assessment: options.receipt ?? null }; },
     async impactReceipt(id) { calls.push(['receipt', id]); if (options.readError) throw new Error(options.readError); return options.receipt ?? receipt(id); },
     async assessImpact(...args) { calls.push(['assess', ...args]); if (options.assess) return options.assess(); return receipt('collected'); },
-    async approve(...args) { calls.push(['approve', ...args]); if (options.saveError) throw new Error(options.saveError); return { ...p, state: 'approved' }; },
+    async approve(...args) { calls.push(['approve', ...args]); if (options.saveError) throw new Error(options.saveError); return options.result ?? { ...p, state: 'approved' }; },
     async reviewImpact(...args) { calls.push(['review', ...args]); if (options.saveError) throw new Error(options.saveError); return p; },
   };
   const props = {
@@ -37,10 +120,11 @@ async function setup(t, options = {}) {
     '../lib/format': { fmtZonedTime: (at) => at, label: (value) => value },
     '../state/AppState': { useAppState: () => context },
     './ActorChip': { actorProblem: (actor) => actor ? null : 'Set an acting name.' }, './common': ui,
+    './PermissionGate': permissions.imports, './ApprovalProgress': ui, '../lib/proposalApprovals': approvals,
   }).ImpactReview, props);
   t.after(() => panel.unmount());
   await panel.settle();
-  return { ...panel, props, calls, changes, context, closed: () => closed,
+  return { ...panel, props, calls, changes, context, permissions: permissions.state, closed: () => closed,
     details: () => panel.nodes().find((node) => node.type?.name === 'ImpactDetails')?.props,
   };
 }
@@ -166,6 +250,7 @@ test('historical expiry describes the recorded decision rather than current read
   const panel = mount(() => evaluate(new URL('./ImpactReview.tsx', import.meta.url), {
     '@mantine/core': ui, '../api/client': {}, '../lib/format': { fmtZonedTime: (at) => at, label: (value) => value },
     '../state/AppState': {}, './ActorChip': {}, './common': ui,
+    './ApprovalProgress': ui,
   }).ImpactDetails, { historical: true, receipt: receipt('old', { freshness: { stale: true, reasons: ['expired'], unknowns: [] } }) });
   await panel.settle();
   const warning = panel.find((node) => node.type === 'Alert' && node.props.title === 'Historical assessment');
