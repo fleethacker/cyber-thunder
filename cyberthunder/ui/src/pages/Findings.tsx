@@ -9,8 +9,9 @@ import type { FindingFacet, FindingsPage, FindingsQuery, FindingSort, SortDirect
 import { AssetIcon, AsyncView, Empty, Mono, PageTitle, SeverityBadge, StateBadge } from '../components/common';
 import { FindingDrawer } from '../components/FindingDrawer';
 import { ConfidenceBadge, ReviewBadge } from '../components/FindingAssurance';
+import { FindingReassessment } from '../components/FindingReassessment';
 import { CONFIDENCE_LABELS, REVIEW_FILTER_LABELS } from '../lib/findingAssurance';
-import { fmtTime, statusColor } from '../lib/format';
+import { fmtTime, fmtZonedTime, statusColor } from '../lib/format';
 import { useLocalPref } from '../lib/hooks';
 import { findingResultLabel, findingRowHandlers } from '../lib/findingRow';
 
@@ -206,7 +207,9 @@ export default function Findings() {
                 <Table.Td miw={280} maw={420}><Button variant="subtle" size="compact-xs" onClick={() => { setReviewOpen(false); setDrawer(f.id); }} aria-label={`Open finding ${f.rule_version || f.rule_id}`}><Mono>{f.rule_version || f.rule_id}</Mono></Button><Text size="sm" lineClamp={2} mt={4}>{f.title}</Text>
                   <Text size="xs" c="dimmed" lineClamp={2}>{Array.from(new Set([f.group_id, ...f.references.filter((r) => r.system === 'cve').map((r) => r.id)])).filter(Boolean).join(' · ')}</Text></Table.Td>
                 <Table.Td maw={240}><Text size="xs" lineClamp={2}>{f.benchmark || 'Not recorded'}</Text><Text size="xs" c="dimmed">{f.benchmark_release || 'Not recorded'}</Text></Table.Td>
-                <Table.Td><Text size="xs">{f.collected_at && !Number.isNaN(Date.parse(f.collected_at)) ? fmtTime(f.collected_at) : 'Not recorded'}</Text></Table.Td>
+                <Table.Td><Text size="xs">{f.reassessment ? fmtZonedTime(f.reassessment.observation.observed_at)
+                  : f.collected_at && !Number.isNaN(Date.parse(f.collected_at)) ? fmtTime(f.collected_at) : 'Not recorded'}</Text>
+                  <FindingReassessment reassessment={f.reassessment} compact /></Table.Td>
                 <Table.Td><Group gap="sm"><Yes v={!!f.fix} tip={f.fix?.fix_ref ?? 'No library fix'} /><Yes v={!!f.explanation} tip={f.explanation ? 'Explanation ready' : 'Not yet explained'} />{f.proposal ? <StateBadge state={f.proposal.state} /> : <Text size="xs" c="dimmed">No proposal</Text>}</Group>
                   <Button variant="light" size="compact-xs" mt="xs" onClick={() => { setReviewOpen(false); setDrawer(f.id); }} aria-label={`View details for ${f.title}`}>View details</Button></Table.Td>
               </Table.Tr>)}</Table.Tbody>

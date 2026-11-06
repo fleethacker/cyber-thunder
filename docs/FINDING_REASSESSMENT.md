@@ -1,0 +1,133 @@
+# Finding reassessment history
+
+This separate NEXT change adds a read-only `reassessment` field to the findings
+list and detail APIs. It explains why an older observation remains visible after
+a later target scan could not reassess it. It does not change scanner status,
+observation time, evidence, confidence, review fingerprints or validity, risk
+acceptance, proposal permissions, approvals, or rollback interpretation.
+
+The Findings table shows **Not reassessed** beside the API's original observation time.
+Its keyboard-accessible button and the finding detail panel show the original
+observation time/source separately from the later scan's recorded start time and
+target outcome. A missing timestamp is never replaced with the page load time.
+An omission is neither a verified fix nor a false-positive decision.
+The original collection time remains in the detail header. Older servers without
+the new field retain their recorded collection-time display; an explicitly
+unknown observation time from the new API stays unknown.
+
+## API contract (version 1)
+
+`GET /api/v1/findings` and `GET /api/v1/findings/{id}` decorate each returned
+finding with:
+
+```json
+{
+  "reassessment": {
+    "version": 1,
+    "status": "not_reassessed",
+    "reason": "partial_collection",
+    "explanation": "The later scan collected only partial results and did not reassess this observation.",
+    "observation": {
+      "observed_at": "2026-11-05T10:00:00Z",
+      "source": "native",
+      "scan_id": "original-scan"
+    },
+    "latest_attempt": {
+      "scan_id": "later-scan",
+      "started_at": "2026-11-05T11:00:00Z",
+      "finished_at": "2026-11-05T11:01:00Z",
+      "target_status": "partial"
+    },
+    "view": "current"
+  }
+}
+```
+
+`not_reassessed` means a later completed attempt in the readable, relevant history
+omitted this observation. Reasons distinguish unavailable collection, incomplete
+or unstarted target assessment, partial collection, and retained omissions.
+`no_known_gap` means no such gap was established; it does **not** assert freshness,
+coverage, or a current pass. `unknown` means ordering, scope, or coverage cannot
+be established. Only `not_reassessed` includes `latest_attempt` and an orange row
+badge. Unknown and absent server support have explicit detail text.
+
+`observation.observed_at` uses recorded `collection_provenance.observed_at` when
+present, otherwise `collected_at`. Invalid or timezone-free values are unknown.
+Original `collected_at`, `source`, and `scan_id` remain unchanged. The added
+observation scan ID is included only if that entire run is readable and belongs
+to the same persisted target generation.
+
+## Scope and ordering
+
+- The helper uses the existing persisted artifact ownership and account read
+  checks. Both the finding and the complete candidate run must be readable.
+  Mixed-target runs are excluded when any constituent target is inaccessible.
+  Current inventory IDs cannot relabel historical evidence. Deleted, moved,
+  recreated, unclassified, or mismatched target generations do not grant history.
+- Runs must name the same target and ownership scope, include the relevant
+  module, and match the finding's rule ID, rule version, group ID, or citation
+  when restricted by `rule_filter`, following the scanner's selection semantics.
+  A host scan has no authority over independent cluster image
+  survey evidence, bulletin-only processing, or scanner imports.
+- Supported collection triggers are `manual`, `scheduled`, `stig_delta`, `verify`,
+  and `demo`. Known native/check sources map to `check`, `hunt` to `hunt`, and
+  `cve`/host `trivy` to `cve`. Unknown producers remain unknown instead of being
+  guessed from title text or severity.
+- Terminal runs are ordered by timezone-aware start times after both the actual
+  observation and collection times (and its readable source run). Running and
+  pending runs do not assert completed reassessment. Equal latest times produce
+  unknown ordering, never an invented chronology from IDs.
+- An explicit `scan_id` bounds history at that run's start, including that run
+  itself. Later scans cannot change the historical badge. A carried row retains
+  its original identity/time and does not count as a new observation. A new
+  observation within a partial run supersedes that finding normally.
+
+## Scheduler integration boundary
+
+The helper reads `ScanRun.targets`, `authorization_scopes`, `modules`,
+`rule_filter`, `trigger`, `started_at`, `finished_at`, `status`, `results`, and
+`coverage_incomplete`. It understands `scheduling.unavailable_targets`,
+`scheduling.partial_targets`, and
+`scheduling.omitted_observations = retain_without_revalidation` from the bounded
+worker implementation at base `c27334a`. It does not modify these producers.
+The independent review `db489ef`, inspected read-only, also supplies
+`scheduling.retained_incomplete_observations: {target_id: [finding_id, ...]}`.
+An exact target/finding match gives reason `retained_incomplete_observation`:
+the worker withheld a `not_reviewed` or `error` replacement of prior unresolved
+evidence, retaining the original observation exactly. It does not expose the
+withheld result or invent its status. Unavailable collection takes precedence;
+a published new actual observation is still affirmative evidence. Absent,
+unrelated, or malformed lists keep the earlier metadata behavior. These paths
+are exercised with persisted helper fixtures on this unchanged base; the reviewed
+scanner commit is not merged into or executed by this batch.
+Changes to those fields during the independent worker review require a focused
+adapter/test review here before later integration. No release gate, deployment,
+or immediate-release dependency is introduced.
+
+The helper keeps only a request-local run index and lazily reads each selected
+run's observations once. It never creates a state directory, writes a document,
+stores credentials, migrates a schema, appends audit records, or caches across
+accounts. Existing list filtering, sorting, counts, and pagination are unchanged.
+
+## Validation and limits
+
+The focused tests cover JSON and SQLite persistence, failed/missing/unstarted
+collection, empty success, partial scans, carried rows, fresh observations,
+historical views, timestamp uncertainty, unrelated scopes, account denial,
+mixed-target runs, revoked grants, target reassignment/reuse, immutable evidence,
+false-positive reviews, approved/verified proposals, and rollback semantics.
+UI tests render the panel and drawer, exercise the table integration, and check
+accessible controls, missing metadata, escaping, and unchanged decision controls.
+
+This batch deliberately adds no reassessment filter or sort: a correct global
+facet requires deriving every visible row before existing query pagination,
+which belongs to the shared query layer outside this batch's file ownership.
+The existing observation-time sort stays available. A follow-on query change
+should consume this exact helper and test complete-view counts and pagination;
+it must not infer status or timestamps in the UI. Dedicated cluster/import
+reassessment and additional producer mappings also remain follow-on work.
+These are documented here without modifying the frozen shared backlog.
+
+Validation receipts are retained under `.build/finding-reassessment-next/` and
+bind the tested source and generated UI files to SHA-256 hashes. Validation uses
+fixture state only; it does not contact target hosts or production systems.

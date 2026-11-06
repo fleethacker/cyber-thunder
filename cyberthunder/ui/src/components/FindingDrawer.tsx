@@ -18,6 +18,7 @@ import { DiffButton } from './ProposalDiff';
 import { ConfidenceBadge } from './FindingAssurance';
 import { FindingReviewAccess } from './FindingActions';
 import { FindingCatalogReference } from './FindingCatalogReference';
+import { FindingReassessment } from './FindingReassessment';
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -122,6 +123,10 @@ function FindingDetail({ id, onProposed, onReviewed, initialReviewOpen }: {
         {(f.needs_rescan || scannerStatus !== f.status) && <Group gap="xs"><Text size="sm" c={f.needs_rescan ? 'orange' : undefined}>{findingResultLabel(f)}:</Text><StatusBadge status={f.status} /></Group>}
         <Text size="xs" c="dimmed">Human review keeps this scanner observation intact.</Text>
         {f.evidence ? <CodeBlock code={f.evidence} maxHeight={220} /> : <Text size="sm" c="dimmed">No scanner evidence was recorded.</Text>}
+      </Section>
+
+      <Section title="Reassessment">
+        <FindingReassessment reassessment={f.reassessment} />
       </Section>
 
       <Section title="Evidence confidence">

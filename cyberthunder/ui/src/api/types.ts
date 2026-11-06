@@ -172,7 +172,19 @@ export interface Finding {
   catalog_rule_metadata?: unknown;
 }
 
+/** Read-only history decoration; never an observation, confidence grade or review decision. */
+export interface FindingReassessment {
+  version: 1;
+  status: 'not_reassessed' | 'no_known_gap' | 'unknown';
+  reason: string;
+  explanation: string;
+  observation: { observed_at: string | null; source: string | null; scan_id: string | null };
+  latest_attempt: { scan_id: string; started_at: string; finished_at: string | null; target_status: string | null } | null;
+  view: 'current' | 'scan';
+}
+
 export interface FindingPlus extends Finding {
+  reassessment?: FindingReassessment | null;
   scanner_status?: FindingStatus;
   confidence?: FindingConfidence | null;
   review?: FindingReview | null;
