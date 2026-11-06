@@ -306,38 +306,35 @@ and container deployment with provisioned per-account credentials. Application
 session cryptographic validation remains covered by its owning subsystem,
 not by these controlled-claims fixtures.
 
-## Source-route validation and shared evidence seam
+## Source-route validation with protected session evidence
 
 Run with the same shared interpreter and checkout `PYTHONPATH` as above:
 
 ```powershell
-& 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts= -q tests/discovery/test_vsphere_runs.py --tb=short --show-capture=no
+& 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts= -q tests/discovery/test_vsphere_runs.py tests/security/test_session_evidence.py --tb=short --show-capture=no
 & 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts= -q tests/discovery/test_api_cli.py tests/discovery/test_vsphere_source.py tests/discovery/test_scope_principal_context.py tests/security/test_identity_boundary.py --tb=short --show-capture=no
 ```
 
-The initial source-route run measured **67 passed, 6 failed** on Windows in
-185.28 seconds; the repeat after stop-audit and bounded-summary changes measured
-the same **67 passed, 6 failed** in 222.06 seconds. The six failures all detect the same existing shared-evidence
-issue: `Principal.evidence()` includes raw OIDC `session_id`, and
-`AuditLog.append()` attaches that evidence to `audit.jsonl`. Password and vSphere
-cookie probes pass before the independent application-session probe fails.
-The new source-run API/persistence fields omit session IDs; the shared audit
-copy does not. An OIDC session identifier is metadata, not necessarily a bearer
-credential, but exporting it does not satisfy a no-session-identifier boundary.
-No output or state-file exclusion hides this result. The owning files are
-`cyberthunder/control/principal.py` and `cyberthunder/audit/chain.py`; a shared
-fix should omit or fingerprint the raw session ID in exported principal evidence.
-Those files are outside this patch's ownership. These tests intentionally remain
-strict and must be rerun with the parent fix before claiming a clean integration.
+After integrating the shared session-evidence correction, the first command
+measured **85 passed, zero skipped** on Windows in **268.24 seconds**. This includes
+all **75 source-route cases** and **10 session-evidence cases**, with JSON and
+SQLite persistence exercised. The source implementation and all source-route
+tests are unchanged from `8a2867d`.
 
-The last change makes malformed saved-range errors fixed rather than echoing
-global configuration. Its focused validation measured **12 passed, 63 deselected**
-in 53.52 seconds, including two new malformed-range cases and ten collection/read
-regressions. The final file has 75 cases; no clean complete 75-case run is claimed.
+The original six credential-echo cases had caught raw OIDC session identifiers
+in the shared audit principal evidence. The parent correction `3075f54`, applied
+here as `ad215c2`, fixes that shared boundary: newly exported/stored principal
+evidence has `session_id: null` and an issuer/subject-scoped SHA-256
+`session_fingerprint`. The fingerprint supports correlation; it does not
+authenticate an operation. Existing recorded evidence remains readable and is
+not rewritten. Source-run responses retain their narrower principal fields and
+do not add either session field, so the HTTP contract is unchanged.
 
-```powershell
-& 'C:/Users/joshu/.codex/worktrees/coverage-report/cyber-thunder/.venv/Scripts/python.exe' -m pytest -o addopts= -q tests/discovery/test_vsphere_runs.py -k 'invalid_saved_scope or history_rechecks_current or limited_http_collect' --tb=short --show-capture=no
-```
+All six formerly failing cases now pass without changing their assertions or
+excluding any application output or state file. They continue checking the
+credential, vSphere session cookie and application session identifier across
+responses, logs and persisted state. Malformed saved-range errors also remain
+fixed messages rather than echoes of global configuration.
 
 Existing API/CLI, source, copied-worker and identity regressions measured
 **86 passed** in 54.80 seconds. No tests were skipped; existing FastAPI/Starlette
