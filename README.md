@@ -4,8 +4,9 @@ Cyber Thunder finds, explains and fixes misconfigurations and vulnerabilities on
 networks, with a human approving every change. It takes the output of the scanners the Navy already fields,
 adds its own deterministic checks and an intrusion hunt, and turns the result into a queue of cited,
 plain-English decisions. An IT Sailor approves or denies each fix; approved fixes are applied from a vetted
-library, verified by rescan, and rolled back automatically if verification fails. Everything runs offline and
-every action lands in a hash-chained audit log.
+library, verified by rescan, and rolled back automatically if verification fails. Scanning and remediation
+can run offline; verified access remains bounded by token, session and cached-key expiry. Every action
+lands in a hash-chained audit log.
 
 **We don't reinvent the Navy's scanners. We turn their output into approved, verified, reversible fixes, offline.**
 
@@ -20,8 +21,9 @@ break, and how to undo it. The kill switch and the audit-chain badge are on ever
 ![Decision queue](docs/images/decisions.jpg)
 
 Discovery proposes what it found on the enclave; a named person accepts a device into scope, with a reason, or ignores it.
-The application currently records a typed, self-asserted approver name. UDS gateway SSO does not yet bind that
-name to a verified application principal or per-user target credential; see [identity work](docs/BACKLOG.md#1-identity-credentials-and-zero-trust).
+Verified modes use signed identity, application roles and a protected access policy for each target and
+operation, with explicit target account selection. Local development mode records a typed, unverified name.
+UDS gateway SSO still requires explicit application identity configuration; see [authorization](docs/AUTHORIZATION.md).
 
 ![Assets and discovery](docs/images/assets-discovery.jpg)
 
@@ -46,6 +48,10 @@ The WSL2 UDS demo cluster was scanned over kubectl: 127 findings and no adapter 
 
 These are recorded real-target results, not full benchmark coverage. Windows/WinRM, Cisco device changes and other platform versions still need real testing. See the [validation matrix](docs/VALIDATION.md) for evidence and missing run metadata, and [coverage](docs/COVERAGE.md) for check/fix counts.
 <!-- validation-status:end -->
+
+Signed-token and HTTPS test-provider checks cover browser/API approval, logout and idle expiry, with
+separate access-policy and credential-boundary tests. Live Keycloak, Windows DACL and AD/CAC/PKI
+deployment acceptance remains open; see [identity configuration and limits](docs/AUTHORIZATION.md).
 
 | Module | Path | Status |
 |---|---|---|
@@ -90,10 +96,14 @@ Run the tests:
 python -m pytest -q
 ```
 
-Use a scratch state directory for everything below so a rehearsal never touches real state:
+The following native rehearsal uses `CT_AUTH_MODE=dev` on loopback with an explicitly unverified typed
+identity. Use a scratch state directory so it never touches real state:
 
 ```bash
 export CT_STATE_DIR="$(mktemp -d)"
+export CT_AUTH_MODE=dev
+export CT_SECURITY_MODE=range
+export CT_HOST=127.0.0.1
 ```
 
 Load the simulated range (one simulated asset per adapter: Linux host, switch config, k3s cluster,
@@ -149,8 +159,12 @@ Start the server and open the UI at <http://127.0.0.1:8000>:
 python -m cyberthunder serve
 ```
 
-In the UI, set your name in Settings, open **Decisions**, press **Approve** to review the assessment or record an explicit bypass reason, then confirm the decision and choose **Apply**. The card
+In this development UI, set your unverified test name in Settings, open **Decisions**, press **Approve** to review the assessment or record an explicit bypass reason, then confirm the decision and choose **Apply**. The card
 shows the step timeline: scope check, before-state captured, applied, verified.
+
+For verified use, configure [identity and access](docs/AUTHORIZATION.md) and choose **Sign in** on the
+HTTPS UI. Browser sessions are held in one server process; restart requires login. Verified CLI use is
+currently limited to `serve` and emergency `kill engage` until CLI login is implemented.
 
 Open **STIG Library** for Downloaded, Maintained, Updates, Browse all and Import/transfer views, with versions and separate live-check/download/import times.
 Subscriptions default to inventory matches; choose manual product/type checkboxes and **Save selections**
@@ -195,6 +209,7 @@ Automated regression configuration and its explicit platform limitations are des
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | pipeline, contracts, guardrails, how to add an adapter |
 | [docs/VALIDATION.md](docs/VALIDATION.md) | real-platform evidence, untested versions and missing run metadata |
+| [docs/AUTHORIZATION.md](docs/AUTHORIZATION.md) | authentication modes, browser login, roles, target policy and explicit credentials |
 | [docs/COVERAGE.md](docs/COVERAGE.md) | implemented checks, benchmark denominators, executable fixes and runbooks |
 | [docs/CONFIDENCE.md](docs/CONFIDENCE.md) | evidence-strength grades, provenance, freshness and limits |
 | [docs/FINDING_REVIEW.md](docs/FINDING_REVIEW.md) | reasoned reviews, false positives, expiry, history and remediation guards |
@@ -229,7 +244,7 @@ Automated regression configuration and its explicit platform limitations are des
 |---|---|---|
 | What may it do | Scan, read configs and logs, propose fixes, apply approved fixes from the vetted library, pull public STIG content from two allow-listed DoD hosts when the link is up | `RemediationEngine.execute` runs `FixEntry` payloads only |
 | What may it never do | Run shell text from a model, change anything unapproved, touch hosts outside scope, delete logs or audit | `explain/` returns validated JSON text; `Inventory.assert_in_scope()`; audit is append-only |
-| What needs human approval | Every state-changing action | `ApprovalGate` human-only edges reject actors `agent`, `llm`, `system` |
+| Who may approve and execute fixes | Verified human identity, permitted role and matching target/action grant; development names remain unverified | `ApprovalGate`, principal checks and access policy; approval and execution are separate |
 | How is it logged | Every scan, finding, proposal, approval, denial, apply, verify, rollback, kill, scope and policy change | hash-chained audit log; head hash shown in the UI and on every report |
 | How is it stopped | Kill switch (file, `CT_KILL`, or `KILL` sentinel) blocks every apply, rollback and content pull | `KillSwitch.guard()` |
 | Can it be undone | Library fixes declare rollback capabilities; before-state is captured first and failed verify attempts recovery. History restores check later changes and supported Linux file drift; recovery still depends on the adapter and access | [Change history and rollback](docs/CHANGE_HISTORY.md) |
@@ -237,10 +252,12 @@ Automated regression configuration and its explicit platform limitations are des
 ## Cluster deployment
 
 Cyber Thunder can run natively with the Python CLI/web server above, or as the same
-application in a container. Both deployment paths retain approval, audit and rollback;
-both still require the identity and credential work in the backlog before fielding.
+application in a container. Both deployment paths retain approval, audit and rollback. Native development
+binds only to loopback; network containers require verified identity configuration with TLS or a configured
+mesh boundary. UDS gateway login does not automatically wire application JWT validation or browser sessions.
+Live identity/PKI and deployment acceptance remain open; follow [authorization](docs/AUTHORIZATION.md).
 See the [application container guide](deploy/kubernetes/README.md) and
-[Zarf package](packages/cyberthunder/README.md) for the merged container and UDS SSO configuration.
+[Zarf package](packages/cyberthunder/README.md) for container and UDS configuration.
 
 SQLite stores scan/findings/discovery documents and library preferences/sync metadata. Persist and back up
 the **entire state directory**, including raw scanner files, inventory, audit, rollback snapshots and content;

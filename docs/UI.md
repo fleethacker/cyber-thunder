@@ -5,21 +5,42 @@ one-pager. Not a dashboard of charts. A queue of decisions with everything neede
 
 ## Stack and constraints
 - React 18 + TypeScript + Vite, Mantine (core, hooks, notifications), Tabler icons, React Router.
-- Built with `npm run build` into `cyberthunder/ui/dist`, served by the Python process. **Fully offline:**
+- Built with `npm run build` into `cyberthunder/ui/dist`, served by the Python process. **Local UI assets:**
   no CDN links, no web fonts, no telemetry. Everything in the bundle.
-- Talks only to `/api/v1` (see API.md). Sends `X-Actor` on every request from the name in Settings
-  (kept in localStorage). Live updates come from `GET /audit/stream` (EventSource) plus polling of
+- Uses `/auth/status`, `/auth/login`, `/auth/logout` and `/api/v1` (see [API](API.md)). Verified browser
+  sessions use same-origin cookies and an in-memory CSRF value for unsafe requests; OAuth tokens never
+  reach browser storage. Typed names in localStorage are used only for unverified development identity.
+  Live updates come from `GET /audit/stream` (EventSource) plus polling of
   `/scans/{id}` and `/proposals/{id}` while something is running.
 - Dark theme by default (deep navy), light theme available. Large touch-friendly buttons; the whole
   Decisions page is usable with keyboard only (`j/k` move, `a` approve, `d` deny, `enter` open).
 - Every screen has loading, empty and error states. Errors show the API `detail` verbatim.
+
+## Sign-in and permissions
+
+In `oidc` or `mesh` mode, **Sign in** opens the configured organization provider; login and token
+refresh need that provider to be reachable. Missing browser
+configuration displays an administrator setup message; failed status checks do not fall back to a
+typed identity. The header and Settings show the verified account, roles and **Sign out**. The UI
+uses returned role permissions to restrict actions; the server independently checks node, target and
+environment grants. A visible action can still be denied for a particular target. Workload identities
+cannot approve human decisions. See [configuration and access policy](AUTHORIZATION.md).
+
+Native loopback `dev` mode displays **Local test identity (unverified)** and accepts a typed name.
+This is a rehearsal aid, not an authenticated account. Network container deployments need verified
+configuration/TLS or mesh; UDS gateway SSO alone does not establish the application's browser session.
+
+Browser sessions live in one server process and are lost on restart. Idle and absolute expiry require
+sign-in again. Passive identity/status/audit polling does not keep a tab signed in. **Sign out**
+invalidates the local session and the lease checked before subsequent background operations; it does
+not revoke provider tokens or interrupt a target command already issued. See [session details](BROWSER_IDENTITY.md).
 
 ## Shell (every page)
 - Left nav: Decisions, Mission, Findings, Assets, Scans, STIG Library, Vulnerability data, Audit, Reports, Settings. Commander view linked at the bottom.
 - Header: product name; **kill switch** button (red, always visible; engaged state turns the whole header
   red with the reason and who engaged it; release needs a reason); **audit chain badge** (green
   "Chain verified · N records · <head8>" or red "TAMPERED at #seq"); **link indicator** (unknown/observed endpoint
-  reachability, operator offline or explicit test mode, with local outbox count); **actor chip** ("Acting as IT1 Smith", click to change);
+  reachability, operator offline or explicit test mode, with local outbox count); **account chip** (verified account and roles, or an explicitly unverified development name);
   model indicator (backend/model, available or fallback).
 
 ## Pages
@@ -59,8 +80,9 @@ are plain anchors; offline they simply do not resolve), explanation panel (with 
 "Propose fix" button, proposal history.
 Confidence shows its deterministic reason and recorded or missing provenance. Human review shows the
 decision, evidence, expiry and full history; a new decision requires a reason, and a suppression also
-requires a future expiry. A stale edit must reload the latest review. Reviewer identity is labelled
-unverified. Active suppression blocks Propose/Apply; rollback keeps its existing guards. Raw scanner
+requires a future expiry. A stale edit must reload the latest review. Verified-mode reviews require
+a human principal with review permission and target access; development names remain unverified.
+Active suppression blocks Propose/Apply; rollback keeps its existing guards. Raw scanner
 results and overall counts remain visible when filtering by review or confidence.
 
 ### Assets (`/assets`)
@@ -120,13 +142,17 @@ This validates the library workflow, not Windows scan coverage.
 ### Audit (`/audit`)
 Live timeline (newest first, auto-follow toggle). Each row: seq, time, actor, action, outcome, subject; expand for
 details JSON and hashes. Filters by action/actor/subject. "Verify chain" button shows the verifier output.
-Download audit.jsonl.
+Download audit.jsonl. Audit access requires the node's `audit` permission in verified mode; target
+read rights do not imply access to the node-wide audit trail.
 
 ### Reports (`/reports`)
 Report history searches saved commander reports, POA&Ms, checklists and target reports by contents,
 asset name/ID, scan ID and operator. Filters narrow by report type and inclusive UTC date range; results
 are newest first with pagination. Open a saved report to preview its original contents or download the
 original HTML, Markdown, CSV, CKLB or JSON. Historical previews do not regenerate from live findings.
+Global report history/exports require node export permission and read access across current inventory;
+filters do not reduce these checks. Per-target read/export rights alone do not unlock global history.
+Node-wide read views separately require node `read.all`; scoped lists filter inaccessible resources.
 
 The **Current report** selector opens the commander one-pager, Check & fix coverage, Path to fleet or
 Friction log, with HTML/Markdown downloads. Coverage distinguishes native checks, benchmark totals,
@@ -144,10 +170,12 @@ The **detection score** card compares seeded issues with findings when the range
 ### Settings (`/settings`)
 
 **Open STIG Library** links to `/content` for subscriptions, updates and imports.
-Actor name. Model status and backend. Standing approval policy editor: enable requires signer (= actor) and
-reason; rules with asset types, max disruption, allow reboot / patch / service restart, allowlists, time window;
+Verified account and roles, with Sign out; the editable actor name appears only in local development mode.
+Model status and backend. Standing approval policy editor: enabling is refused in verified mode pending
+verifiable policy signing. In development, enable requires signer (= actor) and reason; rules with asset
+types, max disruption, allow reboot / patch / service restart, allowlists, time window;
 "Evaluate against current queue" preview. Link observations, operator-offline control, explicitly enabled test
-emulation and bounded opt-in probes ([LINK](LINK.md)). Demo controls: load simulated range, reset, "force
+emulation and bounded opt-in probes ([LINK](LINK.md)). Development-only demo controls: load simulated range, reset, "force
 verification failure on next apply" toggle (clearly labelled as a demonstration control).
 
 ### Commander view (`/commander`)
@@ -164,10 +192,13 @@ decisions, audit head hash, link state. Refreshes every 10 s.
 ```
 cyberthunder/ui/
   package.json  vite.config.ts  tsconfig.json  index.html
-  src/main.tsx  src/App.tsx  src/api/client.ts (typed fetch, X-Actor, SSE)  src/api/types.ts
+  src/main.tsx  src/App.tsx  src/api/client.ts (typed fetch, session CSRF, dev actor, SSE)  src/api/types.ts
+  src/api/identity.ts  src/state/Identity.tsx (sign-in boundary and permission state)
   src/pages/{Decisions,Mission,Findings,Assets,Scans,Content,Audit,Reports,Settings,Commander}.tsx
   src/components/{Shell,KillSwitch,ChainBadge,LinkBadge,ActorChip,ProposalCard,FindingDrawer,SeverityBadge,ApplyTimeline,...}.tsx
   dist/   built output, committed (regenerate with `npm run build`; never hand-edit)
 ```
 `vite.config.ts` proxies `/api` to `http://127.0.0.1:8000` in dev. `npm run build` must produce relative asset
 paths (`base: './'`) so the app works when served from `/`.
+The default Vite proxy is for local development; test verified browser login through the application's
+configured HTTPS origin, including its root `/auth` routes.
