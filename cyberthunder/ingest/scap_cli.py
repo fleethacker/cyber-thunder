@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 
 from cyberthunder.ingest.scap_results import (
-    MAX_MANIFEST_BYTES, MAX_XML_BYTES, import_results, parse_manifest, read_local_file,
+    MAX_MANIFEST_BYTES, MAX_XML_BYTES, ScapImportError, import_results, parse_manifest, read_local_file,
 )
+from cyberthunder.state import StateError
 
 
 def run(args):
@@ -25,8 +27,17 @@ def run(args):
             parse_manifest(read_local_file(args.manifest, MAX_MANIFEST_BYTES)), actor=args.actor)
         print(json.dumps(result, indent=2))
         return 0
-    except (ValueError, OSError, PermissionError, KillSwitchEngaged) as exc:
+    except PermissionError:
+        print("SCAP import is not authorized; use the authenticated SCAP upload API in verified mode", file=sys.stderr)
+        return 2
+    except (OSError, sqlite3.Error, StateError):
+        print("SCAP import storage is unavailable", file=sys.stderr)
+        return 2
+    except (ScapImportError, KillSwitchEngaged) as exc:
         print(str(exc), file=sys.stderr)
+        return 2
+    except ValueError:
+        print("SCAP input or configuration is invalid", file=sys.stderr)
         return 2
     finally:
         if ctx is not None:

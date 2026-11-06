@@ -4,19 +4,27 @@ from __future__ import annotations
 import base64
 import binascii
 from collections import Counter
+from contextlib import nullcontext
+from copy import copy
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
+from pathlib import Path
 import re
+import sqlite3
+import stat
 import xml.etree.ElementTree as ET
 
 from cyberthunder.audit.chain import file_lock
+from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.control.principal import authorize
 from cyberthunder.findings.schema import Finding, Status, summarize
-from cyberthunder.ingest.scanner_results import import_actor, read_local_file
+from cyberthunder.ingest.scanner_results import import_actor
 from cyberthunder.inventory.host import persisted_target
 from cyberthunder.scan import ScanRun, TargetScanResult
 from cyberthunder.security.resources import capture, check_record
+from cyberthunder.state import StateError
 
 MAX_XML_BYTES = 16 * 1024 * 1024
 MAX_MANIFEST_BYTES = 256 * 1024
@@ -33,6 +41,55 @@ SOURCE = "openscap-container"
 
 class ScapImportError(ValueError):
     """Fixed diagnostics that do not echo untrusted content or local paths."""
+
+
+def guard_kill(ctx, actor):
+    try:
+        ctx.killswitch.guard("ingest.scap", actor)
+    except KillSwitchEngaged:
+        raise KillSwitchEngaged("kill switch engaged; refusing SCAP import") from None
+
+
+def read_local_file(path, limit):
+    """Bound a local regular file; never wait for a pipe or read a device."""
+    try:
+        path = Path(path)
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode):
+            raise ScapImportError("SCAP input must be a regular file, without symlinks")
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(opened.st_mode)
+                    or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)):
+                raise ScapImportError("SCAP input must remain the same regular file")
+            if opened.st_size > limit:
+                raise ScapImportError("SCAP input exceeds the size limit")
+            data = stream.read(limit + 1)
+    except OSError:
+        raise ScapImportError("cannot read SCAP input") from None
+    if len(data) > limit:
+        raise ScapImportError("SCAP input exceeds the size limit")
+    return data
+
+
+def _publication_store(store, guard):
+    # A request-local view retains public StateStore publication methods and their
+    # lifecycle/review coordination. Never replace methods on the shared store.
+    # Backends remain shared and owned by the original context, not this view.
+    view = copy(store)
+
+    def write_json(path, document):
+        # SQLite may wait for a writer even after obtaining lifecycle locks. Take
+        # its reentrant transaction before the final guard; JSON writes are atomic
+        # replacements under the lifecycle locks already held by StateStore.
+        with store.lock("scap-publication") if store.backend_name == "sqlite" else nullcontext():
+            guard()
+            store.write_json(path, document)
+
+    view.write_json = write_json
+    return view
 
 
 def _canonical(value):
@@ -215,25 +272,33 @@ def parse_results(data, manifest):
         rows[rid] = {"result": raw, "title": title, "severity": rr.get("severity", severity)}
     if not rows:
         raise ScapImportError("TestResult contains no rule results")
-    missing = sorted(set(manifest["expected_rule_ids"]) - set(rows))
+    expected = set(manifest["expected_rule_ids"])
+    missing = sorted(expected - set(rows))
     for rid in missing:
         title, severity = metadata.get(rid, (rid, "unknown"))
         rows[rid] = {"result": "missing", "title": title, "severity": severity}
     if len(rows) > MAX_RESULTS:
         raise ScapImportError("results including missing rules exceed the result limit")
+    timestamps = {}
     for name in ("start-time", "end-time"):
         if test.get(name):
             try:
                 if "T" not in test.get(name):
                     raise ValueError
-                datetime.fromisoformat(test.get(name))
+                timestamps[name] = datetime.fromisoformat(test.get(name))
             except ValueError:
                 raise ScapImportError("invalid evaluation timestamp") from None
+    if len(timestamps) == 2:
+        try:
+            if timestamps["end-time"] < timestamps["start-time"]:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise ScapImportError("inconsistent evaluation timestamps") from None
     # An absent completion timestamp or engine error cannot establish complete evaluation.
     finished = bool(test.get("end-time")) and manifest["provenance"]["exit_code"] in {0, 2}
     complete = finished
     complete = complete and not any(r["result"] in {"missing", "error", "notchecked", "unknown", "informational"}
-                                    or r["result"] == "notselected" and rid in manifest["expected_rule_ids"]
+                                    or r["result"] == "notselected" and rid in expected
                                     for rid, r in rows.items())
     counts = dict(sorted(Counter(r["result"] for r in rows.values()).items()))
     return rows, {"result_counts": counts, "missing_rule_ids": missing,
@@ -243,20 +308,22 @@ def parse_results(data, manifest):
                   "compliance_claim": False}
 
 
-def import_results(ctx, data, manifest, *, actor):
+def import_results(ctx, data, manifest, *, actor, cancelled=None):
     """Publish observations last; exact repeats retain their original time and ownership."""
-    actor = import_actor(actor)
+    actor = import_actor(_text(actor, 128))
     try:
-        return _import_results(ctx, data, manifest, actor=actor)
-    except PermissionError:
-        raise
-    except OSError:
+        return _import_results(ctx, data, manifest, actor=actor, cancelled=cancelled)
+    except PermissionError as exc:
+        if exc.errno is not None or exc.filename is not None:
+            raise OSError("SCAP import storage is unavailable") from None
+        raise PermissionError("SCAP import is not authorized or was cancelled") from None
+    except (OSError, sqlite3.Error, StateError, json.JSONDecodeError):
         raise OSError("SCAP import storage is unavailable") from None
 
 
-def _import_results(ctx, data, manifest, *, actor):
+def _import_results(ctx, data, manifest, *, actor, cancelled=None):
     authorize(ctx, "import", actor=actor)
-    ctx.killswitch.guard("ingest.scap", actor)
+    guard_kill(ctx, actor)
     manifest = validate_manifest(manifest)
     tid = manifest["target_id"]
     try:
@@ -266,6 +333,8 @@ def _import_results(ctx, data, manifest, *, actor):
         raise ScapImportError("manifest references an unavailable inventory target") from None
 
     def guard():
+        if cancelled is not None and cancelled.is_set():
+            raise PermissionError("SCAP import was cancelled")
         authorize(ctx, "import", actor=actor)
         authorize(ctx, "import", actor=actor, target=target)
         authorize(ctx, "read", actor=actor, target=target)
@@ -275,7 +344,7 @@ def _import_results(ctx, data, manifest, *, actor):
             unchanged = False
         if not unchanged:
             raise PermissionError("SCAP import target ownership changed")
-        ctx.killswitch.guard("ingest.scap", actor)
+        guard_kill(ctx, actor)
 
     guard()
     rows, coverage = parse_results(data, manifest)
@@ -326,6 +395,7 @@ def _import_results(ctx, data, manifest, *, actor):
     meta = {**identity, "import_id": import_id, "requested_by": actor, "authorization_scopes": scopes,
             "receipt": receipt}
     store = ctx.store
+    publication = _publication_store(store, guard)
     guard()
     # Share the passive scanner import lock with Nessus. Public store publication also acquires
     # observation/review lifecycle locks, for both JSON and SQLite.
@@ -357,10 +427,10 @@ def _import_results(ctx, data, manifest, *, actor):
                 findings=len(findings), open=sum(f.is_open for f in findings), coverage=coverage,
                 errors=[] if coverage["result_scope_complete"] else ["Container evaluation is incomplete"])})
         guard()
-        store.save_findings(scan_id, findings, meta=meta)
+        publication.save_findings(scan_id, findings, meta=meta)
         guard()
         ctx.audit.append("ingest.scap.publish", actor, receipt, subject=scan_id)
         guard()
-        store.save_scan_run(run.to_dict())
+        publication.save_scan_run(run.to_dict())
         ctx.audit.append("ingest.scap", actor, receipt, subject=scan_id)
     return {**receipt, "repeated": False}

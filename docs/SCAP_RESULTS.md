@@ -47,6 +47,8 @@ provenance string, never a file to read or an argument to execute. `image_ref` i
 required even for rootfs input. Prefer an immutable image digest when available;
 tags and caller-supplied digests are declarations, not verified image identity.
 Supply the original OpenSCAP exit code, before any wrapper converts code 2 to 0.
+Manifest declarations and rule titles are retained as supplied. Keep credentials
+and other secrets out of those fields; the importer is not a content redactor.
 
 ## API
 
@@ -66,7 +68,8 @@ explicit node `import`, and `import` plus `read` grants on the exact destination
 Both human and workload verified principals may import when explicitly granted;
 `import` is not a human-only role action. The reserved actor-label filter does not
 establish principal kind. The service rechecks expiry/session validity, grants, kill state and persisted
-target ownership before publication and exact-repeat responses. `X-Actor` cannot
+target ownership before publication and exact-repeat responses, including after
+publication lock waits. `X-Actor` cannot
 override a verified principal. Development mode requires a named actor and retains
 the application's loopback restriction. Report export permissions remain separate.
 
@@ -82,6 +85,10 @@ Errors: 400 malformed/unsupported input (including missing development actor),
 401 authentication or required step-up, 403 denied authority/ownership,
 413 bounded upload exceeded, 415 wrong media type, 423 kill engaged,
 503 storage unavailable. Diagnostics do not echo XML, upload paths or storage paths.
+Request cancellation or a disconnect observed before publication stops the worker
+at its next guard. Parsing and lock acquisition are not forcibly interrupted.
+Cancellation after the run marker is committed does not undo the import; retry
+the same source and manifest to obtain its original receipt.
 
 ## CLI
 
@@ -91,7 +98,9 @@ The separate module works immediately in local development mode:
 python -m cyberthunder.ingest.scap_cli --state-dir STATE --actor "Joshua Ott" NAME-xccdf.xml --manifest manifest.json
 ```
 
-It reads each explicitly supplied local file with a byte cap. Verified mode refuses
+It reads each explicitly supplied local regular file with a byte cap. Symlinks,
+pipes and devices are rejected; the opened file's identity is checked again before
+reading. Verified mode refuses
 the local actor shortcut; use the authenticated upload API. It opens no connection
 and cannot establish a verified session itself.
 
@@ -124,6 +133,9 @@ are returned explicitly; no rules are silently skipped. An expected notselected
 rule makes the result scope incomplete. An unexpected notselected rule is still
 unreviewed. Source evaluation timestamps remain the finding's collection time;
 the run timestamp records import publication time.
+When both source timestamps are present, completion cannot precede the start and
+their timezone awareness must agree. Either both may omit a timezone or both must
+include one; the importer does not infer the source timezone.
 
 One separate `container-scap:coverage` finding makes limitations visible in existing
 findings/report summaries: it is `error` for absent completion or engine exit codes
@@ -159,6 +171,15 @@ entry; the preceding publish-intent audit exists, and retry is idempotent. Histo
 and ownership use the same documents on JSON and SQLite. Partial-run accumulation
 preserves unrelated observations without copying or relabeling them.
 
+A request-local store view rechecks current authority and cancellation at document
+writes after lifecycle contention. SQLite writer acquisition precedes this final
+check. The shared store and backend ownership remain unchanged. These are
+cooperative checks, not a transaction with external identity-policy updates or
+disconnect delivery. The shared JSON review ledger, audit log and run marker are
+separate writes: an interrupted review invalidation may conservatively leave a
+prior review invalidated even though a new run was not published. No automatic
+rollback of review history or audit entries is attempted.
+
 ## Parser and engine limits
 
 - Original XML: 16 MiB; manifest: 256 KiB; API envelope: base64 expansion of 16 MiB,
@@ -185,7 +206,7 @@ preserves unrelated observations without copying or relabeling them.
 ## Focused validation
 
 ```text
-python -m pytest tests/ingest/test_scap_results.py tests/api/test_scap_results.py
+python -m pytest tests/ingest/test_scap_results.py tests/api/test_scap_results.py tests/ingest/test_scap_review.py tests/api/test_scap_review.py
 ```
 
 State-dependent tests run on JSON and SQLite by default. They exercise malformed
@@ -194,3 +215,7 @@ missing results, repeated/current history, interrupted publication, grant/sessio
 revocation, account and target reuse, API streaming, report filtering, passive CLI
 behavior and the existing Linux XCCDF fixture. That fixture is parser compatibility
 evidence, not a new live evaluation receipt. No shell integration is modified.
+Independent review regressions additionally exercise cancellation/disconnection,
+revocation while publication waits, minimal human/workload permissions, storage
+and kill-switch diagnostics, timestamp ordering, bounded expected-rule lookup and
+regular-file input. The FIFO case requires native POSIX; it is skipped on Windows.
