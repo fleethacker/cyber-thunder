@@ -47,11 +47,11 @@ def test_revoked_worker_identity_stops_before_backend_io_and_receipt(rig, monkey
         if denied[0]:
             raise PermissionError("fixture session revoked")
 
-    def queued(call, timeout):
+    def queued(call, timeout, *, owner):
         calls[0] += 1
         if calls[0] == (1 if phase == "probe" else 2):
             denied[0] = True
-        return bounded(call, timeout)
+        return bounded(call, timeout, owner=owner)
 
     monkeypatch.setattr(module, "_bounded_call", queued)
     with principal_scope(p, validity=validity), pytest.raises(PermissionError):
@@ -66,7 +66,7 @@ def test_separate_model_calls_do_not_reuse_previous_principal(rig):
     seen = []
     for p in people:
         with principal_scope(p):
-            value, error = module._bounded_call(lambda: require_current("plan"), 2)
+            value, error = module._bounded_call(lambda: require_current("plan"), 2, owner=rig.service)
         assert error is None
         seen.append(value)
     assert seen == people and current_principal() is None

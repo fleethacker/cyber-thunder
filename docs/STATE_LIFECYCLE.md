@@ -76,8 +76,11 @@ for all entries, so an unrelated application's job can delay release. This avoid
 changing route signatures or worker admission behavior in this candidate. Future
 worker implementations must be included in lifecycle coordination before assuming
 safe automatic cleanup. Current service registries are inspected without creating
-lazy services. Detached impact computation has no state publication path; its
-owning synchronous/API work must still drain normally.
+lazy services. Detached impact probe/generation calls retain their service owner
+after caller timeout. Context cleanup drains their actual threads and any registered
+children before releasing state; their guards can still read SQLite. The owning
+synchronous/API work must also drain normally. See `STATE_LIFECYCLE_REVIEW.md` for
+the independent reproduction and subsequent ownership fix.
 
 A permanently stuck worker intentionally retains its state until process exit or
 an explicit successful retry. Borrowed contexts do not gain automatic cleanup.

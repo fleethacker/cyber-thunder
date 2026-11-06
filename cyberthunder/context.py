@@ -105,6 +105,9 @@ class AppContext:
         def workers():
             with util._threads_lock:
                 threads = list(util._threads)
+            impact = getattr(self, "impact", None)
+            if impact is not None:
+                threads.extend(impact.worker_threads())
             for service in (getattr(self, "scanner", None), getattr(self, "discovery", None),
                             getattr(self, "vulnerabilities", None),
                             getattr(getattr(self, "ingest", None), "_content", None)):
