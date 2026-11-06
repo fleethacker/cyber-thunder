@@ -308,7 +308,7 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 - Done when: every release has an SBOM listing the Python package, UI bundle and every image; the dependency scan result is in the release notes; an image not from Iron Bank is listed with its exception.
 
 **ATO-03 Control mapping for the authorizing official.** Step: before fleet (the 90-day authorization step). Effort: days. Depends: ZT-23 for identity evidence.
-- Today: guardrails and where each is enforced are in `docs/ARCHITECTURE.md:82-93`; the transition plan puts the authorization path at 90 days (`docs/SUBMISSION.md:82`) and the ATO friction line is still `[ ]` (`docs/SUBMISSION.md:98`). No mapping to NIST SP 800-53 exists.
+- Today: [CONTROLS](CONTROLS.md) maps application contributions to NIST SP 800-53 families, separates deployment responsibilities and evidence, and records unassigned review/authorization roles. Exact control selection, organization-defined parameters, actual deployment acceptance and ISSO review remain open; the mapping makes no compliance or authorization claim.
 - Target: `docs/CONTROLS.md` mapping the tool's guardrails to 800-53 families, at least AC (approval gate, roles), AU (hash-chained audit, anchors), CM (vetted fix library, before-state, rollback), IA (section 1) and SI (scans, hunt, bulletin matching), saying for each control what the tool provides, what the enclave must provide and what evidence to pull (audit export, proposal records, reports); written for the authorizing official, not for developers.
 - Done when: an ISSO has read it and their questions are answered in the file; every claim points at a code path or a report the tool produces.
 
