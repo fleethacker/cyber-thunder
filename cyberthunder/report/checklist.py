@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 from cyberthunder.control.approvals import Proposal, ProposalState
 from cyberthunder.findings.current import CurrentFindings
+from cyberthunder.report import access
+from cyberthunder.report.identity import attribution
 from cyberthunder.findings.schema import Finding, Status, utcnow
 from cyberthunder.report.onepager import latest_proposals, resolve_scan
 from cyberthunder.report.render import ReportError
@@ -50,7 +52,8 @@ def _status_for(f: Finding, p: Proposal | None, lifecycle: CurrentFindings | Non
         p = next(candidate for candidate in (lifecycle.proposals[(f.id, f.host)] if lifecycle else [p])
                  if candidate.id == current.remediated["proposal_id"])
         when = current.remediated["verified_at"]
-        return "not_a_finding", f"Fixed by approved change {p.id} ({p.fix_ref}), approved by {p.decided_by}, verified {when}."
+        identity = attribution(p.decided_by, p.decided_principal)["text"]
+        return "not_a_finding", f"Fixed by approved change {p.id} ({p.fix_ref}), approved by {identity}, verified {when}."
     status = CKLB_STATUS[f.status]
     note = ""
     if f.is_open and p:
@@ -160,7 +163,7 @@ def build_checklist(ctx: "AppContext", scan_id: str | None = None, host: str | N
     if not mine:
         raise ReportError(f"no findings for host {host!r} in scan {sid}; hosts: {', '.join(hosts)}")
     props = latest_proposals(ctx)
-    lifecycle = CurrentFindings.for_context(ctx)
+    lifecycle = access.lifecycle(ctx)
     found = _find_input(ctx.store.scans_dir / sid / "raw", host)
     if found:
         _path, doc = found

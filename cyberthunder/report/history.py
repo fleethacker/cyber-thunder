@@ -12,6 +12,8 @@ import logging
 import re
 
 from cyberthunder.findings.schema import utcnow
+from cyberthunder.control.principal import authorize
+from cyberthunder.report import access
 
 log = logging.getLogger(__name__)
 KINDS = {"commander": "Commander one-pager", "poam": "POA&M", "checklist": "Updated checklist", "target": "Target report"}
@@ -26,11 +28,22 @@ def _path(ctx, report_id: str):
 
 
 def save(ctx, kind: str, content, fmt: str, *, scan_id: str | None = None, targets=(),
-         actor: str = "report", generated_at: str | None = None, report_id: str | None = None) -> dict:
+         actor: str = "report", generated_at: str | None = None, report_id: str | None = None,
+         authorization_scopes=None, _legacy: bool = False) -> dict:
     if kind not in KINDS or fmt not in FORMATS:
         raise ValueError("unsupported saved report type or format")
     text = content if isinstance(content, str) else json.dumps(content, indent=2, ensure_ascii=False)
     targets = sorted(set(targets))
+    scopes = [] if _legacy else (authorization_scopes if authorization_scopes is not None
+                                 else access.current_scopes(ctx))
+    if not _legacy:
+        authorize(ctx, "export")
+        scopes = access.finish(ctx, scopes)
+        if scopes:
+            if access.verified_mode(ctx) and set(targets) - {scope["target_id"] for scope in scopes}:
+                raise PermissionError("report targets are missing recorded ownership")
+            # Include overlays, discovery and decisions beyond the anchor scan.
+            targets = sorted({scope["target_id"] for scope in scopes})
     names = []
     for target in targets:
         try:
@@ -41,6 +54,8 @@ def save(ctx, kind: str, content, fmt: str, *, scan_id: str | None = None, targe
         rid = report_id or ctx.store.new_id("report-")
         existing = ctx.store.read_json(_path(ctx, rid))
         if report_id and existing:
+            if not _legacy:
+                access.artifact(ctx, existing.get("authorization_scopes"))
             return existing
         while existing:
             rid = ctx.store.new_id("report-")
@@ -48,6 +63,7 @@ def save(ctx, kind: str, content, fmt: str, *, scan_id: str | None = None, targe
         doc = {"id": rid, "kind": kind, "title": KINDS[kind], "format": fmt,
                "generated_at": generated_at or utcnow(), "generated_by": actor,
                "scan_id": scan_id, "targets": targets, "target_names": names,
+               "authorization_scopes": scopes,
                "filename": f"{kind}-{rid}.{fmt}", "media_type": FORMATS[fmt],
                "bytes": len(text.encode("utf-8")), "content": text}
         ctx.store.write_json(_path(ctx, rid), doc)
@@ -65,7 +81,7 @@ def import_existing(ctx) -> None:
             continue
         rid = "legacy-" + hashlib.sha256(f"target/{path.name}".encode()).hexdigest()[:24]
         save(ctx, "target", doc, "json", targets=[target], actor=doc.get("generated_by") or "report",
-             generated_at=doc.get("generated_at"), report_id=rid)
+             generated_at=doc.get("generated_at"), report_id=rid, _legacy=True)
     for directory in (ctx.store.outbox_dir, ctx.store.synced_dir):
         for path in ctx.store.list_json(directory, "*.meta.json"):
             entry = ctx.store.read_json(path)
@@ -91,18 +107,22 @@ def import_existing(ctx) -> None:
                 continue
             fmt = {"commander": "html", "poam": "csv", "checklist": "cklb", "target": "json"}[kind]
             save(ctx, kind, text, fmt, scan_id=meta.get("scan_id"), targets=[meta["host"]] if meta.get("host") else [],
-                 actor=entry.get("enqueued_by") or "report", generated_at=entry.get("enqueued_at"), report_id=rid)
+                 actor=entry.get("enqueued_by") or "report", generated_at=entry.get("enqueued_at"), report_id=rid,
+                 _legacy=True)
 
 
 def get(ctx, report_id: str) -> dict:
+    authorize(ctx, "export")
     doc = ctx.store.read_json(_path(ctx, report_id))
     if not doc:
         raise KeyError(f"saved report {report_id!r} not found")
+    access.artifact(ctx, doc.get("authorization_scopes"), targets=doc.get("targets") or [])
     return doc
 
 
 def search(ctx, *, q: str = "", kind: str | None = None, target: str | None = None,
            from_date: date | None = None, to_date: date | None = None, offset: int = 0, limit: int = 20) -> dict:
+    authorize(ctx, "export")
     if from_date and to_date and from_date > to_date:
         raise ValueError("from_date must be on or before to_date")
     import_existing(ctx)
@@ -111,6 +131,8 @@ def search(ctx, *, q: str = "", kind: str | None = None, target: str | None = No
     for path in ctx.store.list_json(ctx.store.root / "reports" / "history"):
         doc = ctx.store.read_json(path)
         if not doc or doc.get("kind") not in KINDS:
+            continue
+        if not access.visible(ctx, doc.get("authorization_scopes"), targets=doc.get("targets") or []):
             continue
         if kind and doc["kind"] != kind or target and target not in doc.get("targets", []):
             continue

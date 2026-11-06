@@ -16,6 +16,8 @@ router = APIRouter(tags=["findings"], route_class=MappedRoute)
 
 
 class ReviewBody(BaseModel):
+    # Attribution comes only from the request principal inside ReviewService.
+    # Reject client-supplied identity flags, actors and principal snapshots.
     model_config = ConfigDict(extra="forbid")
 
     disposition: StrictStr
@@ -33,6 +35,9 @@ def _finding(ctx, finding_id: str, scan_id: str | None = None):
     finding = next((f for f in ctx.store.load_findings(scan_id) if f.id == finding_id), None)
     if finding is None:
         raise KeyError(f"unknown finding {finding_id!r}")
+    if getattr(getattr(ctx, "settings", None), "auth_mode", "dev") != "dev":
+        from cyberthunder.security.resources import check_record
+        check_record(ctx, finding, "read")
     return finding
 
 

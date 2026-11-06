@@ -22,7 +22,7 @@ Historical observations use only reviews matching their evidence fingerprint, ev
 <p>Review disposition: <b>{{ review.disposition }}</b>; active: {{ "yes" if review.active else "no" }};
 suppressed: {{ "yes" if review.suppressed else "no" }}; reviewer identity: {{ f.identity_label }}.</p>
 {% if event %}
-<p>Last review disposition: {{ event.disposition }}; reviewer: {{ event.reviewed_by }}; reviewed at: {{ event.reviewed_at }};
+<p>Last review disposition: {{ event.disposition }}; reviewer: {{ f.reviewer_identity.text }}; reviewed at: {{ event.reviewed_at }};
 expiry: {{ event.expires_at or "none" }}. Reason: {{ event.reason }}</p>
 <p>Supporting evidence: {{ event.supporting_evidence or "none supplied" }}</p>
 {% else %}

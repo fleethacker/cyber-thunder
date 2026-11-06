@@ -57,7 +57,7 @@
 <table>
 <tr><th>Verified change</th><th>Host</th><th>Approved by</th><th>Verified at (UTC)</th></tr>
 {% for v in r.verified %}
-<tr><td>{{ v.title }}</td><td>{{ v.host }}</td><td>{{ v.decided_by or "-" }}</td><td>{{ v.verified_at or "-" }}</td></tr>
+<tr><td>{{ v.title }}</td><td>{{ v.host }}</td><td>{{ v.decision_identity.text }}</td><td>{{ v.verified_at or "-" }}</td></tr>
 {% endfor %}
 </table>
 {% else %}
@@ -67,7 +67,7 @@
 <table>
 <tr><th>Reverted or failed change</th><th>Host</th><th>Approved by</th><th>When (UTC)</th><th>Why</th></tr>
 {% for x in r.reverted %}
-<tr><td>{{ x.title }}</td><td>{{ x.host }}</td><td>{{ x.decided_by or "-" }}</td><td>{{ x.at or "-" }}</td><td>{{ x.why }}</td></tr>
+<tr><td>{{ x.title }}</td><td>{{ x.host }}</td><td>{{ x.decision_identity.text }}</td><td>{{ x.at or "-" }}</td><td>{{ x.why }}</td></tr>
 {% endfor %}
 </table>
 {% endif %}

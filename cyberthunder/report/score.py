@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 
 from cyberthunder.findings.schema import Finding
 from cyberthunder.report.onepager import resolve_scan
+from cyberthunder.report import access
 from cyberthunder.report.render import ReportError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -72,6 +73,7 @@ def load_answer_keys(key_dir: str | Path) -> tuple[list[dict], list[str]]:
                 "target": doc.get("target"), "sim_target": doc.get("sim_target"),
                 "qualifier": raw.get("container") or raw.get("object") or None,
                 "address": raw.get("address"),
+                "authorization_scopes": doc.get("authorization_scopes"),
             })
     return items, targets
 
@@ -133,8 +135,16 @@ def _discovery_findings(ctx: "AppContext") -> tuple[list[Finding], bool]:
     if svc is None:
         return [], False
     try:
-        swept = any(r.status == "finished" for r in svc.runs())
-        return ([f for f in svc.findings() if f.is_open] if swept else []), swept
+        runs = list(svc.runs())
+        for run in runs:
+            if run.status == "finished":
+                access.artifact(ctx, getattr(run, "authorization_scopes", None))
+        swept = any(r.status == "finished" for r in runs)
+        findings = list(svc.findings()) if swept else []
+        access.observations(ctx, findings)
+        return [f for f in findings if f.is_open], swept
+    except PermissionError:
+        raise
     except Exception:  # noqa: BLE001  - a broken discovery store must not stop the score card
         return [], False
 
@@ -142,6 +152,7 @@ def _discovery_findings(ctx: "AppContext") -> tuple[list[Finding], bool]:
 def time_to_plan_s(ctx: "AppContext", run: dict) -> float | None:
     """Seconds from the scan starting to the first proposal created after it, from the audit log."""
     from datetime import datetime
+    access.audit(ctx)
     start = run.get("started_at")
     if not start:
         return None
@@ -160,6 +171,9 @@ def time_to_plan_s(ctx: "AppContext", run: dict) -> float | None:
 def score(ctx: "AppContext", scan_id: str | None = None, key_dir: str | Path | None = None) -> dict:
     sid, run, findings = resolve_scan(ctx, scan_id)
     items, _targets = load_answer_keys(key_dir or default_key_dir(ctx))
+    for item in items:
+        access.artifact(ctx, item["authorization_scopes"],
+                        targets=[t for t in (item.get("target"), item.get("sim_target")) if t])
     open_f = [f for f in findings if f.is_open]
     disc_f, swept = _discovery_findings(ctx)
     scanned = {f.host for f in findings} | set(run.get("targets") or [])
