@@ -35,6 +35,10 @@ issuer/client claims and provision a protected regular `auth/access.json` on
 the PVC as UID/GID 10001. `fsGroup` is deliberately absent because group-writable
 policy ancestors are rejected. Existing PVC ownership/modes must be reviewed
 before upgrade; do not replace or erase application state.
+Include the provisioner-created volume root in that review. Local acceptance
+found a root-owned `0777` PVC root above a UID 10001 `0700` application directory;
+the private child does not make that ancestor acceptable to protected readers.
+See [PVC trust and bounded acceptance](../../docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md#pvc-root-and-namespace-acceptance-limits).
 
 Create the Namespace/PVC first so an administrator can provision storage. For
 example, with Zarf's bundled yq:
@@ -117,6 +121,12 @@ and network policies, plus `get /version`, for discovery, configuration scans
 and image baselines;
 it cannot apply Kubernetes remediation or read Secrets. Use a kubectl version
 compatible with the target cluster (`--build-arg KUBECTL_VERSION=vX.Y.Z`).
+
+These cluster-wide permissions differ from a namespace-only Role. The current
+standard collectors issue cluster-wide requests; successful reads of selected
+types inside one namespace do not establish an end-to-end scan. The
+[bounded local acceptance](../../docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md#pvc-root-and-namespace-acceptance-limits)
+established limited namespace evidence and persistence, not full scanning or SSO.
 
 Neither packaged role grants `nodes/proxy`; even `get` on that subresource can
 authorize kubelet command execution. Optional kubelet `configz` evidence remains

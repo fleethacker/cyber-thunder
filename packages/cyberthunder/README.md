@@ -36,6 +36,10 @@ the PVC root/auth directory and regular `auth/access.json` before deployment;
 see the exact ownership, policy example and migration steps in the linked
 document. There is no shared-admin seed or trust-copying init container.
 `fsGroup` is no longer used because it conflicts with protected policy paths.
+Review the provisioner-created PVC root as well as the application directory:
+a root-owned `0777` ancestor remains unsafe even with a UID 10001 `0700` child.
+See [PVC trust and bounded acceptance](../../docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md#pvc-root-and-namespace-acceptance-limits);
+development-mode persistence does not establish protected-policy acceptance.
 
 This source profile replaces the former Authservice `/login` flow with the
 application's native `/auth/callback`. The UI/login endpoints load before
@@ -83,6 +87,12 @@ configuration scan, cluster survey and image baseline collectors.
 It mounts a rotating projected token and a kubeconfig that points at the local
 cluster, and allows Kubernetes API egress through UDS. It cannot mutate cluster
 resources or read Secrets. Deployment does not start a baseline automatically.
+
+A namespace-only Role is not equivalent to this cluster-wide survey role:
+the current standard collectors still issue cluster-wide requests. Local
+acceptance with seven readable resource types in one namespace established
+limited namespace evidence, not an end-to-end collector scan, verified-account
+authentication or SSO. See the [acceptance limits](../../docs/DEPLOYMENT_CREDENTIAL_PROVISIONING.md#pvc-root-and-namespace-acceptance-limits).
 
 ### Upgrade existing scan permissions
 

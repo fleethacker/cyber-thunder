@@ -118,7 +118,8 @@ existing state PVC can hold `auth/credentials/...`; a storage administrator must
 provision it while the application is stopped, preserving existing state.
 For container files, use UID/GID 10001 (1000 only for the alternate image), directories mode
 `0700`, and private key/password files mode `0600` or `0400` readable by that UID.
-Review every ancestor for trusted ownership and no group/other writes. The
+Review every ancestor, including the provisioner-created PVC root when using
+an application subdirectory, for trusted ownership and no group/other writes. The
 reader trusts root or the effective UID and has a narrow root-owned sticky
 directory exception. `fsGroup` is not a replacement for these requirements.
 
@@ -217,6 +218,29 @@ accepted, even if copied into a regular file. Follow the
 [account Kubernetes provisioning contract](../packages/cyberthunder/docs/IDENTITY_REVIEW.md#account-kubernetes-credentials-required-provisioning-seam)
 for the supported explicit static token or client certificate/key configuration
 and least-privilege target RBAC.
+
+### PVC root and namespace acceptance limits
+
+The bounded local-cluster acceptance on 2026-11-06, using source `c9566db`,
+observed a root-owned `0777` PVC root with `/state/app` owned by UID 10001 at
+`0700`. Development-mode SQLite state and audit persistence survived pod
+replacement. That result does not establish trusted policy/credential storage:
+the root lacks the sticky-directory exception and fails the protected readers'
+ancestor checks even though the child is private. Before verified operation,
+the storage administrator must review and correct the actual volume root and
+all intervening directories under the provisioning contract above, preserving
+state. Making only the child private or reusing the persistence fixture is
+insufficient. No verified-storage provisioning fix was established by that run.
+
+The same run read seven resource types only in its owned namespace through a
+restricted service account. Cluster-wide requests were denied. Existing checks
+evaluated those namespace snapshots and detected one seeded Deployment finding;
+the standard collectors' cluster-wide requests cannot complete under that
+namespace-only Role. This is limited namespace evidence, not an end-to-end
+collector scan. Full Kubernetes SSO, successful verified-account authentication
+and remediation were outside that acceptance. Namespace-scoped collection
+would require a separate implementation and acceptance; it is not supplied by
+these provisioning instructions.
 
 Before operational acceptance, verify protection/readability as the actual
 runtime account and validate each authorized account/action against the intended
