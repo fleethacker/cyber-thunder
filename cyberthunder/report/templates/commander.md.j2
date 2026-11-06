@@ -44,26 +44,29 @@ No unsuppressed open intrusion indicators in the available observations; this is
 {% endif %}
 ## Decisions
 
+Recorded proposal states; these counts do not establish current permission to apply.
+
 Pending {{ r.decisions.proposed }} | Approved {{ r.decisions.approved }} | Applied {{ r.decisions.applied }} | Verified {{ r.decisions.verified }} | Rolled back {{ r.decisions.rolled_back }} | Failed {{ r.decisions.failed }} | Denied {{ r.decisions.denied }}
 
 {% if r.verified %}
-| Verified change | Host | Approved by | Verified at (UTC) |
+| Verified change | Host | Recorded approval decisions | Verified at (UTC) |
 |---|---|---|---|
 {% for v in r.verified %}
-| {{ v.title }} | {{ v.host }} | {{ v.decision_identity.text | md_cell }} | {{ v.verified_at or "-" }} |
+| {{ v.title | md_cell }} | {{ v.host | md_cell }} | {{ v.approval_evidence.approver_text | md_cell }} | {{ v.verified_at or "-" }} |
 {% endfor %}
 {% else %}
 No verified changes yet.
 {% endif %}
 {% if r.reverted %}
 
-| Reverted or failed change | Host | Approved by | When (UTC) | Why |
+| Reverted or failed change | Host | Recorded approval decisions | When (UTC) | Why |
 |---|---|---|---|---|
 {% for x in r.reverted %}
-| {{ x.title }} | {{ x.host }} | {{ x.decision_identity.text | md_cell }} | {{ x.at or "-" }} | {{ x.why | md_cell }} |
+| {{ x.title | md_cell }} | {{ x.host | md_cell }} | {{ x.approval_evidence.approver_text | md_cell }} | {{ x.at or "-" }} | {{ x.why | md_cell }} |
 {% endfor %}
 {% endif %}
 
+{% include "_approvals.md.j2" %}
 ## Top risks
 
 {% for t in r.top %}

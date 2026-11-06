@@ -1,0 +1,26 @@
+## Approval provenance and quorum
+
+{% for p in r.proposal_approvals %}
+### {{ p.title | md_cell }} — {{ p.host | md_cell }} ({{ p.proposal_id | md_cell }})
+
+**{{ p.summary | md_cell }}**
+
+Proposer: {{ p.proposer_identity.text | md_cell }}
+
+{{ p.validation_text }}. {{ p.limitation }}
+
+| Receipt | Recorded reviewer | Approved at | Note |
+|---|---|---|---|
+{% for vote in p.approval_identities %}
+| {{ (vote.id or "Not recorded") | md_cell }} | {{ vote.identity.text | md_cell }} | {{ (vote.approved_at or "Not recorded") | md_cell }} | {{ (vote.note or "—") | md_cell }} |
+{% else %}
+| — | {{ p.approver_text | md_cell }} | — | — |
+{% endfor %}
+
+Complete recorded approval and proposer evidence:
+
+<pre>{{ p.recorded_json | e }}</pre>
+
+{% else %}
+No proposals recorded.
+{% endfor %}

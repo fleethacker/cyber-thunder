@@ -51,13 +51,14 @@
 {% endif %}
 
 <h2>Decisions</h2>
+<p class="meta">Recorded proposal states; these counts do not establish current permission to apply.</p>
 <p>Pending {{ r.decisions.proposed }} | Approved {{ r.decisions.approved }} | Applied {{ r.decisions.applied }} |
  Verified {{ r.decisions.verified }} | Rolled back {{ r.decisions.rolled_back }} | Failed {{ r.decisions.failed }} | Denied {{ r.decisions.denied }}</p>
 {% if r.verified %}
 <table>
-<tr><th>Verified change</th><th>Host</th><th>Approved by</th><th>Verified at (UTC)</th></tr>
+<tr><th>Verified change</th><th>Host</th><th>Recorded approval decisions</th><th>Verified at (UTC)</th></tr>
 {% for v in r.verified %}
-<tr><td>{{ v.title }}</td><td>{{ v.host }}</td><td>{{ v.decision_identity.text }}</td><td>{{ v.verified_at or "-" }}</td></tr>
+<tr><td>{{ v.title }}</td><td>{{ v.host }}</td><td class="approval-reviewers">{{ v.approval_evidence.approver_text }}</td><td>{{ v.verified_at or "-" }}</td></tr>
 {% endfor %}
 </table>
 {% else %}
@@ -65,13 +66,14 @@
 {% endif %}
 {% if r.reverted %}
 <table>
-<tr><th>Reverted or failed change</th><th>Host</th><th>Approved by</th><th>When (UTC)</th><th>Why</th></tr>
+<tr><th>Reverted or failed change</th><th>Host</th><th>Recorded approval decisions</th><th>When (UTC)</th><th>Why</th></tr>
 {% for x in r.reverted %}
-<tr><td>{{ x.title }}</td><td>{{ x.host }}</td><td>{{ x.decision_identity.text }}</td><td>{{ x.at or "-" }}</td><td>{{ x.why }}</td></tr>
+<tr><td>{{ x.title }}</td><td>{{ x.host }}</td><td class="approval-reviewers">{{ x.approval_evidence.approver_text }}</td><td>{{ x.at or "-" }}</td><td>{{ x.why }}</td></tr>
 {% endfor %}
 </table>
 {% endif %}
 
+{% include "_approvals.html.j2" %}
 <h2>Top risks</h2>
 {% if r.top %}
 <ul>

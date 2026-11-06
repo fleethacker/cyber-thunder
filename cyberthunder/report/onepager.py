@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from cyberthunder.control.approvals import Proposal, ProposalState
 from cyberthunder.findings.schema import RE_ATTACK, Finding, Severity
 from cyberthunder.report.assurance import build_assurance
-from cyberthunder.report import access
+from cyberthunder.report import access, approvals
 from cyberthunder.report.identity import attribution
 from cyberthunder.report.closure import state_time
 from cyberthunder.report.render import ReportError, render
@@ -144,7 +144,7 @@ def discovery_open(ctx: "AppContext") -> list[Finding]:
         return []
 
 
-def _reverted(p: Proposal) -> dict:
+def _reverted(p: Proposal, approval_evidence=None) -> dict:
     last = next((h for h in reversed(p.history) if h.get("state") == p.state.value), {})
     failed = any(h.get("state") == ProposalState.FAILED.value for h in p.history)
     if p.state == ProposalState.FAILED:
@@ -156,6 +156,7 @@ def _reverted(p: Proposal) -> dict:
     note = (last.get("note") or "").strip()
     return {"title": p.title, "host": p.host, "state": p.state.value, "decided_by": p.decided_by,
             "decision_identity": attribution(p.decided_by, p.decided_principal),
+            "approval_evidence": approval_evidence or approvals.evidence(None, p),
             "at": last.get("ts"), "why": why + (f": {note}" if note else "")}
 
 
@@ -177,6 +178,7 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     open_f = [f for f in findings if f.is_open and f.id not in closed_ids and f.id not in suppressed_ids]
     hunt = [f for f in open_f if is_hunt(f)]
     props = access.proposals(ctx)
+    approval_evidence = {p.id: approvals.evidence(ctx, p) for p in props}
     active_disc = [f for f in disc if f.id not in suppressed_ids]
 
     # open findings by host and CAT
@@ -196,10 +198,12 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
         counts[p.state.value] += 1
     verified = [{"title": p.title, "host": p.host, "decided_by": p.decided_by,
                  "decision_identity": attribution(p.decided_by, p.decided_principal),
+                 "approval_evidence": approval_evidence[p.id],
                  "verified_at": state_time(p, ProposalState.VERIFIED)}
                 for p in props if p.state == ProposalState.VERIFIED]
     verified.sort(key=lambda r: r["verified_at"] or "")
-    reverted = sorted((_reverted(p) for p in props if p.state in (ProposalState.ROLLED_BACK, ProposalState.FAILED)),
+    reverted = sorted((_reverted(p, approval_evidence[p.id]) for p in props
+                       if p.state in (ProposalState.ROLLED_BACK, ProposalState.FAILED)),
                       key=lambda r: r["at"] or "")
 
     # top risks
@@ -279,6 +283,7 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
         "hunt": [{"host": f.host, "title": f.title, "attack": attack_ids(f)}
                  for f in sorted(hunt, key=lambda f: (f.host, f.title))],
         "decisions": counts, "verified": verified, "reverted": reverted, "top": top,
+        "proposal_approvals": [{"title": p.title, **approval_evidence[p.id]} for p in props],
         "assurance": assurance,
         "discovery": [{"host": f.host.removeprefix("discovered:"), "title": f.title, "severity": f.severity.value,
                        "check": f.rule_id} for f in sorted(disc, key=lambda f: (-f.severity.rank, f.host, f.rule_id))],
@@ -289,4 +294,7 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
 
 def render_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> tuple[str, dict]:
     data = build_commander(ctx, scan_id, fmt)
+    if fmt == "json":
+        import json
+        return json.dumps(data, indent=2, ensure_ascii=False), data
     return render("commander", fmt, r=data), data

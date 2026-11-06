@@ -1,0 +1,13 @@
+<h2>Approval provenance and quorum</h2>
+{% for p in r.proposal_approvals %}
+<h3>{{ p.title }} — {{ p.host }} ({{ p.proposal_id }})</h3>
+<p><b>{{ p.summary }}</b><br>Proposer: {{ p.proposer_identity.text }}<br>
+{{ p.validation_text }}. {{ p.limitation }}</p>
+<table class="approval-receipts"><tr><th>Receipt</th><th>Recorded reviewer</th><th>Approved at</th><th>Note</th></tr>
+{% for vote in p.approval_identities %}
+<tr><td>{{ vote.id or "Not recorded" }}</td><td>{{ vote.identity.text }}</td><td>{{ vote.approved_at or "Not recorded" }}</td><td>{{ vote.note or "—" }}</td></tr>
+{% else %}
+<tr><td colspan="4">{{ p.approver_text }}</td></tr>
+{% endfor %}</table>
+<details open class="approval-evidence"><summary>Complete recorded approval and proposer evidence</summary><pre>{{ p.recorded_json }}</pre></details>
+{% else %}<p>No proposals recorded.</p>{% endfor %}
