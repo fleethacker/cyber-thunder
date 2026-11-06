@@ -86,6 +86,8 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | GET | `/findings/{id}` | → Finding+ |
 | GET | `/findings/{id}/review` | `?scan_id` optional historical view → summary and ordered review history |
 | PUT | `/findings/{id}/review` | `{disposition, reason, supporting_evidence?, expires_at?, expected_revision, evidence_fingerprint}` → summary and history. Current findings only; stale revision/evidence returns `409`, historical writes `400` |
+| PUT | `/findings/{id}/risk-acceptance` | `{reason, supporting_evidence, expires_at, expected_revision, evidence_fingerprint}` → review history. Explicit current account/target/environment `risk.accept` grant and fresh human authentication; expiry at most 30 days |
+| POST | `/findings/{id}/risk-acceptance/revoke` | `{reason, expected_revision, evidence_fingerprint}` → review history; the same current authority is required. Historical writes are refused |
 | POST | `/findings/{id}/propose` | → Proposal+ (`409` if a live proposal or active review suppression exists, `404` if no library fix) |
 | POST | `/findings/{id}/explain` | `{force?: bool}` → Explanation (synchronous; may take up to `CT_LLM_TIMEOUT`) |
 | POST | `/findings/explain` | `{ids?: [..]}` → `{queued: n}`; background precompute, default = all open findings of the latest scan |
@@ -110,7 +112,9 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
   references, rule identifiers, scanner provenance and STIG benchmark names, not title keywords.
   See [FINDINGS.md](FINDINGS.md) for classification details.
 - `confidence` accepts `high`, `medium`, `low`, `unknown`; `review` accepts `unreviewed`, `confirmed`,
-  `false_positive`, `not_applicable`, `needs_investigation`. The review facet is independent of scanner status.
+  `false_positive`, `not_applicable`, `needs_investigation`, `risk_accepted`, `risk_expired`,
+  `risk_reopened` and `risk_revoked`. The review facet is independent of scanner status.
+  Risk status facets can overlap the effective ordinary disposition and must not be summed as disjoint counts.
 - `q` is a case-insensitive substring of title, machine/host ID, rule ID, rule version, group ID,
   reference identifiers (including CVEs and STIGs), source, benchmark, or release.
 - `sort_by` accepts `default`, `severity`, `host`, `asset_type`, `category`, `title`, `rule_id`,
@@ -121,7 +125,8 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
   or the alphabetically sorted tuple of category names. Ties use finding ID ascending in either
   direction. Missing/invalid values, including unknown severity, come last for explicit sorts.
   Confidence orders Low/Medium/High with Unknown last in either direction; review orders Unreviewed,
-  Needs investigation, Confirmed, False positive, Not applicable.
+  Needs investigation, Confirmed, False positive, Not applicable, Risk accepted.
+  Expired/reopened/revoked risk filters retain their ordinary effective disposition for sorting.
 - `total` remains the filtered count. `unfiltered_total`, `summary`, and `facets` describe the complete
   selected view before filters or pagination. `facets` has one key per filter axis, each containing
   `{value, label, count}` entries. Values are normalized filter tokens, labels retain source spelling,

@@ -59,6 +59,13 @@ every other role. Human-only actions are removed from workload permissions. Role
 matching policy grants below. Standing approval cannot be enabled in verified mode until verifiable
 policy signing is implemented.
 
+Temporary [risk acceptance](RISK_ACCEPTANCE.md) is a distinct human approver action,
+`risk.accept`. Accepting or revoking it requires fresh authentication and an exact
+subject grant listing both the target and environment. Group grants, wildcards,
+node administration and ordinary `review` authority do not supply this permission.
+An accepted risk remains a scanner failure and holds remediation; it never approves
+a change or combines permissions from a person's other account.
+
 New persisted principal evidence keeps session correlation as an issuer/account-scoped
 `session_fingerprint` (SHA-256), with `session_id` set to null. Raw issuer session identifiers
 stay in the authenticated in-memory principal; the fingerprint never grants access or renews

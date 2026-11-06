@@ -1,9 +1,9 @@
-# Operator risk acceptance — future candidate
+# Operator risk acceptance
 
-This bounded VAL-05 candidate records an operator's temporary acceptance of an open scanner risk.
+This VAL-05 capability records an operator's temporary acceptance of an open scanner risk.
 It does not establish official enclave risk authorization, compliance, a fixed vulnerability, a clean
 system, or permission to change a target. Local development decisions are unverified fixtures.
-Release and integration are separate work; this candidate does not change deployment configuration.
+Deployment policy must explicitly grant this authority to the intended accounts and targets.
 
 ## Decision and authority
 

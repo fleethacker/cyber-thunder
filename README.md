@@ -254,6 +254,7 @@ Automated regression configuration and its explicit platform limitations are des
 | [docs/COVERAGE.md](docs/COVERAGE.md) | implemented checks, benchmark denominators, executable fixes and runbooks |
 | [docs/CONFIDENCE.md](docs/CONFIDENCE.md) | evidence-strength grades, provenance, freshness and limits |
 | [docs/FINDING_REVIEW.md](docs/FINDING_REVIEW.md) | reasoned reviews, false positives, expiry, history and remediation guards |
+| [docs/RISK_ACCEPTANCE.md](docs/RISK_ACCEPTANCE.md) | temporary account-authorized risk decisions, remediation holds and unchanged scanner failures |
 | [docs/REPORT_ASSURANCE.md](docs/REPORT_ASSURANCE.md) | raw scanner results and review decisions in commander and POA&M reports |
 | [docs/REMEDIATION_PLAN.md](docs/REMEDIATION_PLAN.md) | static change previews, declared capture paths, verification and rollback instructions |
 | [docs/CHANGE_HISTORY.md](docs/CHANGE_HISTORY.md) | persistent change history, finding status after rollback, restore guards and coverage limits |
