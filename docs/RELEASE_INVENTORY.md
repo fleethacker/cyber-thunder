@@ -179,3 +179,8 @@ and provide explicit runtime/model artifact provenance. Verify licenses separate
 A vulnerability report requires an actual scanner and dated local database receipt;
 this collector never invents scan results. Integration into release policy, signing,
 full gates, publication, and deployment are separate follow-on decisions.
+
+For a bounded offline scan of a retained artifact and its matching receipt, see
+[release vulnerability evidence](RELEASE_VULNERABILITY_EVIDENCE.md). That standalone
+helper preserves partial coverage and reports unavailable when Trivy recognizes no
+packages; it does not turn this inventory into complete SBOM or release approval evidence.
