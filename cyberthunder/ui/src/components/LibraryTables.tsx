@@ -138,6 +138,10 @@ export function FileProvenance({ file }: { file: HeldFile }) {
   const provenance = contentProvenance(evidence);
   return <Stack gap={2}>
     <Text size="sm" fw={600}>{file.source === 'pulled' ? 'Downloaded' : file.source === 'bundled' ? 'Bundled reference' : file.source === 'uploaded' ? 'Uploaded locally' : 'Folder import'}</Text>
+    <Badge size="xs" variant="light" color={file.active === true ? 'blue' : 'gray'}>
+      {file.active === true ? 'Active in library' : file.active === false ? 'Stored reference' : 'Activation not recorded'}
+    </Badge>
+    {file.commit_status === 'committed_with_bookkeeping_pending' && <Text size="xs" c="orange">Final recording pending</Text>}
     <Text size="xs">{fmtZonedTime(at)}</Text>
     {by && <Text size="xs" c="dimmed">{by}</Text>}
     <Text size="xs" c={provenance.color}>{provenance.text}</Text>
@@ -157,7 +161,8 @@ export function CatalogTable({ catalogs }: { catalogs: LibraryCatalog[] }) {
     render={(c) => <Table.Tr key={c.path}>
       <Table.Td><Text size="sm" fw={600}>{c.title || c.benchmark_id}</Text><Text size="xs" c="dimmed" style={{ overflowWrap: 'anywhere' }}>{c.filename}</Text></Table.Td>
       <Table.Td>{c.release || 'Not provided'}<Text size="xs" c="dimmed">{c.rules.toLocaleString()} rules</Text></Table.Td>
-      <Table.Td><Badge variant="light" color={c.origin === 'bundled_reference' ? 'gray' : 'blue'}>{c.origin === 'bundled_reference' ? 'Bundled reference' : 'Imported catalog'}</Badge></Table.Td>
+      <Table.Td><Stack gap={3}><Badge variant="light" color={c.origin === 'bundled_reference' ? 'gray' : 'blue'}>{c.origin === 'bundled_reference' ? 'Bundled reference' : 'Imported catalog'}</Badge>
+        <Text size="xs" c="dimmed">{c.active === true ? 'Active in library' : c.active === false ? 'Stored reference' : 'Activation not recorded'}</Text></Stack></Table.Td>
       <Table.Td>{c.origin === 'bundled_reference' ? 'Included with this build' : fmtZonedTime(c.imported_at)}</Table.Td>
     </Table.Tr>} />
   </Stack>;

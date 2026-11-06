@@ -35,3 +35,22 @@ test('provenance distinguishes imported operator evidence from transport, legacy
     assert.match(render(evidence), /authenticity not established/);
   }
 });
+
+test('library activation is shown separately from authenticity and incomplete recording', () => {
+  const fileHtml = (file) => renderToStaticMarkup(h(MantineProvider, {}, h(FileProvenance, {
+    file: { source: 'imported', ...file },
+  })));
+  const historical = fileHtml({ active: false, authenticity: { status: 'operator_attested', operator_attested: true } });
+  assert.match(historical, /Stored reference/);
+  assert.doesNotMatch(historical, /Active in library/);
+  const current = fileHtml({ active: true, commit_status: 'committed_with_bookkeeping_pending',
+    authenticity: { status: 'human_override' } });
+  assert.match(current, /Active in library/);
+  assert.match(current, /authenticity not established/);
+  assert.match(current, /Final recording pending/);
+  for (const active of [undefined, null, 1, 'true']) {
+    const unknown = fileHtml({ active });
+    assert.match(unknown, /Activation not recorded/);
+    assert.doesNotMatch(unknown, /Active in library/);
+  }
+});

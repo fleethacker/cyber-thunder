@@ -14,6 +14,13 @@ Signatures attest provenance; they are not freshness proof. Normal upgrades rais
 
 ## Exceptional local maintenance
 
+The Downloaded view labels files and catalogs as **Active in library**, **Stored
+reference**, or **Activation not recorded**. These labels are separate from
+signature assurance and maintenance subscriptions. A **Final recording pending**
+notice identifies committed content with unfinished bookkeeping. Library
+activation does not establish that a scanner configured to a historical path
+has switched to the newer release.
+
 Use the library's Import/transfer view, or the existing local-import API. Automatic pulls and actual network acquisition cannot carry exceptional publication intent. The legacy STIG route/CLI directs exceptional cases to Import/transfer; a typed actor name is never consent.
 
 1. Choose the candidate file, or a server folder containing exactly one package (with its lock/request documents where applicable). Submit the normal import. Authenticity requirements still apply: for unsigned or unknown-signer content, explicitly request the existing authenticity exception and give its separate reason.

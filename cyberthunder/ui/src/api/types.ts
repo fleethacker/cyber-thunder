@@ -860,6 +860,7 @@ export interface LibraryProduct {
 }
 
 export interface LibraryCatalog {
+  active?: boolean;
   benchmark_id: string;
   title: string;
   release: string;
