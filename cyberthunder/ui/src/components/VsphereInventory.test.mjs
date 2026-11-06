@@ -300,3 +300,47 @@ test('source API identifiers are encoded and history is explicitly bounded to tw
     ['POST', '/api/v1/discovery/vsphere/source%2Fa/collect'],
   ]);
 });
+
+for (const change of ['subject', 'issuer', 'read-revocation']) test(`a loaded snapshot is removed on ${change} changes and retained handlers cannot revive it`, async t => {
+  const panel = await setup(t); await panel.respond([brief(run('private-old'))]);
+  panel.control('View collection private-old').props.onClick(); await panel.settle(); await panel.respond(run('private-old'));
+  assert.equal(panel.selected().id, 'private-old');
+  const retained = ['Refresh source history', 'Collect inventory'].map(label => panel.button(label).props.onClick);
+  retained.push(panel.control('View collection private-old').props.onClick);
+  const next = who(change === 'read-revocation' ? [] : ['read', 'discover']);
+  if (change !== 'read-revocation') next.principal = { ...next.principal,
+    [change]: change === 'issuer' ? 'https://other-identity.test' : 'bob' };
+  await panel.changeAccount(next, false);
+  retained.forEach(callback => callback()); await panel.settle();
+  assert.equal(panel.requests.length, 2, 'Authority changes invalidate handlers before a render');
+  await panel.rerender();
+  assert.equal(panel.selected(), null);
+  assert.doesNotMatch(panel.texts(), /private-old/);
+  assert.equal(panel.requests.length, change === 'read-revocation' ? 2 : 3);
+  if (change !== 'read-revocation') await panel.respond([]);
+  retained.forEach(callback => callback()); await panel.settle();
+  assert.equal(panel.requests.length, change === 'read-revocation' ? 2 : 3, 'Old handlers stay invalid after the new history read');
+});
+
+for (const change of ['authorization_id', 'environment', 'address', 'deletion']) test(`a loaded snapshot and retained actions do not survive source ${change}`, async t => {
+  const panel = await setup(t); await panel.respond([brief(run('private-old'))]);
+  panel.control('View collection private-old').props.onClick(); await panel.settle(); await panel.respond(run('private-old'));
+  const retained = ['Refresh source history', 'Collect inventory'].map(label => panel.button(label).props.onClick);
+  retained.push(panel.control('View collection private-old').props.onClick);
+  const resource = source(change === 'deletion' ? { authorization_id: 'reused-generation' }
+    : { [change]: change === 'address' ? '10.20.30.99' : 'new-owner' });
+  await panel.update({ target: change === 'deletion' ? null : resource });
+  assert.equal(panel.selected(), null);
+  assert.doesNotMatch(panel.texts(), /private-old/);
+  retained.forEach(callback => callback()); await panel.settle();
+  assert.equal(panel.requests.length, change === 'deletion' ? 2 : 3);
+  if (change === 'deletion') await panel.update({ target: resource });
+  await panel.respond([brief(run('current', {}, resource))]);
+  retained.forEach(callback => callback()); await panel.settle();
+  assert.equal(panel.requests.length, 3, 'Old read and collect handlers cannot act on a replacement source');
+  panel.control('View collection current').props.onClick(); await panel.settle();
+  await panel.respond(run('current', {}, resource));
+  assert.equal(panel.selected().id, 'current');
+  assert.deepEqual(panel.selected().authorization_scope, run('current', {}, resource).authorization_scope);
+  assert.ok(panel.requests.every(request => request.method === 'GET'));
+});

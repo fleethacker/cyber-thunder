@@ -158,3 +158,39 @@ requests, bounded history, failed requests, late body decoding, account changes,
 permission revocation, target generation/address changes, close/reopen and
 unmount while requests are pending. All fixtures are local; no inventory scan,
 loopback discovery probe or vCenter connection is started by these tests.
+
+## Independent review of the integrated UI candidate
+
+The independent review of `de7282e` found no concrete production UI defect in
+retained read/collect callbacks, account changes, source deletion/reassignment,
+local paging, incomplete results or reported power/address presentation. Eight
+additional regressions cover already-loaded snapshots across issuer, subject and
+read-permission changes; source ownership, environment and address changes;
+deletion followed by reuse; and the Assets page resolving its selected ID against
+the current inventory. Old callbacks cannot restore the former target or invoke
+collection against its replacement. An ID retained across inventory refreshes
+may select the replacement source, but its current configuration is passed to the
+drawer and triggers a fresh authorized history read.
+
+The three vSphere test files below passed **58 tests, zero failures and zero
+skips**, using Windows Node 26.13.0 in **9.30 seconds**:
+
+```powershell
+node --test cyberthunder/ui/src/components/VsphereInventory.test.mjs cyberthunder/ui/src/components/VsphereInventoryRendering.test.mjs cyberthunder/ui/src/components/VsphereInventoryPagination.test.mjs
+```
+
+Run this command from the repository root. These checks exercise actual handlers,
+the authenticated client and real Mantine static rendering; they do not constitute
+a fresh browser acceptance run. The existing intercepted Edge fixture was read,
+not repeated. No production code changed, and the full UI suite, typecheck,
+distribution build and live vCenter acceptance were not repeated for this review.
+
+The integrated release still requires the backend collector and credential-binding
+history checks reviewed in `8f9875f`. Frontend account resets do not establish
+per-collector authorization. A saved snapshot may remain displayed until a local
+authority/target change or a subsequent request invalidates it: this UI has no
+push invalidation for server policy, credential mapping or remote vCenter role
+changes. Remote role changes cannot be detected from saved inventory alone.
+Previously delivered data cannot be withdrawn from browser memory by a later
+server refusal. Live provider sessions and actual vCenter visibility remain
+separate acceptance work.

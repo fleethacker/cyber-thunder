@@ -139,3 +139,30 @@ test('Assets source opener rechecks read and account authority before updating t
   await panel.rerender(); open()(); await panel.settle();
   assert.equal(panel.find(n => n.type === 'VsphereInventory').props.target, source);
 });
+
+test('Assets resolves an open source against current inventory after deletion, reassignment and transport changes', async t => {
+  const evaluate = createModuleLoader(), permissions = permissionFixture(['read']);
+  let rows = [source], n = 0;
+  const panel = mount(hooks => evaluate(new URL('../pages/Assets.tsx', import.meta.url), {
+    '../lib/format': { fmtAgo: () => 'Earlier' },
+    react: hooks, '@mantine/core': ui, '@tabler/icons-react': ui,
+    '../api/client': { api: new Proxy({}, { get: () => () => assert.fail('The opener must not probe a source') }) },
+    '../components/VsphereInventory': { VsphereInventory: 'VsphereInventory', isVsphereTarget: component.isVsphereTarget },
+    '../components/PermissionGate': permissions.imports, '../components/setupAccess': { useSetupAccess: () => null },
+    '../components/common': ui, '../components/TargetForm': ui, '../components/HostSetup': ui, '../components/DiscoveryPanel': ui,
+    '../lib/hooks': { useAsync: () => ({ data: n++ % 2 === 0 ? rows : [], loading: false }) },
+  }).default);
+  t.after(() => panel.unmount()); await panel.settle();
+  const nodes = value => Array.isArray(value) ? value.flatMap(nodes) : value && typeof value === 'object' ? [value, ...nodes(value.props?.children)] : [];
+  const retained = nodes(panel.find(node => node.type === 'AsyncView').props.children(rows))
+    .find(node => node.props?.children === 'View vSphere inventory').props.onClick;
+  const selected = () => panel.find(node => node.type === 'VsphereInventory').props.target;
+  retained(); await panel.settle(); assert.equal(selected(), source);
+  rows = []; await panel.rerender(); assert.equal(selected(), null);
+  retained(); await panel.settle(); assert.equal(selected(), null, 'An old opener cannot restore a deleted target');
+  const reassigned = { ...source, environment: 'beta', authorization_id: 'replacement-generation', address: '10.20.30.99' };
+  rows = [reassigned]; await panel.rerender(); assert.equal(selected(), reassigned);
+  retained(); await panel.settle(); assert.equal(selected(), reassigned, 'Only current ownership is passed to the drawer');
+  rows = [{ ...reassigned, transport: 'ssh', options: {} }]; await panel.rerender(); assert.equal(selected(), null);
+  retained(); await panel.settle(); assert.equal(selected(), null, 'A stale source action cannot select an ordinary target');
+});
