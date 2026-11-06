@@ -187,6 +187,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
+    settings = Settings.from_env(state_dir=a.state_dir)
+    if settings.auth_mode != "dev" or settings.security_mode == "fleet":
+        # Local emergency stop remains available when the identity service is unreachable.
+        safe = a.fn.__name__ == "cmd_serve" or (a.fn.__name__ == "cmd_kill" and a.sub == "engage")
+        if not safe:
+            print("Verified mode requires an authenticated API session; local actor names cannot authorize this command.",
+                  file=sys.stderr)
+            return 2
     return a.fn(a)
 
 

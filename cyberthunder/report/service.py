@@ -10,7 +10,7 @@ import inspect
 import json
 from typing import TYPE_CHECKING
 
-from cyberthunder.report import checklist, coverage, fleet, friction, history, onepager, poam, score
+from cyberthunder.report import access, checklist, coverage, fleet, friction, history, onepager, poam, score
 from cyberthunder.report.render import FORMATS, ReportError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -30,6 +30,7 @@ class ReportService:
         self.ctx.audit.append("report.render", "report", {"kind": kind, "audit_head": head, **details}, subject=kind)
 
     def _head(self) -> str:
+        access.audit(self.ctx)
         return self.ctx.audit.verify().head
 
     @staticmethod
@@ -40,6 +41,7 @@ class ReportService:
         return fmt
 
     # -- reports --------------------------------------------------------------------
+    @access.rendered
     def commander(self, scan_id: str | None = None, fmt: str = "html") -> str:
         fmt = self._fmt(fmt)
         text, data = onepager.render_commander(self.ctx, scan_id, fmt)
@@ -48,6 +50,7 @@ class ReportService:
         self._audited("commander", data["audit"]["head"], scan_id=data["scan_id"], format=fmt)
         return text
 
+    @access.rendered
     def poam_csv(self, scan_id: str | None = None) -> str:
         head = self._head()
         text = poam.poam_csv(self.ctx, scan_id)
@@ -57,6 +60,7 @@ class ReportService:
         self._audited("poam", head, scan_id=scan_id, rows=max(text.count("\n") - 1, 0))
         return text
 
+    @access.rendered
     def checklist_cklb(self, scan_id: str | None = None, host: str | None = None) -> dict:
         head = self._head()
         doc = checklist.build_checklist(self.ctx, scan_id, host)
@@ -66,6 +70,7 @@ class ReportService:
                       rules=sum(len(s["rules"]) for s in doc["stigs"]))
         return doc
 
+    @access.rendered
     def fleet(self, fmt: str = "html") -> str:
         fmt = self._fmt(fmt)
         head = self._head()
@@ -73,6 +78,7 @@ class ReportService:
         self._audited("fleet", head, format=fmt)
         return text
 
+    @access.rendered
     def friction(self, fmt: str = "html") -> str:
         fmt = self._fmt(fmt)
         head = self._head()
@@ -81,12 +87,14 @@ class ReportService:
         self._audited("friction", head, format=fmt)
         return text
 
+    @access.rendered
     def score(self, scan_id: str | None = None, key_dir: str | None = None) -> dict:
         head = self._head()
         res = score.score(self.ctx, scan_id, key_dir)
         self._audited("score", head, scan_id=res["scan_id"], seeded=res["seeded"], found=res["found"])
         return res
 
+    @access.rendered
     def coverage(self, fmt: str = "html", benchmark_dir: str | None = None) -> str | dict:
         if fmt not in ("html", "md", "json"):
             raise ReportError("coverage format must be html, md or json")
@@ -119,6 +127,7 @@ class ReportService:
             return "coverage.html", self.coverage("html")
         raise ReportError(f"unknown report kind {kind!r}; expected one of {KINDS}")
 
+    @access.rendered
     def queue(self, kind: str, scan_id: str | None = None, host: str | None = None, *, actor: str = "report") -> dict:
         """Render a report and put it in the sync outbox so it goes out when the link comes back."""
         ing = getattr(self.ctx, "ingest", None)
@@ -130,6 +139,7 @@ class ReportService:
         if fn is None:
             raise ReportError("cannot queue: the ingest outbox has no enqueue method")
         filename, text = self.render_kind(kind, scan_id, host)
+        scopes = access.finish(self.ctx, access.current_scopes(self.ctx))
         kwargs, positional_free = {}, True
         for pname, param in inspect.signature(fn).parameters.items():
             if pname == "kind":
@@ -140,7 +150,7 @@ class ReportService:
                 kwargs[pname] = text
             elif pname in ("meta", "metadata"):
                 kwargs[pname] = {"report": kind, "scan_id": scan_id, "host": host, "bytes": len(text.encode("utf-8")),
-                                 "history_saved": kind in history.KINDS}
+                                 "history_saved": kind in history.KINDS, "authorization_scopes": scopes}
             elif pname == "actor":
                 kwargs[pname] = actor
             elif param.default is inspect.Parameter.empty and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY):

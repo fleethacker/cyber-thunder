@@ -18,7 +18,7 @@ from cyberthunder.transport.base import TransportError
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["targets"], route_class=MappedRoute)
 
-READ_ONLY_FIELDS = {"id", "added_at", "last_scan"}
+READ_ONLY_FIELDS = {"id", "added_at", "last_scan", "authorization_id"}
 # The id names files and directories (scan workdirs, snapshots), so it must be a plain name.
 TARGET_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 BOOL_FIELDS = ("in_scope", "sudo", "simulated")
@@ -50,7 +50,8 @@ def _build(data: dict) -> Target:
 
 @router.get("/targets")
 def list_targets(ctx=CtxDep) -> dict:
-    return {"targets": [t.to_dict() for t in ctx.inventory.all()]}
+    from cyberthunder.api.access import visible
+    return {"targets": [t.to_dict() for t in ctx.inventory.all() if visible(ctx, t)]}
 
 
 @router.post("/targets", status_code=201)
@@ -65,6 +66,8 @@ def add_target(data: dict = Body(...), ctx=CtxDep, actor: str = ActorDep) -> dic
     if not data.get("name"):
         data = {**data, "name": tid}
     t = _build({**data, "id": tid})
+    from cyberthunder.api.access import require_resource
+    require_resource(ctx, t, "admin")
     try:
         ctx.inventory.add_new(t)
     except FileExistsError:
@@ -76,6 +79,8 @@ def add_target(data: dict = Body(...), ctx=CtxDep, actor: str = ActorDep) -> dic
 @router.post("/targets/register-host", status_code=201)
 def register_host(data: dict = Body(...), ctx=CtxDep, actor: str = ActorDep) -> dict:
     target, reason = host_registration(data)
+    from cyberthunder.api.access import require_resource
+    require_resource(ctx, target, "admin")
     try:
         ctx.inventory.add_new(target)
     except FileExistsError:
@@ -103,6 +108,8 @@ def update_target(target_id: str, data: dict = Body(...), ctx=CtxDep, actor: str
     _check_types(changes)
     before = current.to_dict()
     updated = _build({**before, **changes})
+    from cyberthunder.api.access import require_resource
+    require_resource(ctx, updated, "admin")
     changed = sorted(k for k in changes if before.get(k) != getattr(updated, k))
     if not changed:
         return current.to_dict()
@@ -139,6 +146,8 @@ def discover_target(target_id: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
         declared = {key: getattr(target, key) for key in fields}
 
         def guard():
+            from cyberthunder.control.principal import authorize
+            authorize(ctx, "discover", actor=actor, target=target)
             current = persisted_target(ctx.inventory, target_id, require_scope=True)
             if any(getattr(current, key) != value for key, value in declared.items()):
                 raise ScopeViolation("target connection declarations changed; retry with the current inventory")
@@ -160,8 +169,8 @@ def discover_target(target_id: str, ctx=CtxDep, actor: str = ActorDep) -> dict:
             checked = HostConnectionTransport(transport, guard) if target.asset_type in {"linux", "windows"} else transport
             facts = adapter.discover(target, checked)
             guard()
-    except (ScopeViolation, KillSwitchEngaged):
-        ctx.audit.append("inventory.discover", actor, {"target": target_id, "reason": "scope or kill guard refused access"},
+    except (PermissionError, KillSwitchEngaged):
+        ctx.audit.append("inventory.discover", actor, {"target": target_id, "reason": "authorization, scope or kill guard refused access"},
                          subject=target_id, outcome="blocked")
         raise
     except (TransportError, NotImplementedError, KeyError) as e:

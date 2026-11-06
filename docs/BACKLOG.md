@@ -2,7 +2,7 @@
 
 What should be done and is not. Every entry here is known work, so nobody mistakes a demo shortcut for a design decision. An item leaves this file in the same pull request that ships it; if it is dropped instead, say why in that PR. Line references were checked against the tree on 4 Nov 2026 and will drift; search for the named function if a line has moved.
 
-**Identity today, in one line:** the application approver is still a typed name; the merged UDS package adds gateway SSO, but the application does not yet bind approvals to that verified user or a per-user target credential.
+**Identity today, in one line:** configured OIDC/mesh mode verifies the acting account, enforces roles and target/environment/action grants, and selects that account's configured target credentials. Local development mode remains explicitly unverified. Live enclave identity integration and the remaining controls below are still required.
 
 **What stops this being fielded, in short:** section 2; identity is one of five blockers, not the only one.
 
@@ -16,62 +16,63 @@ Completed documentation/reporting work: COV-01 now ships as `report coverage`, t
 
 | Question | Today | Where |
 |---|---|---|
-| Who is acting? | Whatever the `X-Actor` header says | `cyberthunder/api/deps.py:13-16`, `cyberthunder/api/util.py:36-48` |
-| What is checked about the name? | Not empty, no control characters, at most 128 characters, not `agent`/`llm`/`system`-style, not `policy:` | `cyberthunder/control/identity.py:35-48` |
-| Where does the UI get the name? | A free-text box kept in browser `localStorage` | `cyberthunder/ui/src/pages/Settings.tsx:25`, `cyberthunder/ui/src/api/client.ts:16,24` |
-| CLI identity | `--actor`, defaulting to `CT_ACTOR`, then the OS user name | `cyberthunder/cli.py:113,131` |
-| Login, session, token, certificate | No application principal/session validation; the UDS gateway has Keycloak SSO configuration | `cyberthunder/api/`, `packages/cyberthunder/uds.yaml` |
-| Transport to the UI and API | Plain HTTP, bound to `127.0.0.1:8000` by default | `cyberthunder/api/app.py:50-53`, `cyberthunder/config.py:58-59` |
-| Roles, approver roster, two-person rule | None; any accepted name may do anything | `ActorDep` at `cyberthunder/api/util.py:52` |
-| Kill switch engage | Allowed with no name ("unidentified operator (address)") | `cyberthunder/api/routes/kill.py:22-25` |
-| Standing-policy "signature" | `signed_by` set to the caller's string in a JSON file; an API edit while enabled re-signs under the editor's name; the gate checks the file on disk is enabled and names the same signer, not that its rules are unchanged | `cyberthunder/control/policy.py:54-56`, `cyberthunder/api/routes/policy.py:90`, `cyberthunder/control/approvals.py:184-192` |
-| Audit record identity | `actor` as a bare string; checkpoint is unsigned JSON beside the log | `cyberthunder/audit/chain.py:152-184` |
-| Access to target systems | One shared account per target, password from `CT_CRED_<ref>`, same account scans and applies | `cyberthunder/transport/ssh.py:24-28,43-55`, `cyberthunder/transport/winrm.py:88-101` |
-| Host identity of targets | SSH accepts any host key; WinRM allows HTTP, Basic and `cert_validation=ignore` | `ssh.py:62`, `winrm.py:8-11,26,72-73` |
+| Who is acting? | Verified issuer/subject in OIDC or mesh mode; caller-supplied names cannot replace it | `control/principal.py`, `api/auth.py` |
+| Login and sessions | Signed access tokens or server-held browser sessions with PKCE, CSRF, idle/absolute expiry and local logout | [AUTHORIZATION](AUTHORIZATION.md), [BROWSER_IDENTITY](BROWSER_IDENTITY.md) |
+| UI identity | Verified name, roles and permission explanations; development name remains labeled unverified | `ui/src/state/Identity.tsx`, `components/ActorChip.tsx` |
+| CLI identity | Typed actor is development-only; most CLI operations refuse verified mode until CLI login exists | ZT-06, `cli.py` |
+| Roles and human decisions | Viewer, analyst, approver, admin and auditor; workload accounts cannot approve/apply/rollback | `control/roles.py` |
+| Resource authorization | Exact account/group grants by target, environment and operation; node administration is separate | [ACCOUNT_ACCESS](ACCOUNT_ACCESS.md) |
+| Global history | Unfiltered node views require explicit `read.all`; audit is an explicit node-wide permission; target export is separate | `api/access.py`, `control/access.py` |
+| Historical evidence | Recorded target generation and environment prevent reassignment when IDs are reused or targets move; legacy unclassified records are unavailable in verified mode | `security/resources.py` |
+| Target credentials | Explicit account/action bindings for SSH, WinRM and protected static Kubernetes configs; no ambient/shared-admin fallback in verified mode | `security/credentials.py`, `security/kube_credentials.py` |
+| Standing policy | Enabled automatic approval is refused in verified mode pending content-bound signing | ZT-11 |
+| Audit identity | Version 2 records hash-cover verified principal evidence; old version 1 records remain unverified | `audit/chain.py` |
+| Transport trust | Fleet SSH requires trusted host identity; fleet WinRM requires HTTPS and CA validation; acknowledged range exceptions are recorded | [TRANSPORT_SECURITY](TRANSPORT_SECURITY.md) |
+| Remaining trust boundaries | Local state owner, Windows DACL provisioning, realm claim mappings, target-side privileges and actual enclave connectivity still need deployment validation | ZT-01/12/13/14/19/31 |
 
-What is real: machine identities can never take a human edge, and every action is recorded under some name. What is not: that the name belongs to the person at the keyboard, or that they hold authority to approve.
+Implementation tests use isolated identity and transport fixtures. Actual local Keycloak browser acceptance also covers four roles with JSON and SQLite ([OIDC_REVIEW](OIDC_REVIEW.md)). These checks do not establish CAC acceptance, AD delegation, an enclave deployment, a production broker, or zero-trust compliance. The remaining acceptance criteria below are retained deliberately.
 
 ### 1.1 People into the app
 
 **ZT-01 Package Cyber Thunder as a UDS package behind Keycloak SSO.** Pillars: User, Application, Network. Step: 60 days. Effort: 1-2 weeks. Depends: UDS Core cluster ([DEPLOYMENT](DEPLOYMENT.md)), `packages/identity-bootstrap`.
-- Today: PRs #18 and #19 added the application image, PVC, Zarf package (`packages/cyberthunder`, 0.2.2) and UDS ingress/Keycloak SSO restricted to `/UDS Core/Admin`. Native Python operation remains available. App-level principal validation, per-user permissions and target credentials remain open; packaging alone does not close this item.
+- Today: The image, PVC, Zarf package and gateway SSO exist. The app now has explicit OIDC/mesh validation and browser login, but the deployed UDS token forwarding, client/claim mappings, network restrictions and live login acceptance must still be configured and demonstrated. Native operation remains supported.
 - Target: `packages/cyber-thunder` (Zarf package plus UDS Package CR, modeled on `packages/podinfo`) with sidecar injection, tenant-gateway expose, an SSO client, authservice selector, egress limited to inventory CIDRs and the in-namespace model server, state on a PVC. Native deployment remains supported with standalone OIDC (ZT-03/04); the optional development identity mode stays explicitly unverified. Also produce an SBOM and pin image digests (`docs/fleet.yaml:16` names Iron Bank onboarding).
 - Done when: a request without a session is redirected to Keycloak; a pod outside the mesh cannot reach the app; `uds zarf dev lint packages/cyber-thunder` passes; the UI loads after login as an identity-bootstrap test user.
 
 **ZT-02 Replace the typed X-Actor name with a verified principal.** Pillars: User, Application. Step: 30 days. Effort: 4-6 days. Depends: none for the seam.
-- Today: see the table above; the CLI `approve` trusts `--actor` after `require_human` (`cyberthunder/cli.py:113`).
+- Today: Implemented: immutable verified principals, strict authentication on API routes, canonical actor binding at approval/kill/resource boundaries, and loopback-only unverified development mode. Forged names and workload human actions are rejected. Verified CLI login is separate ZT-06 work.
 - Target: `control/principal.py` with a frozen `Principal` (issuer, subject, display name, roles, groups, scopes, acr/amr, auth_time, session id, device, kind human|workload|dev). `get_principal` with three modes: `oidc` (validate a bearer token), `mesh` (validate the authservice-forwarded token, never trust headers as such), `dev` (today's header, kind=dev, assurance none, loopback only). `require_actor` becomes `require_principal`; the gate, kill switch and policy keep an actor string (`iss|sub`) plus the principal for audit, so state logic is untouched.
 - Done when: in oidc mode `X-Actor: alice` alone gets 401; a valid token records alice's issuer and subject; dev mode refuses a non-loopback bind; a test walks `app.routes` and fails if any non-GET route other than `POST /kill/engage` and the read-only `POST /policy/evaluate` and `POST /discovery/scopes/preview` lacks `require_principal`; forged-header, wrong-CA and expired cases are tested and each writes an audit record.
 
 **ZT-03 OIDC token validation with an offline-cached JWKS.** Pillars: User, Application. Step: 30 days code, 60 days on the range. Effort: 3-4 days. Depends: ZT-02.
-- Today: no token handling; `create_app` registers error handlers and routers and adds no middleware (`api/app.py:23-37`; no CORS, which is correct for same-origin).
+- Today: Implemented: bounded RS256/ES256 validation, issuer/audience/party/expiry checks and protected offline JWKS caching. Mixed signing/encryption key handling and explicit scope configuration passed actual local Keycloak 26.7.4 browser acceptance. Signed test-provider, cache replacement/expiry, clock and TLS failure cases are covered. Real enclave Keycloak outage/recovery acceptance remains open.
 - Target: `api/auth.py` validates RS256/ES256 signature, iss, aud, exp/nbf (60 s skew), azp, roles. JWKS cached in the state directory with fetch time, used while Keycloak is unreachable up to `CT_OIDC_JWKS_MAX_AGE`; unknown kid refreshes once, then fails closed. The SSE audit stream takes the same dependency.
 - Done when: expired, wrong audience, wrong issuer, `alg=none` and HS256-with-public-key tokens all get 401; a valid token works with Keycloak stopped inside max age and fails after it; the token never appears in logs.
 
 **ZT-04 Browser sessions, idle timeout and sign-out.** Pillars: User, Application. Step: 60 days. Effort: 3-5 days. Depends: ZT-01, ZT-03.
-- Today: no session; the name lives in `localStorage` indefinitely and is editable (`Settings.tsx:25`).
-- Target: authservice owns the cookie in mesh mode; standalone oidc uses code flow with PKCE, tokens in memory only. Idle and absolute lifetime from the realm (default 15 minutes idle, 8 hours maximum), remaining time shown, sign-out calls end-session, `GET /api/v1/whoami` replaces the name box with a read-only identity and role. Cookies Secure, HttpOnly, SameSite=Strict; cookie-authenticated writes need a custom header.
+- Today: Implemented: PKCE browser login, server-memory tokens, opaque Secure/HttpOnly/SameSite=Lax cookies, Origin/CSRF checks, idle/absolute limits and logout that revokes copied background contexts. Passive status polling does not renew idle time. Actual local Keycloak acceptance passed 54 JSON and 70 SQLite browser checks across four roles. Sessions are single-process and do not survive restart; IdP-wide logout and live enclave acceptance remain open.
+- Target: authservice owns the cookie in mesh mode; standalone oidc uses code flow with PKCE, tokens in memory only. Idle and absolute lifetime from the realm (default 15 minutes idle, 8 hours maximum), remaining time shown, sign-out calls end-session, `GET /api/v1/whoami` replaces the name box with a read-only identity and role. Cookies Secure, HttpOnly, SameSite=Lax for the authorization-code callback; cookie-authenticated writes need a custom header.
 - Done when: an approve after the idle period gets 401 and redirects; a cross-site form POST to approve is rejected; `localStorage` holds no token or name; sign-out in one tab ends access in another.
 
 **ZT-05 Step-up re-authentication for approve, policy sign, kill-switch release and scope changes.** Pillars: User. Step: 90 days. Effort: 3 days. Depends: ZT-03, ZT-04, a CAC/X.509 authenticator in the enclave realm.
-- Today: `approve` (`control/approvals.py:240`), policy signing (`control/policy.py:54`, `api/routes/policy.py:90`) and `release` (`control/killswitch.py:70`) accept any accepted name with no recency check.
+- Today: Verified identity and role/resource authorization are enforced, but authentication-age and CAC-level step-up policies are not yet enforced. Enabled standing approvals are refused in verified mode.
 - Target: `require_step_up(max_age, min_acr)` on those routes (default 5 minutes); otherwise 401 with a challenge carrying `max_age` and `acr_values`, and the UI re-runs login. auth_time, acr and amr go into the record (ZT-23).
 - Done when: a 10-minute-old token cannot approve and the refusal is audited; after re-login it can; a password-only login cannot approve when the floor is set to the CAC level.
 
 **ZT-06 CLI authentication.** Pillars: User, Device. Step: 60 days. Effort: 4-6 days. Depends: ZT-02, ZT-03.
-- Today: `--actor` is free text and the CLI writes state and audit directly.
+- Today: Development CLI still uses a typed actor. Verified mode refuses ordinary CLI state-changing commands; serving the authenticated API and local emergency kill engagement remain available. Device/interactive login and a verified API client remain open.
 - Target: `cyberthunder login` (OAuth device authorization grant, RFC 8628), token cached 0600 or in the OS store; human-only commands call the API. For a console with no browser: OS peer identity (`SO_PEERCRED` on Linux, named pipe client token on Windows), which is the operator's own smart-card logon. `--actor` survives in dev mode only.
 - Done when: `approve <id> --actor bob` in oidc mode exits non-zero naming the login command; after login it records bob's subject; in peer mode another OS user gets their own identity.
 
 **ZT-07 Disconnected operation: cached verified identity with expiry and audited break-glass.** Pillars: User, Visibility. Step: 90 days (range), 180 days (enclave CRL distribution). Effort: 1-2 weeks. Depends: ZT-03, ZT-05, ZT-08.
-- Today: the IdP is never needed because nobody is verified; once ZT-02/03 land, a down Keycloak locks everyone out.
+- Today: Existing signed tokens can be validated with bounded cached JWKS. Browser sessions remain bounded and in memory. Expiry is never bypassed; disconnected refresh/login, CRL distribution and reviewed break-glass remain open.
 - Target: enclave Keycloak is the primary IdP afloat (shore federation optional). If Keycloak itself is down: JWKS cache, offline sessions for named approvers up to `CT_OFFLINE_SESSION_MAX` (default 72 h), CAC checked against a local CRL with a maximum age; past it, view-only. Break-glass: one sealed local account per node, credential split between two people, usable only for kill switch and viewing, banner until reviewed after reconnect.
 - Done when: with Keycloak at 0 replicas, an approver signed in within the ceiling can approve and the record shows assurance `cached`; after the ceiling they cannot; with a stale CRL approve is refused; break-glass can release the kill switch but cannot approve, and both are audited. Maximum CRL age is an authorizing-official decision: record it in `docs/friction.yaml`.
 
 ### 1.2 Authorization inside the app
 
 **ZT-08 Roles: viewer, analyst, approver, admin, auditor.** Pillars: User, Application. Step: 30 days with dev-mode roles, 60 days with Keycloak groups. Effort: 4-5 days. Depends: ZT-02.
-- Today: every mutating route uses the same `require_actor` check, mostly through `ActorDep`: proposals (`api/routes/proposals.py:62-159`), policy PUT (`api/routes/policy.py:76-77`), kill release (`api/routes/kill.py:35-36`), asset accept (`api/routes/discovery.py:124-126`). GET routes take no identity.
+- Today: Implemented: explicit viewer/analyst/approver/admin/auditor permissions on API and core decisions, workload restrictions, and disabled UI actions with reasons. An admin role does not imply approval or target access. Trusted role-claim mapping and actual realm changes still need enclave acceptance.
 - Target: roles from the token's groups claim via config. viewer reads; analyst scans, discovers, proposes; approver approves, denies, signs policy; admin releases the kill switch and changes scope; auditor exports and verifies. Engage stays open to every authenticated user and the machine; network callers without a credential are refused (local console and sentinel engage still work); release needs admin, a reason, and alerts on repeated engage/release. A permissions table in `control/roles.py` serves API and CLI; `ApprovalGate.approve` and `KillSwitch.release` re-check the role. The UI disables actions the user cannot take and says why.
 - Done when: a test fails if any non-GET route lacks a role; an analyst approve gets 403 and is audited with reason `role`; a viewer can engage but not release; a role change applies at next token refresh.
 
@@ -80,19 +81,19 @@ What is real: machine identities can never take a human edge, and every action i
 - Target: `proposed_by`, `approvals[]` and `required_approvals` (CAT I = 2, otherwise 1, per enclave). APPROVED only when distinct approvers reach the count, none of them the proposer. A policy never satisfies a CAT I or a second approval. Optional rule: the person who accepted a device cannot be sole approver of its first change.
 - Done when: alice proposes and approves, refused and audited; for a CAT I, bob approves (1 of 2), bob again (refused), carol (APPROVED); a policy matching a CAT I does not auto-approve; old `proposals.json` loads.
 
-**ZT-10 Scope-based authorization by enclave and host group.** Pillars: User, Network, Data. Step: 60 days. Effort: 4-5 days. Depends: ZT-02, ZT-08.
-- Today: `Inventory.assert_in_scope` (`inventory/targets.py:187`) checks the target, not who is asking. Its shared cache can retain authorization when the inventory file disappears. The cluster baseline path now adds its own fail-closed check; other active consumers still need the same missing/unreadable-source protection.
-- Target: targets gain `enclave` and `groups`; principals carry scopes from a claim; `control/authz.py authorize(principal, target, action)` beside every `assert_in_scope` call and in the approve path.
-- Done when: an approver scoped to enclave A gets 403 on a host in enclave B, audited with both scopes; an out-of-scope scan is refused before any transport is built; every active consumer stops when persisted scope cannot be read or verified, including mid-run removal, without continuing on cached authorization.
+**ZT-10 Per-user and per-account authorization by environment, target and operation.** Pillars: User, Network, Data. Step: 60 days. Effort: 4-5 days. Depends: ZT-02, ZT-08.
+- Today: Implemented: fresh fail-closed account/group policy, separate node grants, exact target/environment/action grants, account-specific credential bindings and copied-principal guards. Stored findings, proposals, scans and exports retain their original ownership; moved/deleted/reused IDs do not grant historical access. Live multi-user enclave acceptance remains open.
+- Target: each verified issuer/account and trusted group receives explicit permissions for particular environments and targets. Read, discover, scan, propose, approve, apply, verify and rollback can differ per user and per environment. An application administrator does not automatically receive target administrator rights. Enforce these permissions beside scope checks, on direct object reads, before list counts/facets/exports, in background jobs and in the approval gate. Node-wide administration is a separate explicit grant.
+- Done when: an approver scoped to environment A gets 403 on a host in B; a user who can scan A but only approve B cannot swap those permissions; users cannot retrieve another environment's findings, histories or counts. Select target credentials by authenticated account, target and operation (ZT-16/19), with no shared-admin fallback. Denials are audited, revocation applies before the next operation, and missing/unreadable policy or scope stops every active consumer before transport access, including mid-run removal.
 
 **ZT-11 Policy signing bound to a verified approver and to the policy content.** Pillars: User, Data, Automation. Step: 60 days; PIV signature at 180 days. Effort: 2-3 days, plus 3 for PIV. Depends: ZT-05, ZT-08.
-- Today: `sign` and the policy PUT set `signed_by` to the caller's string (`control/policy.py:54-56`, `api/routes/policy.py:90`); `_policy_on_file` (`control/approvals.py:184-192`) checks only `enabled` and `signed_by` in the file on disk, so a hand edit of the rules in that file keeps the signature.
+- Today: Verified mode refuses enabled standing approval policies until content-bound signing is implemented. Local development retains the existing typed signer behavior. Human approval is still required for verified changes.
 - Target: signing needs approver role plus step-up; the record holds sha256 of the canonical policy, the verified subject and auth_time, and a mandatory expiry. Load recomputes the hash; mismatch is unsigned (fail closed); any edit clears the signature; a policy that allows CAT I needs two signers. At 180 days, a detached CMS signature from the signer's PIV certificate checked against the enclave CA bundle.
 - Done when: a hand edit of `signed_by` or any rule makes policy approvals refuse with "policy content does not match signature" in the audit; an analyst signing gets 403.
 
 ### 1.3 People to the systems
 
-The goal is that a target's own log names the person who approved the change and the proposal it belongs to, not one standing service account. Today every target has one `username` and `credential_ref` (`inventory/targets.py:35`; `transport/ssh.py:54`, `transport/winrm.py:101`); scan and apply use the same account; the approver's name exists only in our audit log. First step at 30 days, before any of the options below: write `ct-proposal=<id> approver=<subject>` to each host's syslog or event log at apply time.
+The goal is that a target's own log names the person who approved the change and the proposal it belongs to, not one standing service account. Verified mode selects account- and operation-specific credentials from protected policy. Proving that the selected target account maps to the intended human, adding short-lived credentials, and host-side approval correlation remain open. First step at 30 days, before any of the options below: write `ct-proposal=<id> approver=<subject>` to each host's syslog or event log at apply time.
 
 | Platform | Preferred option | Trade-off | The app does | The enclave must provide |
 |---|---|---|---|---|
@@ -104,17 +105,17 @@ The goal is that a target's own log names the person who approved the change and
 | Any | Broker checkout (Vault first, CyberArk CCP/Conjur) with proposal id and approver as metadata | Broker must run on the enclave; PSM session recording forces execution through its proxy | Request, scope, time out, revoke on kill switch, audit the lease | The broker, accounts, rotation, recording |
 
 **ZT-12 Windows per-user remoting.** Pillars: User, Device, Application. Step: 90 days (range domain), 180 days (enclave). Effort: 1 week app, 1-2 weeks enclave with the range owner. Depends: ZT-02, ZT-15 or AD changes, ZT-29.
-- Today: password from `CT_CRED_<ref>` (`transport/winrm.py:94-95`), default NTLM (`winrm.py:96`), Basic and CredSSP allowed (`winrm.py:26`). Kerberos and CredSSP are covered only by unit tests with a fake WinRM session (`tests/windows/test_winrm_transport.py`); no run against a domain controller is recorded in the repository.
+- Today: Verified mode can select an explicit per-account NTLM environment credential under the fleet HTTPS/CA rules. AD Kerberos delegation, JEA, protected-user behavior and real domain acceptance remain unimplemented/unvalidated.
 - Target: options in the table; CredSSP rejected (reusable credentials on the target), Basic rejected outright.
 - Done when: in fleet mode a Basic or CredSSP target is refused at `make_transport`; an apply approved by bob shows bob in the target's 4624/4648 events and the JEA transcript; a cmdlet outside the role capability fails on the target; a LAPS checkout writes an audit record naming the admin and host.
 
 **ZT-13 Linux and Cisco: short-lived SSH certificates, PIV for interactive, TACACS+.** Pillars: User, Device. Step: 90 days (range), 180 days (enclave). Effort: 1 week app, 1 week CA and sshd on the range. Depends: ZT-18, ZT-19.
-- Today: one username per target with a key file or password (`transport/ssh.py:43-55`); `look_for_keys=True` also tries any key in the process user's `~/.ssh` (`ssh.py:65`); sudo on by default (`docs/ADAPTING.md:37`).
+- Today: Selected SSH key/environment credentials are explicit and bound to account and operation; fleet host identity checks and sudo policy are enforced. SSH certificate issuance, PIV and TACACS+ integration remain open.
 - Target: short-lived SSH certificates issued per approver by an enclave CA that the range sshd trusts, with the approver's identity as the principal; `look_for_keys` off and host keys pinned from the inventory (ZT-30); PIV or CAC over PKCS#11 for interactive console use; Cisco devices authenticate and account per user through TACACS+, so every pushed command carries the approver's name in the device's accounting log.
 - Done when: on a range RHEL host sshd logs the approver's key id and serial, matching the audit record; the certificate fails after expiry; a stray key in `~/.ssh` is not offered; Cisco TACACS+ accounting names the approver for each pushed command.
 
 **ZT-14 Kubernetes: impersonation, no shared admin kubeconfig.** Pillars: User, Application. Step: 60 days. Effort: 4-6 days. Depends: ZT-01, ZT-08, ZT-17.
-- Today: one kubeconfig per target (`adapters/kubernetes/kubectl.py:219-224`); the demo registers the kubeconfig the k3d deploy writes, with its admin credentials (`docs/DEPLOYMENT.md:226-234`); the range k3s instructions say the same kind of file is cluster-admin (`range/k8s/README.md:53`).
+- Today: Verified scans and baseline commands use a protected, explicitly selected single-context static kubeconfig for the acting account. Plugins, impersonation flags, extra identities and ambient credential fallback are rejected. Secondary node collection uses its own authorized credential binding. Short-lived issuance, Kubernetes impersonation and live RBAC acceptance remain open.
 - Target: ClusterRoles `ct-viewer` and `ct-remediator` (kinds in the fix library only), no cluster-admin binding.
 - Done when: the API-server audit shows the app's ServiceAccount with `impersonatedUser` equal to the approver; a scan shows no impersonation; `kubectl auth can-i delete namespaces` is no; fleet-mode docs no longer use the admin file.
 
@@ -123,30 +124,31 @@ The goal is that a target's own log names the person who approved the change and
 - Done when: a test Vault lease carries proposal id and approver and is revoked within 10 s of APPLIED; engaging the kill switch mid-apply revokes it and the transport fails closed; both audits share the lease id.
 
 **ZT-16 Separate scan, apply and interactive credential references.** Pillars: User, Data. Step: 30 days. Effort: 2-3 days. Depends: ZT-19.
-- Today: one `credential_ref` scans, applies and verifies (`inventory/targets.py:35`); the credential that can change hosts is in the process at all times.
+- Today: Implemented account/target/action credential selection separates scan, discovery, plan, apply, verify and rollback bindings. Each operation rechecks the selected binding and policy; missing bindings fail closed. Short-lived brokers, interactive access and proof of least privilege on actual target systems remain open.
 - Target: `credentials: {scan, apply, interactive}`; apply refs may be per-principal templates; `make_transport` (`transport/base.py:80`) takes `purpose` and `principal`. A single ref still works in dev mode; fleet mode warns.
 - Done when: a scan never resolves the apply ref; an apply resolves it with the approver's principal; the scan account cannot write on a range host.
 
 ### 1.4 Workload identity for automation
 
 **ZT-17 The node's own workload identity.** Pillars: Application, Automation. Step: 60 days. Effort: 3-5 days. Depends: ZT-01 or an enclave CA.
-- Today: machine actions are recorded as `agent`/`llm`/`system`; the node is a name from `CT_NODE` (`config.py:62`); engine edges default to `actor="agent"` (`control/approvals.py:170,262`).
+- Today: Verified workload principals cannot take human decision edges. User-started jobs preserve the initiating principal and expire/revoke with it; verified-mode schedules are disabled until a real node workload identity exists. SPIFFE/node certificates and signed bundles remain open.
 - Target: `Principal(kind=workload)` with a SPIFFE id from the mesh certificate, or a node certificate (TPM or OS store where available). Scheduled scans, ingest, outbox sync and post-apply verify run as it; it never holds approver roles; outbox bundles are signed with it.
 - Done when: a scheduled scan's record shows the workload id; the workload identity gets 403 on approve; a bundle signed by another node is rejected on import.
 
 **ZT-18 Least-privilege scanning; apply privilege only inside an approved window; payload digest binding.** Pillars: Automation, User. Step: 30 days (digest), 60 days (leases). Effort: 4-5 days. Depends: ZT-16; ZT-13 or ZT-15 for leases.
-- Today: `RemediationEngine.execute` refuses when the fix's preview text or the sha256 of its library entry differs from what was approved (`remediation/engine.py:82-84,175-193`), so a library edit after approval is caught; the digest does not cover the target or the payload as rendered for that host, there is no apply lease, and `start_apply` (`control/approvals.py:262`) needs no fresh credential.
+- Today: Approved fix digests and target/configuration guards already bind execution to reviewed content, with fresh account/action authorization. Just-in-time privilege leases, maintenance-window enforcement and final rendered-payload binding remain open.
 - Target: the existing digest grows to cover (fix_ref, rendered payload, target); `RemediationEngine.execute` refuses on mismatch. Apply lease scoped to target and fix timeout. Record `approved_by`, `executed_by`, `lease_id`, `payload_digest`. The digest alone works on a laptop range today and answers "what exactly did the Sailor approve?"
 - Done when: approve, edit the library payload on disk, apply: refused with "payload changed since approval" and state unchanged; the apply record has all four fields.
 
 ### 1.5 Credential backend
 
 **ZT-19 Pluggable credential resolver replacing `CT_CRED_<ref>`.** Pillars: Data, Application. Step: 30 days (env, keyring, k8s), 90 days (Vault, CyberArk). Effort: 1 week, plus 3-5 days per broker. Depends: none for the interface.
-- Today: `credential_from_env` (`transport/ssh.py:24-28`) is the only lookup, reused by WinRM; docs tell the operator to set variables in the node's shell (`docs/ADAPTING.md:50-52`); `discovery/service.py:710-715` assumes the naming. `credential_from_env` already refuses any variable other than `CT_CRED_<ref>`; the gap is the backend, not the naming rule. Environment values are visible to same-user processes and inherited by children.
+- Today: An explicit account/action credential-binding layer now guards environment references, SSH keys and protected kubeconfigs and audits credential use without values. OS keyring, mounted-secret and broker lease backends remain open; environment references are not a production vault.
 - Target: `transport/credentials.py`: `resolve(ref, *, purpose, principal, target) -> Lease`; `Secret` redacts in `repr`/`str` and refuses JSON. Schemes `env:` (dev only), `keyring:` (Credential Manager/DPAPI, Secret Service), `k8s:` (mounted Secret), `vault:`, `cyberark:`; fleet mode forbids `env:`. Every use writes `credential.resolve` (ref, backend, purpose, target, lease id, never the value) and `credential.failed` on logon failure.
 - Done when: a scan succeeds with no `CT_CRED_*` set using keyring; fleet mode refuses `env:` at inventory load; a legacy `credential_ref=lab_root` still works in dev mode; no lease or secret prints its value.
 
 **ZT-20 No secrets on command lines, in temp files or picked up implicitly.** Pillars: Data, Device. Step: 30 days. Effort: 2 days. Depends: ZT-19.
+- Today: Verified SSH disables ambient key/agent fallback and bound Kubernetes subprocesses use a minimal environment. Local tool and dependency subprocesses now exclude server credentials and startup hooks, with a real-child regression. Other subprocess/provider paths and temporary credential handling still need platform-specific coverage ([SECRET_BOUNDARIES](SECRET_BOUNDARIES.md)).
 - Target: kubectl gets a 0600 kubeconfig in a private temp directory removed after the call, never `--token`; SSH `look_for_keys=False`, `allow_agent=False` outside interactive mode; child processes get an env allowlist with no `CT_CRED_*`.
 - Done when: a patched `subprocess.Popen` sees no canary in argv or child env; the temp file is gone after an exception; a key in a fake `HOME/.ssh` is not offered.
 
@@ -155,13 +157,14 @@ The goal is that a target's own log names the person who approved the change and
 - Done when: changing the mounted Secret between two scans takes effect with no restart; an overdue static credential produces a finding.
 
 **ZT-22 Canary tests: a secret never reaches disk, inventory, audit, logs, the model or the outbox.** Pillars: Data, Visibility. Step: 30 days. Effort: 2-3 days. Depends: ZT-19 (can start with env).
+- Today: Implemented a calibrated lifecycle canary through account-bound SSH discovery, scanning, explanation, approval, failed verification, rollback, reports, outbox and audit SSE on JSON and SQLite. It found and now guards against local discovery subprocess credential inheritance. WinRM/Kubernetes paths, real remote authentication and broader failure branches remain open ([SECRET_BOUNDARIES](SECRET_BOUNDARIES.md)).
 - Target: `tests/security/test_secret_canary.py` runs discover, scan, explain (capturing the model prompt), propose, approve, apply, forced verify failure, rollback, report, outbox and SSE with a canary secret, then searches the state directory, DEBUG logs, exceptions, prompt and responses for it in plain, base64 and percent-encoded form.
 - Done when: a deliberately planted leak makes the test fail.
 
 ### 1.6 Audit and non-repudiation
 
 **ZT-23 Audit records carry the verified subject, assurance and session.** Pillars: Visibility, User. Step: 30 days. Effort: 2 days, plus hours for reports. Depends: ZT-02.
-- Today: records hold `actor` as a string (`audit/chain.py:152-170`); reports print `p.decided_by` (`report/checklist.py:43`, `report/poam.py:74-75`, `report/onepager.py:134,167`), so "approved by IT1 Smith" in a checklist rests on the header.
+- Today: Version 2 audit events now hash-cover principal issuer/subject, roles and available assurance claims; proposal decisions retain trusted principal evidence. Legacy records remain explicitly unverified. Report provenance and exported event correlation are checked separately; no hardware non-repudiation is claimed.
 - Target: `principal` field `{kind, iss, sub, name, roles, acr, amr, auth_time, session_id, device, via}` with `via` one of dev, oidc, mesh, peer, cached, break-glass; record version `v: 2`; old records stay valid. Reports print subject and audit seq for each approval.
 - Done when: an oidc approve records the token's sub and acr; hand-editing `principal.name` fails `audit verify`; a mixed v1/v2 log verifies; a report lists subject and seq per approval.
 
@@ -182,27 +185,27 @@ The goal is that a target's own log names the person who approved the change and
 ### 1.7 Transport security and node trust
 
 **ZT-27 TLS for the API and UI.** Pillars: Network, Data. Step: 30 days. Effort: 1-2 days. Depends: none standalone.
-- Today: `uvicorn.run(...)` with no TLS arguments (`api/app.py:50-53`); the `--host` flag can open it to the LAN.
+- Today: Non-loopback development binds are refused. Verified network binds require TLS cert/key or mesh mode, and authenticated API responses are no-store. Full HSTS/CSP/host allow-list policy and live protocol/ingress validation remain open.
 - Target: `CT_TLS_CERT`/`CT_TLS_KEY` from the enclave CA; non-loopback bind without TLS refused unless `CT_ALLOW_PLAINTEXT` in dev mode; HSTS, `frame-ancestors none`, `no-store` on API responses; a strict host allow-list; still no CORS. Under UDS, TLS terminates at the gateway.
 - Done when: `serve --host 0.0.0.0` with no certificate exits with an error; TLS 1.0/1.1 fail; HSTS is present.
 
 **ZT-28 Mutual TLS and explicit traffic rules inside UDS.** Pillars: Network, Application. Step: 60 days. Effort: 3-4 days. Depends: ZT-01.
-- Today: no package; the model server is reached at `CT_LLM_URL=http://localhost:11434` (`config.py:39`).
+- Today: A UDS package and gateway configuration exist; app verification does not establish mesh isolation by itself. Actual strict mTLS, workload allow-lists and inventory-bound egress acceptance remain open.
 - Target: STRICT mTLS; only the app's ServiceAccount may call the model server and only the gateway may call the app; egress generated from the inventory's targets and ports so scope and network policy cannot drift; the model server has no egress.
 - Done when: calls from another namespace fail; egress outside inventory CIDRs is blocked; the generated allow list matches the inventory in a unit test.
 
 **ZT-29 WinRM over HTTPS only, with certificate validation.** Pillars: Network, Device. Step: 30 days. Effort: 1 day. Depends: none.
-- Today: plain HTTP on 5985 unless the port is 5986 or `options.ssl` is set (`transport/winrm.py:72-73`); `cert_validation=ignore` allowed (`winrm.py:11`).
+- Today: Implemented fleet rejection of HTTP, ignored certificates, Basic and CredSSP, with explicit CA trust. Insecure range choices require acknowledgement and produce trust findings. Real Windows HTTPS/AD acceptance remains open.
 - Target: fleet mode refuses HTTP, `ignore`, Basic and CredSSP and requires a CA bundle; default auth Kerberos; range mode keeps today's behaviour and raises a warning finding against the target.
 - Done when: a 5985 target in fleet mode is refused before connecting; an untrusted target certificate fails; in range mode the same target connects and the warning finding appears.
 
 **ZT-30 SSH host key pinning from the inventory.** Pillars: Network, Device. Step: 30 days. Effort: 2-3 days. Depends: none.
-- Today: `paramiko.AutoAddPolicy()` (`transport/ssh.py:62`, commented "pin keys before fleet use"); accepting a device in discovery is a name and a reason (`api/routes/discovery.py:124`) with no device identity bound.
+- Today: Implemented fleet SSH pin/known-host verification before authentication, changed/untrusted identity refusal, and audited trust findings. Discovery-driven pin enrollment, host CA lifecycle and real Cisco acceptance remain open.
 - Target: per-target sha256 fingerprints or an SSH host CA; discovery records the observed key and acceptance pins it; `RejectPolicy`; a mismatch aborts before authentication, raises a high-severity `discovery:identity_changed` finding and an audit record. This doubles as an intrusion indicator for the hunt.
 - Done when: a changed key fails before any credential is sent, with a finding and an audit record; a target with no pin is refused in fleet mode.
 
 **ZT-31 Node hardening and state-directory protection.** Pillars: Device, Data. Step: 60 days. Effort: days. Depends: none.
-- Today: the node reads every target credential and keeps state, policy and audit in one directory (`state_dir`, `config.py:36`) with no permission checks or hardening guide.
+- Today: Policy and Kubernetes credential files now reject redirected/replaced files and enforce POSIX ownership/mode checks. Windows link checks do not prove DACL protection. Whole-state permissions, service hardening, encryption, node STIG evidence and an actual ISSO review remain open.
 - Target: a hardening guide (service account, directory ACLs, disk encryption, STIG the node itself); startup warns on permissive ACLs; node key (ZT-17) in a TPM where available.
 - Done when: startup warns when the state directory is readable by other users; the guide exists in `docs/` and names its ISSO reviewer and review date.
 
@@ -212,7 +215,7 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 
 | Blocker | Why it matters | Items |
 |---|---|---|
-| Identity and credentials | Today an approval proves only that someone typed a name, and one shared account per target does every scan and every change | ZT-01 to ZT-31 (section 1) |
+| Identity and credentials | Verified application identity and account-scoped access exist; live realm/target acceptance, step-up, brokers and the remaining controls are still required | ZT-01 to ZT-31 (section 1) |
 | Proof across real platforms | Only Linux over SSH and a k3s/k3d cluster have met real systems; Windows, Cisco and Active Directory have not, so no detection or fix claim for them is evidence yet | VAL-01 to VAL-03, with RNG-01, SCAN-03, REM-02 |
 | Coverage and fix safety | A few dozen natively checked rules per benchmark against hundreds published, and nothing stops an approved sshd or firewall change from cutting off the node that must roll it back | COV-01 to COV-04, with REM-01, SCAN-02 |
 | Plumbing for scale | Documents can use JSON files or SQLite on one node; proposals, policy and inventory remain locked files, and scans still walk targets one at a time. Multi-node storage and measured enclave-scale performance remain open | SCL-01 to SCL-05, with ZT-25 |
@@ -320,10 +323,10 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 
 | ID | Gap and today | Target | Done when | Effort | Step |
 |---|---|---|---|---|---|
-| SCAN-01 | k3s API-server flag rules report "nothing was collected" without an SSH `node_target` (`docs/DEPLOYMENT.md:241-245`); `config.yaml.d` drop-ins not read (`range/k8s/README.md:86`) | Read the k3d server container directly; read drop-ins in sorted order | A k3d scan gives pass/fail, not `not_reviewed`, for those rules | days | before range |
+| SCAN-01 | Implemented guarded k3d server collection and sorted k3s drop-ins with CLI precedence and explicit missing-data states ([SCANNER_COVERAGE](SCANNER_COVERAGE.md)). Direct Docker collection is development-only; verified mode requires authorized node credentials | Validate against the running range cluster and retain per-server evidence | A dated k3d scan gives measured pass/fail for collected rules, preserving unavailable outcomes | range validation | before range |
 | SCAN-02 | Six W11 V2R11 rules unsupported plus many OVAL test types, reported `not_reviewed` (`docs/SCAP.md:121-124`) | `fileeffectiverights53` and `ntuser` first, then group/user/process/port as other benchmarks need them | `scap info` shows 0 unsupported for W11 V2R11 on a real host | week+ | before fleet |
 | SCAN-03 | Windows collection only run against the simulated host; WinRM exercised through recordings only (`README.md:36-38`) | Run the collector elevated on a real Windows 11 VM over WinRM and diff with the simulator | A recorded real-host collection replays with the same results | days | before range |
-| SCAN-04 | DISA RHEL benchmark is `notapplicable` on Rocky (`docs/SCAP.md:155-156`) | Optional per-target CPE alias, audited as an override | A Rocky 9 scan evaluates the DISA RHEL 9 rules and records the override | days | before range |
+| SCAN-04 | Implemented explicit range-only CPE alias with benchmark validation, preserved source bytes, provenance and persistent warnings ([SCANNER_COVERAGE](SCANNER_COVERAGE.md)); fleet mode refuses the override | Execute the DISA RHEL 9 benchmark on the isolated Rocky 9 host and retain the actual engine result | Evaluated rules and the recorded override appear in a dated scan; no unsupported platform certification is implied | range validation | before range |
 | SCAN-05 | A larger offline model and an optional stronger workstation endpoint remain unvalidated on the available hardware; configurable local/compatible endpoints already exist | Validate the operator-supplied workstation or enclave model, approved network path, resource use, timeouts and offline fallback; retain citation and assessment validation | A dated run records hardware, model/configuration, latency, fallback and bounded valid output without changing targets | days | later |
 | SCAN-06 | Implemented in PR #28: audited Nessus results import through the CLI and API, with explicit host-to-inventory mapping, source provenance and deterministic duplicate handling ([SCANNER_IMPORT](SCANNER_IMPORT.md)); imported findings appear in the current view and reports | Preserve parser limits, duplicate handling and historical/current view semantics | JSON and SQLite regressions cover CVE findings, reports, duplicate imports, invalid mappings and refusal to authorize target changes | complete | 2026-11-05 |
 
@@ -340,10 +343,10 @@ Verified identity is necessary and not sufficient. Five things stand between thi
 | ID | Gap and today | Target | Done when | Effort | Step |
 |---|---|---|---|---|---|
 | CON-01 | Integrity is checked, authenticity is not: the lock file is unsigned and a folder without one is imported on integrity alone (`docs/CONTENT.md:138-139`) | Sign lock file and manifest with the operator's key; refuse unsigned folders unless a named person overrides with a reason | A tampered or unsigned folder is quarantined unless overridden and audited | days | before fleet |
-| CON-02 | The DISA index comes from an anonymous call whose class id changes on redeploy (`docs/CONTENT.md:164-169`) | Keep the snapshot route as supported; clear "index unavailable" state; canary test when connected | With a bad id and changed page the UI says unavailable and the snapshot route works | days | before fleet |
+| CON-02 | Implemented deployment-ID recovery, explicit index-unavailable state, preserved successful state and snapshot fallback. A bounded connected canary on 2026-11-06 UTC accounted for all 417 live publications ([CATALOG_ACCOUNTING](CATALOG_ACCOUNTING.md)) | Preserve guarded fallback and rerun compatibility checks when the public deployment changes | Fixture failures preserve the saved catalog; recorded live metadata reconciliation covers every returned entry | complete | 2026-11-06 UTC |
 | CON-03 | Real event/enclave link characteristics remain unconfirmed. Production no longer assumes 56 kbps or 500 ms; those values belong to explicit test mode | Obtain the organizers' measured link constraints and record the demonstration configuration separately from operational observations | The open question has a sourced answer; no configured demonstration number is presented as measured bandwidth | hours | now |
 | CON-04 | Implemented support: default unknown reachability/rate, observed request bytes and times, explicit audited test mode and operator-offline control, plus bounded opt-in probes. These are application observations, not physical bandwidth; local outbox moves are not shore delivery | Validate operational endpoints and cancellation in the range; design persistent opt-in monitoring and an actual authenticated remote outbox receiver | A real transfer and disconnect/recovery have dated evidence; delivery is acknowledged by the destination. Temporary 15-minute monitoring and local copies do not satisfy continuous monitoring or remote delivery | days | before range |
-| CON-05 | Browse all searches every recognized product in the saved library catalog, not every raw publication returned by cyber.mil; manual STIG/SRG/SCAP classification can omit unsupported formats | Account for every index entry with explicit supported/unsupported/sunset classification and searchable publication metadata; retain safe format handling and honest applicability | A snapshot reconciliation reports every raw entry as represented or explicitly unsupported, and search can expose those distinctions without claiming scanner support | days | before range |
+| CON-05 | Implemented full catalog accounting, searchable publication metadata, explicit supported/unsupported/sunset classification and malformed/duplicate-row retention ([CATALOG_ACCOUNTING](CATALOG_ACCOUNTING.md)) | Preserve reconciliation and safe selection/download behavior as publication formats change | Snapshot regressions account for every raw entry without claiming scanner support for unsupported content | complete | 2026-11-05 |
 
 ### Discovery
 
@@ -368,9 +371,9 @@ Packaging the app itself is ZT-01.
 
 | ID | Gap and today | Target | Done when | Effort | Step |
 |---|---|---|---|---|---|
-| UI-01 | The chip shows "Acting as IT1 Smith" (`docs/UI.md:22`) and every viewer sees Approve/Deny; no provenance on a card | Show verified identity and role, disable what the user cannot do with the reason, show who approved with which credential | A viewer sees Approve disabled with a reason; provenance appears on proposal detail | days | before range |
+| UI-01 | Implemented: verified account/role display, disabled role actions with reasons, and saved reviewer/approver provenance. Legacy decisions remain labeled unverified. Account-scoped target credentials are recorded in audit | Finish live realm/target acceptance and show execution credential provenance beside the decision where useful | Actual limited-user login, approval and target account evidence agree; UI never upgrades old records using the current session | partial | before range |
 | UI-02 | Implemented: filters by category, machine, type, severity, scanner result, source and benchmark/release; search, stable sorting and saved preferences. Finding rows now open by click or keyboard, with nested controls independent ([FINDINGS](FINDINGS.md)) | Preserve full-view counts and filtering before pagination; indexed queries at scale remain SCL-03 | API and UI regressions cover combinations, historical/current views, reset/persistence and row interaction | complete | 2026-11-05 |
-| UI-03 | The scope editor previews addresses, CIDRs, ranges and exclusions, with explicit broadening acknowledgment. Reload shows effective CIDRs; original expressions remain in audit and replacement uses one scanner/public policy | Persist editable include/exclude recipes and support per-range policy editing without flattening heterogeneous policies | Save/reload preserves expressions and policies; changing one range leaves unrelated policies untouched, with the same preview and authorization guards | days | later |
+| UI-03 | Implemented: editable include/exclude recipes persist across reload, with per-range policies, revision conflicts, preview fingerprints and explicit broadening acknowledgement | Preserve recipe round trips and authorization when adding discovery sources | Tests cover saved expressions, heterogeneous policies, stale previews and explicit updates | complete | 2026-11-05 |
 
 The rest of the identity UI is in ZT-04 and ZT-08.
 
@@ -379,7 +382,7 @@ The rest of the identity UI is in ZT-04 and ZT-08.
 | ID | Gap and today | Target | Done when | Effort | Step |
 |---|---|---|---|---|---|
 | TST-01 | Hosted Windows/Linux JSON and SQLite regression jobs have passed, including PR #34; UI builds, normal gate and exact skip policy are in `.github/workflows/regression.yml` ([CI](CI.md)). Windows deployment-module omissions and Linux UDS-dependent skips remain documented | Add reviewed UDS tooling and remove the remaining deployment coverage gaps; retain exact-head hosted evidence | Both hosted jobs pass without unexpected omissions; UDS-dependent deployment checks execute on Linux | days | before fleet |
-| TST-02 | Focused UI regressions and manual browser checks exist, and a real local model produced a validated bounded change-impact receipt. The optional live-model suite still requires `CT_TEST_LLM=1`; a repeatable complete browser approval/apply/verify/rollback flow is not established | Run the complete simulated UI flow and selected live-model smoke against each release candidate, then record the judging rehearsal separately from real-platform validation | A repeatable run records proposal/finding transitions, failure handling, rollback and valid audit chain; model availability and fallback are visible | days | before fleet |
+| TST-02 | Repeatable real-browser rehearsal now covers reviewed approval, kill refusal, apply/verify, manual rollback and forced-verification-failure recovery on both JSON and SQLite ([BROWSER_REHEARSAL](BROWSER_REHEARSAL.md)). It uses template explanations and explicitly unverified loopback identity; a prior real local-model receipt is separate evidence | Run the rehearsal and selected live-model smoke against each release candidate; add live verified-login acceptance with the intended realm | Release receipts name the tested commit and preserve proposal/finding transitions, failure recovery and valid audit chain; simulator, model and realm evidence remain distinct | remaining live-model and realm acceptance | before fleet |
 | RNG-01 | Linux over SSH has met a real host (the Rocky 9 range VM: 28 of 28 seeded items, one fix applied and rolled back, `range/README.md` "First real-host run") and the k3d cluster was scanned over kubectl; WinRM and Cisco over SSH have never run against a real system | The Windows VM from `range/windows/README.md` over real WinRM, and a Cisco device or emulator over SSH | Scores against `range/answer_key/` from a live scan appear on the Reports page | days | before range |
 | RNG-02 | Event unknowns open: range access, link speed, Evaluate-STIG/SCC, datasets, Ark, Google link (`docs/CONTEXT.md:171-179`) | Ask in `#tech-support` and the portal | Each item is checked or has a recorded answer | hours | now |
 | RNG-03 | No IT Sailor recruited as approver and no remediation-time baseline (`docs/CONTEXT.md:176`) | Run the approval flow with one IT Sailor; record today's manual hours per release and network | A sourced hours figure appears in `docs/SUBMISSION.md` | hours | now |
@@ -412,7 +415,7 @@ The team's MVP plan (Cyber Thunder running inside the UDS cluster, fixing `nginx
 
 ## 4. Already enforced today (for contrast)
 
-From [ARCHITECTURE](ARCHITECTURE.md) section 4. Cluster survey, baseline and bootstrap guards are also implemented as described in [CLUSTER_GUARDRAILS](CLUSTER_GUARDRAILS.md); typed actor names remain unverified identity:
+From [ARCHITECTURE](ARCHITECTURE.md) section 4. Cluster survey, baseline and bootstrap guards are also implemented as described in [CLUSTER_GUARDRAILS](CLUSTER_GUARDRAILS.md); development actor names remain unverified; configured OIDC/mesh principals are verified:
 
 - No change without approval: the engine refuses `execute` unless the proposal is `APPROVED`, and machine identities can never take a human edge (`ApprovalGate.HUMAN_ONLY`).
 - Only vetted fixes run: `RemediationEngine.execute` runs `FixEntry.payload` only; no code path passes model output to a transport.

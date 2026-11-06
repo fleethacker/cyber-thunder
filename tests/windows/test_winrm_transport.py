@@ -34,7 +34,8 @@ class FakeSession:
 
 def make(session, **kw):
     from cyberthunder.transport.winrm import WinRMTransport
-    return WinRMTransport("10.0.0.5", username="itadmin", password="x", session=session, **kw)
+    return WinRMTransport("10.0.0.5", username="itadmin", password="x", session=session,
+                          allow_insecure_range=True, **kw)
 
 
 def test_encoded_command_is_not_double_wrapped(state_dir):

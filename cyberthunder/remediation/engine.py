@@ -36,6 +36,7 @@ Rules: no shell text originates from the model; payloads come only from FixEntry
 apply/verify leaves the proposal in FAILED (or ROLLED_BACK if rollback succeeded) with the error recorded.
 """
 from __future__ import annotations
+from cyberthunder.control.principal import authorize, operation
 
 import hashlib
 import inspect
@@ -263,6 +264,8 @@ class RemediationEngine:
             raise PolicyEvidenceBlocked(reason + "; cancel this proposal and request individual approval")
 
     def propose(self, finding: Finding, *, actor: str = "agent", fix: FixEntry | None = None) -> Proposal | None:
+        from cyberthunder.security.resources import check_record
+        check_record(self.ctx, finding, "propose")
         if self._review_suppressed(finding, actor, "propose"):
             return None
         existing = self.proposal_for_finding(finding.id)
@@ -358,6 +361,13 @@ class RemediationEngine:
     # -- execution ---------------------------------------------------------------------
     def _target(self, p: Proposal, action: str, actor: str):
         try:
+            from cyberthunder.security.resources import check_record
+            check_record(self.ctx, p, "apply" if action == "execute" else action)
+            from cyberthunder.control.identity import is_machine
+            # Internal completion/recovery uses a service label while retaining
+            # the initiating principal. It never supplies a new account identity.
+            authorize(self.ctx, "apply" if action == "execute" else action,
+                      actor=None if is_machine(actor) else actor, target=p.host)
             return rollback_guard.inventory_target(self.ctx, p.host)
         except ScopeViolation as e:
             self.ctx.audit.append("action.blocked", actor, {"action": action, "target": p.host, "reason": str(e)},
@@ -401,10 +411,12 @@ class RemediationEngine:
             log.warning("transport close failed for %s", target.id)
 
     @rollback_guard.serialized
+    @operation("apply")
     def execute(self, proposal_id: str, *, actor: str, simulate_verify_fail: bool = False) -> Proposal:
         from cyberthunder.control.assessment import AssessmentBlocked, guard_approved_assessment
         gate = self.ctx.gate
         p = gate.get(proposal_id)
+        authorize(self.ctx, "apply", actor=actor, target=p.host)
         if p.state is not ProposalState.APPROVED:
             gate.start_apply(proposal_id, actor)            # records the rejection and raises IllegalTransition
         guard_approved_assessment(self.ctx, p)
@@ -606,9 +618,11 @@ class RemediationEngine:
         return result
 
     @rollback_guard.serialized
+    @operation("rollback")
     def rollback(self, proposal_id: str, *, actor: str) -> Proposal:
         gate = self.ctx.gate
         p = gate.get(proposal_id)
+        authorize(self.ctx, "rollback", actor=actor, target=p.host)
         try:
             actor = require_human(actor)
         except PermissionError as e:
@@ -645,11 +659,13 @@ class RemediationEngine:
             self._close(transport, target)
 
     @rollback_guard.serialized
+    @operation("verify")
     def verify(self, proposal_id: str, *, actor: str) -> Proposal:
         """Operator re-check of an APPLIED proposal (a runbook after its steps are done, or a fix whose rule
         could not be re-checked automatically). Read-only on the host; a failed payload fix is rolled back."""
         gate = self.ctx.gate
         p = gate.get(proposal_id)
+        authorize(self.ctx, "verify", actor=actor, target=p.host)
         actor = require_human(actor)
         if p.state is not ProposalState.APPLIED:
             gate.verified(proposal_id, actor)                # records the rejection and raises IllegalTransition
@@ -701,6 +717,7 @@ class RemediationEngine:
 
     def plan(self, proposal_id: str, *, actor: str) -> dict:
         """Inspect the bound fix and current stored checks without accessing a target."""
+        authorize(self.ctx, "plan", actor=actor, target=self.ctx.gate.get(proposal_id).host)
         from cyberthunder.remediation.plan import static_plan
         return static_plan(self, proposal_id, actor=actor)
 

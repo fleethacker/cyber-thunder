@@ -1,20 +1,22 @@
 // Kill switch: always visible. Engaging asks for confirmation (reason optional); releasing needs a reason.
-import { Button } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconHandStop, IconPlayerPlay } from '@tabler/icons-react';
 import { useState } from 'react';
 import { api, errorText } from '../api/client';
 import { useAppState } from '../state/AppState';
-import { ConfirmReasonModal } from './ConfirmReasonModal';
+import { PermissionButton, PermissionConfirm, usePermissions } from './PermissionGate';
 
 export function KillSwitch() {
   const { status, refresh, actor } = useAppState();
   const engaged = !!status?.kill.engaged;
+  const permission = usePermissions();
+  const action = engaged ? 'kill.release' : 'kill.engage';
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const submit = async (reason: string) => {
+    if (!permission.can(action) || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -32,17 +34,17 @@ export function KillSwitch() {
 
   return (
     <>
-      <Button
+      <PermissionButton action={action}
         color={engaged ? 'gray' : 'red'}
         variant={engaged ? 'white' : 'filled'}
         size="md"
         leftSection={engaged ? <IconPlayerPlay size={18} /> : <IconHandStop size={18} />}
-        onClick={() => { setError(null); setOpen(true); }}
+        onClick={() => { if (permission.can(action)) { setError(null); setOpen(true); } }}
         aria-label={engaged ? 'Release kill switch' : 'Engage kill switch'}
       >
         {engaged ? 'Release' : 'KILL SWITCH'}
-      </Button>
-      <ConfirmReasonModal
+      </PermissionButton>
+      <PermissionConfirm action={action}
         opened={open}
         onClose={() => setOpen(false)}
         title={engaged ? 'Release the kill switch' : 'Engage the kill switch'}

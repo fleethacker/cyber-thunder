@@ -2,10 +2,10 @@ import { Alert, Badge, Button, Checkbox, Drawer, Group, Paper, Radio, Select, St
 import { notifications } from '@mantine/notifications';
 import { useEffect, useState } from 'react';
 import { api, ApiError, errorText } from '../api/client';
-import type { LibraryKind, LibraryPreferencesInput, LibraryProduct, StigLibrary } from '../api/types';
+import type { LibraryKind, LibraryPreferencesInput, LibraryProduct } from '../api/types';
 import { fmtSeconds, fmtZonedTime } from '../lib/format';
 import { isMaintained, productSearch } from '../lib/contentTasks';
-import { AvailableTable, DisplayedSelection, HeldTable, KIND_LABELS, LibraryTable, kindLabel } from './LibraryTables';
+import { AvailableTable, DisplayedSelection, HeldTable, KIND_LABELS, LibraryTable, PublicationsTable, kindLabel, type CatalogLibrary } from './LibraryTables';
 import { ErrorBox } from './common';
 
 function input(p: LibraryPreferencesInput): LibraryPreferencesInput {
@@ -20,7 +20,7 @@ const STATUS: Record<LibraryProduct['status'], { label: string; color: string }>
 };
 
 export function LibrarySelections({ library, disabled, onSaved, onDirtyChange, view = 'maintained', productKey, onProductChange, onBrowse }: {
-  library: StigLibrary; disabled: boolean; onSaved: () => Promise<void>; onDirtyChange: (dirty: boolean) => void;
+  library: CatalogLibrary; disabled: boolean; onSaved: () => Promise<void>; onDirtyChange: (dirty: boolean) => void;
   view?: 'maintained' | 'browse'; productKey?: string | null; onProductChange?: (key: string | null) => void; onBrowse?: () => void;
 }) {
   const [draft, setDraft] = useState<LibraryPreferencesInput | null>(null);
@@ -70,6 +70,7 @@ export function LibrarySelections({ library, disabled, onSaved, onDirtyChange, v
     } finally { setSaving(false); }
   };
   return <Stack gap="md">
+    {view === 'browse' && <PublicationsTable library={library} onProductSelect={setDetailKey} />}
     <Paper withBorder p="md" radius="md">
       <Stack gap="md">
         <Group justify="space-between"><Text fw={700}>{view === 'maintained' ? 'Products selected for maintenance' : 'Browse the saved product catalog'}</Text><Badge color={saving ? 'blue' : dirty ? 'orange' : 'teal'} variant="light">{saving ? 'Saving selections' : dirty ? 'Unsaved changes' : 'Saved selections'}</Badge></Group>
@@ -116,7 +117,7 @@ export function LibrarySelections({ library, disabled, onSaved, onDirtyChange, v
       <Text fw={700}>{view === 'browse' ? 'All catalog products' : 'Maintenance selections'} ({products.length})</Text>
       <Button variant="light" disabled={locked} onClick={() => edit({ mode: 'selected', products: library.products.filter((p) => p.recommended).map((p) => p.product_key) })}>Use inventory recommendations</Button>
     </Group>
-    {view === 'browse' ? <Text size="sm" c="dimmed">Search every product returned by this node's saved catalog, including products outside inventory. The catalog covers recognized Manual STIG, SRG and SCAP entries; it is not a guarantee of every cyber.mil publication. To download a product, select it for maintenance, save, then open Updates.</Text>
+    {view === 'browse' ? <Text size="sm" c="dimmed">These maintenance choices cover recognized Manual STIG, SRG and SCAP products. Search all publication metadata above for other formats and malformed rows. To download a product, select it for maintenance, save, then open Updates.</Text>
       : <Group><Text size="sm" c="dimmed">Saved choices and pending additions or removals are shown together. Find other products in Browse all.</Text>{onBrowse && <Button variant="light" onClick={onBrowse}>Browse all products</Button>}</Group>}
     <Text size="sm" c="dimmed">{prefs.mode === 'inventory' ? 'Checked products follow inventory recommendations. Choose manual selection to edit the list.' : `${prefs.products.length} products selected across all pages. Save above to persist changes.`} Availability is relative to the {library.catalog.source === 'snapshot' ? 'saved snapshot' : 'last live index'}.</Text>
     <Group align="flex-end">

@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from contextvars import Context, copy_context
 from typing import Callable
 
 from cyberthunder.findings.schema import Finding
@@ -19,7 +20,7 @@ class ExplainWorker:
     def __init__(self, fn: Callable[[Finding], object], *, name: str = "explain-precompute"):
         self._fn = fn
         self._name = name
-        self._q: "queue.Queue[Finding | None]" = queue.Queue()
+        self._q: "queue.Queue[tuple[Finding, Context] | None]" = queue.Queue()
         self._ids: set[str] = set()            # queued or in progress
         self._lock = threading.Lock()
         self._idle = threading.Condition(self._lock)
@@ -36,7 +37,7 @@ class ExplainWorker:
                 return False
             self._ids.add(finding.id)
         self._ensure_thread()
-        self._q.put(finding)
+        self._q.put((finding, copy_context()))
         return True
 
     def pending(self) -> int:
@@ -64,15 +65,16 @@ class ExplainWorker:
             if item is None:
                 self._q.task_done()
                 break
+            finding, context = item
             try:
-                self._fn(item)
+                context.run(self._fn, finding)
                 self.done += 1
             except Exception as e:  # noqa: BLE001  one bad finding must not stop the queue
                 self.failed += 1
-                log.warning("precompute failed for %s: %s", item.id, e)
+                log.warning("precompute failed for %s: %s", finding.id, e)
             finally:
                 with self._idle:
-                    self._ids.discard(item.id)
+                    self._ids.discard(finding.id)
                     self._idle.notify_all()
                 self._q.task_done()
 

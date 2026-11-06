@@ -60,6 +60,8 @@ async def import_scanner(request: Request, ctx=CtxDep, actor: str = ActorDep) ->
     svc = _svc(ctx, "scanner import")
     try:
         return await run_in_threadpool(svc.import_scanner, data, mapping, actor=actor, include_info=include_info)
+    except PermissionError:
+        raise
     except OSError:
         raise HTTPException(503, "scanner import storage is unavailable") from None
 

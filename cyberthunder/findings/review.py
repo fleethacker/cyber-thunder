@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from cyberthunder.audit.chain import AuditLog
 from cyberthunder.control.identity import require_human
+from cyberthunder.control.principal import Principal, authorize, current_principal, require_current
 from cyberthunder.findings.lifecycle import (
     LifecycleReentry, ReviewConflict, finding_key, finding_lifecycle_lock, review_coordination_lock,
 )
@@ -59,9 +60,56 @@ def _provenance(value: Any) -> Any:
 
 
 def review_scope(finding: Finding) -> dict:
-    return {key: getattr(finding, key) for key in (
+    scope = {key: getattr(finding, key) for key in (
         "host", "source", "rule_id", "rule_version", "group_id", "benchmark", "benchmark_release", "asset_type"
     )}
+    if getattr(finding, "authorization_scope", None) is not None:
+        scope["authorization_scope"] = finding.authorization_scope
+    return scope
+
+
+def principal_from_evidence(actor, evidence, *, human=False) -> Principal:
+    """Validate recorded attribution, not a fresh login or a token signature.
+
+    Old decisions remain attributable after their login expires. Canonical actor
+    binding is required; a display name or a stored boolean is never sufficient.
+    """
+    required = {"kind", "iss", "sub", "name", "via", "verified"}
+    optional = {"roles", "groups", "scopes", "acr", "amr", "auth_time", "expires_at", "session_id"}
+    if (not isinstance(evidence, dict) or not required <= evidence.keys()
+            or evidence.keys() - required - optional or evidence.get("verified") is not True):
+        raise ValueError("invalid recorded principal")
+    principal = Principal(issuer=evidence["iss"], subject=evidence["sub"], display_name=evidence["name"],
+                          kind=evidence["kind"], via=evidence["via"],
+                          **{key: value for key, value in evidence.items() if key in optional})
+    if not principal.verified or principal.actor != actor or (human and principal.kind != "human"):
+        raise ValueError("recorded principal does not match the decision actor")
+    return principal
+
+
+def _event_identity(event):
+    verified = event.get("identity_verified")
+    if verified is True:
+        principal_from_evidence(event.get("reviewed_by"), event.get("reviewed_principal"), human=True)
+    elif verified is not False or event.get("reviewed_principal") is not None:
+        raise ValueError("invalid review identity provenance")
+
+
+def _owned_events(finding, events):
+    """Retain old records on disk without disclosing or reusing a former owner's review."""
+    owner = getattr(finding, "authorization_scope", None)
+    return [event for event in events if event["scope"].get("authorization_scope") == owner]
+
+
+def _reviewer(ctx, finding, actor):
+    authorize(ctx, "review", actor=actor, target=finding.host)
+    if getattr(getattr(ctx, "settings", None), "auth_mode", "dev") != "dev":
+        from cyberthunder.security.resources import check_record
+        check_record(ctx, finding, "review")
+    principal = current_principal()
+    if principal is not None and principal.verified:
+        return require_current("review", actor).evidence()
+    return None
 
 
 def _evidence_fingerprint(finding: Finding) -> str:
@@ -140,8 +188,9 @@ class ReviewService:
                     or not isinstance(event.get("scope"), dict)
                     or not isinstance(event.get("evidence_fingerprint"), str)
                     or not re.fullmatch(r"[0-9a-f]{64}", event["evidence_fingerprint"])
-                    or not event.get("id") or event.get("identity_verified") is not False):
+                    or not event.get("id")):
                 raise ValueError("invalid review event; refusing to replace history")
+            _event_identity(event)
             previous_revision = event["revision"]
             parse_timestamp(event.get("reviewed_at"))
             require_human(event.get("reviewed_by"))
@@ -181,7 +230,7 @@ class ReviewService:
 
     @staticmethod
     def _summary(finding: Finding, doc: dict, now: datetime) -> dict:
-        events = doc["history"]
+        events = _owned_events(finding, doc["history"])
         fingerprint = evidence_fingerprint(finding)
         current = events[-1] if events else None
         reopened = None
@@ -202,16 +251,18 @@ class ReviewService:
                 active = disposition != "unreviewed"
         return {"disposition": disposition, "active": active,
                 "suppressed": active and disposition in SUPPRESSING,
-                "revision": len(events) + len(doc["invalidations"]), "evidence_fingerprint": fingerprint,
+                # The opaque write revision still covers the whole document;
+                # history_count and returned events cover only this owner.
+                "revision": len(doc["history"]) + len(doc["invalidations"]), "evidence_fingerprint": fingerprint,
                 "current": current, "history_count": len(events), "reopened_reason": reopened,
-                "identity_verified": False}
+                "identity_verified": bool(current and current["identity_verified"])}
 
     def summary(self, finding: Finding, *, now=None) -> dict:
         return self._summary(finding, self._document(finding), _now(now))
 
     def history(self, finding: Finding) -> dict:
         doc = self._document(finding)
-        return {**self._summary(finding, doc, _now()), "history": doc["history"]}
+        return {**self._summary(finding, doc, _now()), "history": _owned_events(finding, doc["history"])}
 
     @contextmanager
     def remediation_guard(self, finding: Finding):
@@ -260,11 +311,14 @@ class ReviewService:
                 raise ValueError(f"review history limit ({MAX_HISTORY_EVENTS}) reached; existing events are preserved")
             if len(events) == MAX_HISTORY_EVENTS - 1 and disposition != "unreviewed":
                 raise ValueError("last review history slot is reserved for reversal to unreviewed")
+            principal = _reviewer(self.ctx, current, actor)
             event = {"id": uuid4().hex, "revision": summary["revision"] + 1,
                      "disposition": disposition, "reason": reason, "supporting_evidence": supporting_evidence,
                      "expires_at": expiry.isoformat() if expiry is not None else None,
-                     "reviewed_at": now.isoformat(), "reviewed_by": actor, "identity_verified": False,
+                     "reviewed_at": now.isoformat(), "reviewed_by": actor, "identity_verified": principal is not None,
                      "scope": review_scope(current), "evidence_fingerprint": summary["evidence_fingerprint"]}
+            if principal is not None:
+                event["reviewed_principal"] = principal
             self.ctx.killswitch.guard("finding.review", actor)
             # Record the complete decision before persistence: an audit failure must never
             # activate an unaudited dismissal. Pending records also expose interrupted writes.
@@ -277,11 +331,12 @@ class ReviewService:
                 self.ctx.audit.append("finding.review", actor, {"event_id": event["id"], "reason": "finding changed"},
                                       subject=current.id, outcome="rejected")
                 raise ReviewConflict("finding evidence changed; reload before saving")
+            _reviewer(self.ctx, latest, actor)
             updated = dict(doc, version=2, revision=event["revision"], history=[*events, event])
             store.write_json(self._path(current), updated)
         self.ctx.audit.append("finding.review", actor, {"event_id": event["id"], "revision": event["revision"]},
                               subject=current.id, outcome="ok")
-        return {**self._summary(current, updated, now), "history": updated["history"]}
+        return {**self._summary(current, updated, now), "history": _owned_events(current, updated["history"])}
 
 
 def _projected_observations(store, scan_id: str, document: dict, kind: str):

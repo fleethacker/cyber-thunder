@@ -16,8 +16,9 @@ def finding(id, **overrides):
     return Finding(**values)
 
 
-def save(ctx, findings, sid="base", *, at="2026-11-05T10:00:00Z", trigger="manual"):
-    ctx.store.save_scan_run({"id": sid, "started_at": at, "trigger": trigger, "status": "done"})
+def save(ctx, findings, sid="base", *, at="2026-11-05T10:00:00Z", trigger="manual", targets=None):
+    ctx.store.save_scan_run({"id": sid, "started_at": at, "trigger": trigger, "status": "done",
+                             "targets": sorted({f.host for f in findings}) if targets is None else targets})
     ctx.store.save_findings(sid, [replace(f, scan_id=sid) for f in findings])
 
 
@@ -164,7 +165,8 @@ def test_current_partial_overlays_and_explicit_historical_facets(client, ctx):
     base = finding("base", rule_version="RHEL-09-255045", benchmark="Current STIG", benchmark_release="V2R1")
     untouched = finding("untouched", host="other-machine")
     save(ctx, [old], "older", at="2026-11-04T10:00:00Z")
-    save(ctx, [base, untouched])
+    # This full scan checked the historical host too and found no remaining finding there.
+    save(ctx, [base, untouched], targets=[old.host, base.host, untouched.host])
     save(ctx, [replace(base, status=Status.NOT_A_FINDING, benchmark_release="V2R2")], "rescan",
          at="2026-11-05T11:00:00Z", trigger="stig_delta")
     save(ctx, [finding("bulletin", source="iavm", references=[Reference("cve", "CVE-2026-12345")])],

@@ -41,7 +41,7 @@ from cyberthunder.state.json_files import JsonFilesBackend, read_json_file, writ
 log = logging.getLogger(__name__)
 
 # Runs that re-evaluate only part of the picture; they overlay the latest full scan instead of replacing it.
-PARTIAL_TRIGGERS = {"bulletin", "stig_delta", "verify", "cluster_vulnerabilities"}
+PARTIAL_TRIGGERS = {"bulletin", "stig_delta", "verify", "cluster_vulnerabilities", "transport_security"}
 
 
 def is_partial_run(run: dict) -> bool:
@@ -177,7 +177,22 @@ class StateStore:
 
     def save_scan_run(self, run: dict) -> None:
         from cyberthunder.findings.review import save_observation_document
+        previous = self.load_scan_run(run["id"])
+        run = dict(run)
+        if previous is not None:
+            run["authorization_scopes"] = previous.get("authorization_scopes")
+        elif not run.get("authorization_scopes"):
+            run["authorization_scopes"] = self.capture_resources(run.get("targets", []))
         save_observation_document(self, run["id"], run, kind="run")
+
+    def capture_resources(self, target_ids) -> list[dict]:
+        from cyberthunder.inventory.targets import Inventory, Target
+        from cyberthunder.security.resources import target_scope
+        try:
+            rows = Inventory.read_persisted(self.targets)
+            return [target_scope(Target.from_dict(rows[tid])) for tid in sorted(set(target_ids))]
+        except (OSError, KeyError, ValueError, PermissionError):
+            return []
 
     def load_scan_run(self, scan_id: str) -> dict | None:
         return self.read_json(self.scans_dir / scan_id / "run.json")
@@ -198,6 +213,21 @@ class StateStore:
 
     def save_findings(self, scan_id: str, findings: Iterable[Finding], meta: dict | None = None) -> None:
         from cyberthunder.findings.review import save_observation_document
+        findings = list(findings)
+        # Never relabel retained legacy evidence as belonging to today's target.
+        existing = ({f.id for f in self.current_findings()} if any(
+            f.authorization_scope is None and f.scan_id is None for f in findings) else set())
+        run = self.load_scan_run(scan_id)
+        recorded = {s["target_id"]: s for s in (run or {}).get("authorization_scopes") or []
+                    if isinstance(s, dict) and isinstance(s.get("target_id"), str)}
+        for finding in findings:
+            if finding.authorization_scope is None and (finding.scan_id == scan_id or
+                    finding.scan_id is None and finding.id not in existing):
+                if run is not None:
+                    finding.authorization_scope = recorded.get(finding.host)
+                else:
+                    scopes = self.capture_resources([finding.host])
+                    finding.authorization_scope = scopes[0] if scopes else None
         save_observation_document(self, scan_id, findings_doc(findings, meta=meta), kind="findings")
 
     def _run_findings(self, scan_id: str) -> list[Finding]:
@@ -239,8 +269,12 @@ class StateStore:
             # A requested full scan can still lack scanners, benchmarks or target coverage.
             # Keep it selectable as the newest full run, but omissions cannot erase evidence.
             if not is_partial_run(run) and terminal and run.get("coverage_incomplete") is not True:
-                merged = {fid: f for fid, f in merged.items() if self._cluster_scope(f) is not None}
-                can_remove = True
+                covered = {tid for tid in run.get("targets", []) if isinstance(tid, str)}
+                # A complete scan is complete only for its declared targets. Users
+                # with access to one environment cannot erase another's evidence.
+                merged = {fid: f for fid, f in merged.items()
+                          if f.host not in covered or self._cluster_scope(f) is not None}
+                can_remove = can_remove or bool(covered)
             if (run.get("trigger") == "cluster_vulnerabilities"
                     and run.get("status") in {"done", "partial"}):
                 # Only this producer may reconcile its own scopes. A failed image or a missing

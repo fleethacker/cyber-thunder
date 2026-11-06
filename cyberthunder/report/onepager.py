@@ -13,8 +13,9 @@ from typing import TYPE_CHECKING
 
 from cyberthunder.control.approvals import Proposal, ProposalState
 from cyberthunder.findings.schema import RE_ATTACK, Finding, Severity
-from cyberthunder.findings.current import CurrentFindings
 from cyberthunder.report.assurance import build_assurance
+from cyberthunder.report import access
+from cyberthunder.report.identity import attribution
 from cyberthunder.report.closure import state_time
 from cyberthunder.report.render import ReportError, render
 from cyberthunder.report.coverage import build_coverage
@@ -35,7 +36,7 @@ def attack_ids(f: Finding) -> list[str]:
     return [c for c in f.citations if RE_ATTACK.fullmatch(c)]
 
 
-def resolve_scan(ctx: "AppContext", scan_id: str | None) -> tuple[str, dict, list[Finding]]:
+def resolve_scan(ctx: "AppContext", scan_id: str | None, *, target: str | None = None) -> tuple[str, dict, list[Finding]]:
     """Return (anchor scan_id, run dict, findings), or a no-scan instruction.
 
     An omitted scan_id reads the current picture, including partial overlays. The id and run still
@@ -45,16 +46,24 @@ def resolve_scan(ctx: "AppContext", scan_id: str | None) -> tuple[str, dict, lis
     if not sid:
         raise ReportError("no scan runs on this node; run a scan first (cyberthunder scan)")
     run = ctx.store.load_scan_run(sid) or {}
+    access.scan(ctx, run, target=target)
     findings = ctx.store.load_findings(scan_id) if scan_id else ctx.store.load_findings()
+    if target is not None:
+        findings = [f for f in findings if f.host == target]
+        # A target view must not expose the anchor run's other hosts or totals.
+        run = {"id": sid, "targets": [target], "authorization_scopes": [
+            s for s in (run.get("authorization_scopes") or [])
+            if isinstance(s, dict) and s.get("target_id") == target]}
+    access.observations(ctx, findings)
     if not run and not findings:
         raise ReportError(f"scan {sid!r} not found under {ctx.store.scans_dir}")
     return sid, run, findings
 
 
-def latest_proposals(ctx: "AppContext") -> dict[str, Proposal]:
+def latest_proposals(ctx: "AppContext", *, associations=None) -> dict[str, Proposal]:
     """Newest proposal per finding id (a finding can be re-proposed after a denial or rollback)."""
     out: dict[str, Proposal] = {}
-    for p in sorted(ctx.gate.list(), key=lambda p: p.created_at):
+    for p in sorted(access.proposals(ctx, associations=associations), key=lambda p: p.created_at):
         out[p.finding_id] = p
     return out
 
@@ -72,6 +81,10 @@ def _ordered_citations(f: Finding, extra: list[str] | None = None) -> list[str]:
 
 def _link_line(ctx: "AppContext") -> str | None:
     """One line about the constrained link and the outbox. Duck-typed: the ingest module is built separately."""
+    if access.verified_mode(ctx):
+        # Outbox ownership is checked by its service. Do not aggregate its raw
+        # entries here under a node export grant.
+        return "Link and outbox status are available in their authorized views."
     ing = getattr(ctx, "ingest", None)
     if ing is None:
         return None
@@ -122,7 +135,11 @@ def discovery_open(ctx: "AppContext") -> list[Finding]:
     if svc is None:
         return []
     try:
-        return [f for f in svc.findings() if f.is_open]
+        findings = list(svc.findings())
+        access.observations(ctx, findings)
+        return [f for f in findings if f.is_open]
+    except PermissionError:
+        raise
     except Exception:  # noqa: BLE001  - a broken discovery store must not stop the report
         return []
 
@@ -135,15 +152,17 @@ def _reverted(p: Proposal) -> dict:
     elif failed:
         why = "verification failed, rolled back automatically"
     else:
-        why = f"rolled back by {last.get('actor') or 'operator'}"
+        why = "rolled back by " + attribution(last.get("actor"), last.get("principal"), human=False)["text"]
     note = (last.get("note") or "").strip()
     return {"title": p.title, "host": p.host, "state": p.state.value, "decided_by": p.decided_by,
+            "decision_identity": attribution(p.decided_by, p.decided_principal),
             "at": last.get("ts"), "why": why + (f": {note}" if note else "")}
 
 
 # -- the report ---------------------------------------------------------------------------
 def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     sid, run, findings = resolve_scan(ctx, scan_id)
+    access.audit(ctx)
     v = ctx.audit.verify()
     disc = discovery_open(ctx)
     finding_ids = {f.id for f in findings}
@@ -151,13 +170,13 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     assured = {row["id"]: row for row in assurance["findings"]}
     suppressed_ids = {row["id"] for row in assurance["findings"] if row["review"]["suppressed"]}
     # A subsequent open observation wins over an older verified fix.
-    lifecycle = CurrentFindings.for_context(ctx)
+    lifecycle = access.lifecycle(ctx)
     current = {f.id: lifecycle.assess(f) for f in findings}
     closed = [f for f in findings if current[f.id].remediated]
     closed_ids = {f.id for f in closed}
     open_f = [f for f in findings if f.is_open and f.id not in closed_ids and f.id not in suppressed_ids]
     hunt = [f for f in open_f if is_hunt(f)]
-    props = ctx.gate.list()
+    props = access.proposals(ctx)
     active_disc = [f for f in disc if f.id not in suppressed_ids]
 
     # open findings by host and CAT
@@ -176,6 +195,7 @@ def build_commander(ctx: "AppContext", scan_id: str | None, fmt: str) -> dict:
     for p in props:
         counts[p.state.value] += 1
     verified = [{"title": p.title, "host": p.host, "decided_by": p.decided_by,
+                 "decision_identity": attribution(p.decided_by, p.decided_principal),
                  "verified_at": state_time(p, ProposalState.VERIFIED)}
                 for p in props if p.state == ProposalState.VERIFIED]
     verified.sort(key=lambda r: r["verified_at"] or "")

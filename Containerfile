@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     CT_HOST=0.0.0.0 \
     CT_PORT=8000 \
+    WEB_CONCURRENCY=1 \
     CT_STATE_DIR=/var/lib/cyberthunder \
     CT_UI_DIST=/app/cyberthunder/ui/dist \
     HOME=/var/lib/cyberthunder \

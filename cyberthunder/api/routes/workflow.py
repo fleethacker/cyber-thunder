@@ -5,6 +5,7 @@ targets that belong to it. Scan, explain, and propose stay read-only aside from 
 Apply and rollback only move fixes a person has already approved, and both stop when the kill switch is engaged.
 """
 from __future__ import annotations
+from cyberthunder.api.access import require_resource, require_all, visible
 
 from pathlib import Path
 
@@ -207,7 +208,7 @@ def _findings_from_results(ctx, results: dict) -> list[Finding]:
     found = ctx.store.load_findings(scan_id) if scan_id else ctx.store.load_findings()
     if target:
         found = [f for f in found if f.host == target]
-    return [f for f in found if f.is_open]
+    return [f for f in found if f.is_open and visible(ctx, f.host)]
 
 
 @router.post("/generate/explain")
@@ -217,6 +218,7 @@ def generate_explain(body: GenerateBody | None = None, ctx=CtxDep, actor: str = 
     if not body.results:
         raise ValueError("results are required")
     findings = _findings_from_results(ctx, body.results)
+    require_all(ctx, [f.host for f in findings], "explain")
     chosen, left = findings[:EXPLAIN_CAP], max(len(findings) - EXPLAIN_CAP, 0)
     explanations = []
     with feature("explain"):
@@ -231,6 +233,7 @@ def generate_propose(body: GenerateBody | None = None, ctx=CtxDep, actor: str = 
     if not body.results:
         raise ValueError("results are required")
     findings = _findings_from_results(ctx, body.results)[:PROPOSE_CAP]
+    require_all(ctx, [f.host for f in findings], "propose")
     proposals, skipped = [], []
     with feature("remediation engine"):
         for finding in findings:
@@ -298,6 +301,7 @@ def apply_checklists(body: ApplyChecklistsBody | None = None, ctx=CtxDep, actor:
     targets = _ids(body.targets, "targets")
     checklists = _ids(body.checklists, "checklists")
     for tid in targets:
+        require_resource(ctx, tid, "apply")
         _in_scope(ctx, tid)
     ctx.killswitch.guard("workflow.apply", actor)
     wanted = set(checklists)
@@ -336,6 +340,7 @@ def rollback_versions(body: RollbackBody | None = None, ctx=CtxDep, actor: str =
     version_list = _version_ids(body)
     versions = set(version_list)
     for tid in targets:
+        require_resource(ctx, tid, "rollback")
         _in_scope(ctx, tid)
     ctx.killswitch.guard("workflow.rollback", actor)
     results = {}
@@ -375,16 +380,30 @@ def _checklist_for(ctx, target_id: str) -> tuple[dict | None, str | None]:
         return None, None
     try:
         doc = svc.checklist_cklb(None, target_id)
+    except PermissionError:
+        raise
     except Exception as exc:  # noqa: BLE001  a missing checklist does not block the target report
         return None, str(exc) or type(exc).__name__
     return to_plain(doc), None
 
 
 def _build_report(ctx, target_id: str, actor: str) -> dict:
+    from cyberthunder.control.principal import authorize
+    from cyberthunder.security.resources import capture
+    from cyberthunder.report import access
+    authorize(ctx, "export", actor=actor)
+    with access.collecting(ctx):
+        access.artifact(ctx, capture(ctx, [target_id]), targets=[target_id])
+        return _render_target_report(ctx, target_id, actor)
+
+
+def _render_target_report(ctx, target_id: str, actor: str) -> dict:
     from cyberthunder.report import history
+    from cyberthunder.report import access
     target = ctx.inventory.get(target_id)
     history.import_existing(ctx)
     findings = [f for f in ctx.store.load_findings() if f.host == target_id]
+    access.observations(ctx, findings)
     checklist, checklist_error = _checklist_for(ctx, target_id)
     doc = {
         "report_id": ctx.store.new_id("report-"),
@@ -396,9 +415,12 @@ def _build_report(ctx, target_id: str, actor: str) -> dict:
         "summary": summarize(findings),
         "checklist": checklist,
         "checklist_error": checklist_error,
+        "targets": [target_id],
+        "authorization_scopes": access.finish(ctx, access.current_scopes(ctx)),
     }
     history.save(ctx, "target", doc, "json", report_id=doc["report_id"], targets=[target_id], actor=actor,
-                 generated_at=doc["generated_at"], scan_id=ctx.store.latest_scan_id())
+                 generated_at=doc["generated_at"], scan_id=None)
+    access.finish(ctx, doc["authorization_scopes"])
     ctx.store.write_json(_report_path(ctx, target_id), doc)
     ctx.audit.append("report.render", actor, {"kind": "target", "target": target_id, "findings": len(findings),
                                               "open": doc["open"]}, subject=target_id)
@@ -411,6 +433,8 @@ def get_target_report(target_id: str, ctx=CtxDep) -> dict:
     doc = ctx.store.read_json(_report_path(ctx, target_id))
     if not doc:
         raise KeyError(f"no report for {target_id!r}; POST /reports with {{\"target\": \"{target_id}\"}} to write one")
+    from cyberthunder.security.resources import check_record
+    check_record(ctx, doc, "export")
     return doc
 
 
@@ -420,4 +444,5 @@ def post_target_report(body: TargetReportBody | None = None, ctx=CtxDep, actor: 
     target = (body.target or "").strip()
     if not target:
         raise ValueError("target is required")
+    require_resource(ctx, target, "export")
     return _build_report(ctx, target, actor)

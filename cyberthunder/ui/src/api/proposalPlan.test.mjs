@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import ts from 'typescript';
+import { createModuleLoader } from '../lib/moduleTestSupport.mjs';
 
-const source = await readFile(new URL('./client.ts', import.meta.url), 'utf8');
-const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 } });
-const { api, ApiError } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
+const load = createModuleLoader();
+const { api, ApiError } = load(new URL('./client.ts', import.meta.url));
+const { setSessionIdentity } = load(new URL('./identity.ts', import.meta.url));
+setSessionIdentity({ mode: 'dev', authenticated: false, login_available: false, permissions: [] });
 
 test('preview posts once to the encoded plan route with the named actor and preserves the response and errors', async () => {
   const previousFetch = globalThis.fetch;

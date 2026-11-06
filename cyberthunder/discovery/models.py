@@ -183,6 +183,7 @@ class DiscoveryScope:
     added_at: str = field(default_factory=utcnow)
     reason: str = ""
     scanner_target: str | None = None   # inventory target (ssh) that runs nmap from inside the enclave
+    grant_id: str = ""                 # empty on legacy records; new grants never reuse a revoked generation
 
     def __post_init__(self) -> None:
         self._normalization = network_normalization(self.cidr)

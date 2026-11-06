@@ -35,7 +35,7 @@ def test_environment_is_allowlisted_and_isolated(monkeypatch, tmp_path):
     assert "PATH" in {k.upper() for k in env}
 
 
-def test_real_subprocess_runner_uses_argv_and_controlled_environment(monkeypatch, tmp_path):
+def test_real_subprocess_runner_uses_argv_and_controlled_environment(monkeypatch, tmp_path, large_pipe_descriptors):
     monkeypatch.setenv("TRIVY_DB_REPOSITORY", "attacker.invalid/secret")
     code = "import os,json; print(json.dumps({'override':os.getenv('TRIVY_DB_REPOSITORY'),'home':os.environ['HOME']}))"
     result = engine.run([sys.executable, "-c", code], home=tmp_path, timeout=5, guard=lambda: None, capture=True)
@@ -63,7 +63,7 @@ def test_real_runner_guard_terminates_child(tmp_path):
     assert time.monotonic() - started < 5
 
 
-def test_real_runner_bounds_version_output_and_sanitizes_errors(tmp_path):
+def test_real_runner_bounds_version_output_and_sanitizes_errors(tmp_path, large_pipe_descriptors):
     with pytest.raises(VulnerabilityUnavailable, match="output"):
         engine.run([sys.executable, "-c", "print('X' * 1000000)"], home=tmp_path, timeout=5,
                    guard=lambda: None, capture=True)

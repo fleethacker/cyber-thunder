@@ -42,13 +42,18 @@ def post_scan(body: ScanRequest | None = None, ctx=CtxDep, actor: str = ActorDep
 
 @router.get("/scans")
 def list_scans(ctx=CtxDep) -> dict:
-    return {"scans": [scan_plus(r) for r in ctx.scanner.list()]}
+    from cyberthunder.security.resources import visible_record
+    return {"scans": [scan_plus(r) for r in ctx.scanner.list() if visible_record(ctx, r)]}
 
 
 @router.get("/scans/preflight")
 def scan_preflight(target_ids: list[str] | None = Query(default=None),
                    modules: list[str] | None = Query(default=None), ctx=CtxDep) -> dict:
     from cyberthunder.scan_content import ScanContentService
+    from cyberthunder.api.access import require_all, visible
+    if target_ids is None:
+        target_ids = [t.id for t in ctx.inventory.all() if visible(ctx, t)]
+    require_all(ctx, target_ids)
     return ScanContentService(ctx).preflight(target_ids, modules=modules)
 
 
@@ -56,5 +61,9 @@ def scan_preflight(target_ids: list[str] | None = Query(default=None),
 def get_scan(scan_id: str, ctx=CtxDep) -> dict:
     run = ctx.scanner.get(scan_id)
     if run is None:
+        if getattr(ctx.settings, "auth_mode", "dev") != "dev":
+            raise PermissionError("scan is unavailable to this account")
         raise KeyError(f"unknown scan {scan_id!r}")
+    from cyberthunder.security.resources import check_record
+    check_record(ctx, run)
     return scan_plus(run)

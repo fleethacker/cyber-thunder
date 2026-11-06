@@ -143,6 +143,10 @@ class LinuxAdapter(Adapter):
             return
         observation["status"] = "available"
         opts = target.options or {}
+        if "cpe_alias" in opts:
+            from .cpe_alias import evaluate
+            evaluate(target, transport, workdir, collected, rule_filter, observation)
+            return
         bench = str(opts.get("benchmark_path") or "").strip()
         if bench:
             if not transport.run(f"test -r {shlex.quote(bench)}").ok:

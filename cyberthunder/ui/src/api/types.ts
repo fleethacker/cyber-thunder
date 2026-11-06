@@ -22,6 +22,16 @@ export interface FindingConfidence {
   evidence: Record<string, unknown>;
 }
 export type ReviewDisposition = 'unreviewed' | 'confirmed' | 'false_positive' | 'not_applicable' | 'needs_investigation';
+// Public attribution fields only. Never render a full principal or session object.
+export interface RecordedPrincipalEvidence {
+  iss: string;
+  sub: string;
+  name: string;
+  roles: string[];
+  kind: 'human' | 'workload' | 'dev';
+  via: 'oidc' | 'mesh' | 'dev';
+  verified: boolean;
+}
 export interface FindingReviewEvent {
   id: string;
   disposition: ReviewDisposition;
@@ -30,7 +40,8 @@ export interface FindingReviewEvent {
   expires_at: string | null;
   reviewed_at: string;
   reviewed_by: string;
-  identity_verified: false;
+  identity_verified: boolean;
+  reviewed_principal?: RecordedPrincipalEvidence | null;
   scope: Record<string, unknown>;
   evidence_fingerprint: string;
 }
@@ -43,7 +54,7 @@ export interface FindingReview {
   current: FindingReviewEvent | null;
   history_count: number;
   reopened_reason: string | null;
-  identity_verified: false;
+  identity_verified: boolean;
 }
 export interface FindingReviewHistory extends FindingReview { history: FindingReviewEvent[] }
 export interface FindingReviewInput {
@@ -214,6 +225,7 @@ export interface Proposal {
   state: ProposalState;
   created_at: string;
   decided_by: string | null;
+  decided_principal?: RecordedPrincipalEvidence | null;
   decided_at: string | null;
   decision_note: string | null;
   before_state_ref: string | null;
@@ -295,6 +307,7 @@ export interface BulkResult { results: BulkItem[] }
 export interface Target {
   id: string;
   name: string;
+  environment?: string;
   asset_type: AssetType;
   transport: string;
   address: string | null;
@@ -418,16 +431,18 @@ export interface Status {
   product: string;
   version: string;
   node: string;
+  /** False means node-wide details are withheld; omitted by older full-status fixtures. */
+  global_details?: boolean;
   kill: KillStatus;
-  audit: { count: number; head: string; verified: boolean; detail: string };
-  policy: { enabled: boolean; signed_by: string | null; rules: number };
+  audit: { count: number | null; head: string | null; verified: boolean | null; detail: string };
+  policy: { enabled: boolean | null; signed_by: string | null; rules: number | null };
   adapters: string[];
   targets: number;
   fixes: number;
   demo: boolean;
-  llm: LlmStatus;
-  link: LinkState;
-  outbox: { pending: number };
+  llm: LlmStatus | null;
+  link: LinkState | null;
+  outbox: { pending: number | null };
 }
 
 export interface PolicyRule {
@@ -514,6 +529,7 @@ export interface DiscoveryScope {
   added_at: string;
   reason: string;
   scanner_target: string | null;
+  grant_id?: string;
 }
 
 export interface ScopeRangeInput {
@@ -534,7 +550,7 @@ export interface ScopeRangePreview {
   can_save: boolean;
   blocking_reasons: string[];
   warnings: string[];
-  normalizations: { field: 'include' | 'exclude'; input: string; normalized: string }[];
+  normalizations: { field: 'include' | 'exclude'; input: string; normalized: string; recipe_id?: string; recipe_name?: string }[];
   requires_normalization_acknowledgment: boolean;
   limits: { max_entries: number; max_networks: number; max_addresses: number };
 }

@@ -1,7 +1,7 @@
 import { Badge, Button, Group, Pagination, Paper, Select, Stack, Table, Text, TextInput } from '@mantine/core';
 import { IconSearch } from '@tabler/icons-react';
 import { useState, type ReactNode } from 'react';
-import type { ContentRow, HeldFile, LibraryCatalog } from '../api/types';
+import type { ContentRow, HeldFile, LibraryCatalog, StigLibrary } from '../api/types';
 import { fmtBytes, fmtZonedTime } from '../lib/format';
 
 export const KIND_LABELS: Record<string, string> = {
@@ -9,6 +9,62 @@ export const KIND_LABELS: Record<string, string> = {
 };
 export const kindLabel = (kind: string) => KIND_LABELS[kind] ?? kind.replace(/_/g, ' ');
 const PAGE_SIZE = 12;
+
+export interface CatalogPublication {
+  publication_id: string;
+  filename: string;
+  title: string;
+  name: string | null;
+  product_key: string | null;
+  kind: string;
+  version_label: string | null;
+  upload_date: string | null;
+  download_types: string[];
+  url: string;
+  classification: 'supported' | 'unsupported' | 'sunset';
+  classification_reasons: string[];
+  publication_metadata: unknown;
+}
+
+// Additive library fields remain optional while older nodes/caches are in use.
+export type CatalogLibrary = StigLibrary & {
+  publications?: CatalogPublication[];
+  catalog: StigLibrary['catalog'] & {
+    live_status?: 'available' | 'unavailable' | 'unconfirmed';
+    live_error?: string | null;
+    accounting?: { raw_entries: number | null; represented_entries: number; complete: boolean;
+      supported: number; unsupported: number; sunset: number };
+  };
+};
+
+export function PublicationsTable({ library, onProductSelect }: { library: CatalogLibrary; onProductSelect: (key: string) => void }) {
+  const [classification, setClassification] = useState<string | null>(null);
+  const accounting = library.catalog.accounting;
+  const products = new Set(library.products.map((p) => p.product_key));
+  return <Stack gap="sm">
+    <Text fw={700}>All index publications</Text>
+    <Text size="sm">Search publication titles, identifiers, dates, topics, filenames and metadata, including unsupported and sunset rows. Supported means this library can ingest the format; scanner coverage and target applicability are not established. Automation and compilations require an explicit request.</Text>
+    <Text size="xs" c="dimmed">{accounting?.complete
+      ? `${accounting.represented_entries} of ${accounting.raw_entries} raw rows accounted for: ${accounting.supported} supported, ${accounting.unsupported} unsupported, ${accounting.sunset} sunset.`
+      : 'This saved catalog predates complete raw-row accounting. A successful live check or the supplied snapshot can provide a complete reconciliation.'}</Text>
+    <Select label="Publication classification" placeholder="All classifications" clearable value={classification} onChange={setClassification}
+      data={['supported', 'unsupported', 'sunset'].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) }))} />
+    <LibraryTable rows={(library.publications ?? []).filter((p) => !classification || p.classification === classification)}
+      label="publications" empty="No publication rows are available in this saved catalog."
+      searchText={(p) => `${p.title} ${p.name} ${p.filename} ${p.product_key} ${p.version_label} ${p.upload_date} ${p.download_types.join(' ')} ${p.classification} ${kindLabel(p.kind)} ${p.classification_reasons.join(' ')} ${p.url} ${JSON.stringify(p.publication_metadata)}`}
+      headings={<><Table.Th>Publication</Table.Th><Table.Th>Type / release / date</Table.Th><Table.Th>Classification</Table.Th></>}
+      render={(p) => <Table.Tr key={p.publication_id}>
+        <Table.Td><Text fw={600}>{p.title || p.name || 'Unidentified publication'}</Text>
+          <Text size="xs" style={{ overflowWrap: 'anywhere' }}>{p.filename || 'No usable filename'} · {p.name || p.publication_id}</Text>
+          {p.product_key && products.has(p.product_key) && <Button size="compact-xs" variant="subtle" onClick={() => onProductSelect(p.product_key!)}>Product versions and maintenance</Button>}
+          <details><summary>Publication metadata</summary><Text component="pre" size="xs" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(p.publication_metadata, null, 2)}</Text></details>
+        </Table.Td>
+        <Table.Td>{kindLabel(p.kind)}<Text size="xs">{p.version_label || 'Version not provided'}</Text><Text size="xs">{fmtZonedTime(p.upload_date, 'Publisher date not provided')}</Text><Text size="xs">{p.download_types.join(', ')}</Text></Table.Td>
+        <Table.Td><Badge color={p.classification === 'supported' ? 'blue' : p.classification === 'sunset' ? 'orange' : 'gray'}>{p.classification}</Badge>
+          {p.classification_reasons.map((reason) => <Text size="xs" key={reason}>{reason}</Text>)}</Table.Td>
+      </Table.Tr>} />
+  </Stack>;
+}
 
 export function LibraryTable<T>({ rows, searchText, label, headings, render, empty, toolbar }: {
   rows: T[];

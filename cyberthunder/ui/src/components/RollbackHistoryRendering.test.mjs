@@ -36,16 +36,21 @@ const { ProposalCard } = await import('./ProposalCard.tsx');
 const { AuditSubject } = await import('./AuditSubject.tsx');
 const { RollbackGuardView } = await import('./ProposalDiff.tsx');
 const { AppStateProvider } = await import('../state/AppState.tsx');
+const { IdentityProvider } = await import('../state/Identity.tsx');
+const DevAppStateProvider = ({ children }) => createElement(IdentityProvider, {
+  identity: { mode: 'dev', authenticated: false, login_available: false, permissions: [] }, logout: async () => {},
+}, createElement(AppStateProvider, {}, children));
+const { PermissionProvider } = await import('./PermissionGate.tsx');
 const { default: App } = await import('../App.tsx');
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => '' } });
-const render = (component, props) => renderToStaticMarkup(createElement(MantineProvider, {}, createElement(AppStateProvider, {}, createElement(StaticRouter, { location: '/audit' }, createElement(component, props)))));
+const render = (component, props) => renderToStaticMarkup(createElement(MantineProvider, {}, createElement(DevAppStateProvider, {}, createElement(StaticRouter, { location: '/audit' }, createElement(PermissionProvider, { can: () => true }, createElement(component, props))))));
 const renderHash = (component, props, hash = '#/audit') => {
   const browser = { location: { hash, origin: 'https://fixture.invalid', href: `https://fixture.invalid/${hash}` }, history: { state: { idx: 0 } }, document: { querySelector: () => null } };
   // HashRouter layout effects cannot run during SSR. Permit only that expected warning.
   const originalError = console.error, warnings = [];
   console.error = (...args) => warnings.push(args);
   try {
-    const html = renderToStaticMarkup(createElement(MantineProvider, {}, createElement(AppStateProvider, {}, createElement(HashRouter, { window: browser }, createElement(component, props)))));
+    const html = renderToStaticMarkup(createElement(MantineProvider, {}, createElement(DevAppStateProvider, {}, createElement(HashRouter, { window: browser }, createElement(PermissionProvider, { can: () => true }, createElement(component, props))))));
     for (const [message] of warnings) assert.match(String(message), /^Warning: useLayoutEffect does nothing on the server/);
     return html;
   } finally { console.error = originalError; }

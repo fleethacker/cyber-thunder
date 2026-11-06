@@ -14,10 +14,12 @@ from pathlib import Path
 
 from cyberthunder.audit.chain import file_lock
 from cyberthunder.control.identity import require_human
+from cyberthunder.control.principal import authorize
 from cyberthunder.findings.schema import Finding, RE_CVE, summarize
 from cyberthunder.parsers import nessus
 from cyberthunder.parsers.nessus import parse_nessus
 from cyberthunder.scan import ScanRun, TargetScanResult
+from cyberthunder.security.resources import check_record
 from cyberthunder.store import is_partial_run
 
 MAX_XML_BYTES = 16 * 1024 * 1024
@@ -256,11 +258,14 @@ def import_results(ctx, data: bytes, host_map: dict[str, str], *, actor: str, in
     actor = import_actor(actor)
     try:
         return _import_results(ctx, data, host_map, actor=actor, include_info=include_info)
+    except PermissionError:
+        raise
     except OSError:
         raise OSError("scanner import storage is unavailable") from None
 
 
 def _import_results(ctx, data: bytes, host_map: dict[str, str], *, actor: str, include_info: bool) -> dict:
+    authorize(ctx, "import", actor=actor)
     ctx.killswitch.guard("ingest.scanner", actor)
     if not isinstance(include_info, bool):
         raise ScannerImportError("include_info must be a boolean")
@@ -271,6 +276,18 @@ def _import_results(ctx, data: bytes, host_map: dict[str, str], *, actor: str, i
     targets = {target.id: target for target in ctx.inventory.all()}
     if any(tid not in targets for tid in mapping.values()):
         raise ScannerImportError("host mapping references an unknown inventory target")
+
+    carried_findings = []
+
+    def guard():
+        authorize(ctx, "import", actor=actor)
+        for tid in sorted(set(mapping.values())):
+            authorize(ctx, "import", actor=actor, target=tid)
+        for finding in carried_findings:
+            check_record(ctx, finding, "import")
+        ctx.killswitch.guard("ingest.scanner", actor)
+
+    guard()
     source_hash = hashlib.sha256(data).hexdigest()
     identity = {"version": 1, "source": "acas", "sha256": source_hash, "host_map": mapping,
                 "include_info": include_info}
@@ -297,11 +314,12 @@ def _import_results(ctx, data: bytes, host_map: dict[str, str], *, actor: str, i
     result = {"scan_id": scan_id, "source": "acas", "source_sha256": source_hash,
               "import_id": import_id, "imported_count": len(findings), "targets": sorted(mapping.values())}
     store = ctx.store
-    ctx.killswitch.guard("ingest.scanner", actor)
+    guard()
     with file_lock(store.ingest_dir / "scanner-import.lock"):
-        ctx.killswitch.guard("ingest.scanner", actor)
+        guard()
         existing = store.load_scan_run(scan_id)
         if existing is not None:
+            check_record(ctx, existing, "import")
             ctx.audit.append("ingest.scanner.repeat", actor, result, subject=scan_id)
             return dict(result, repeated=True, carried_forward_count=existing["findings_count"] - len(findings))
         # With no full baseline, StateStore starts at the newest partial run. Carry prior observations
@@ -312,6 +330,8 @@ def _import_results(ctx, data: bytes, host_map: dict[str, str], *, actor: str, i
             for run in reversed(runs):
                 merged.update((f.id, f) for f in store.load_findings(run["id"]))
         merged.update((f.id, f) for f in findings)
+        imported_ids = {f.id for f in findings}
+        carried_findings.extend(f for f in merged.values() if f.id not in imported_ids)
         saved = list(merged.values())
         carried = len(saved) - len(findings)
         now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
@@ -326,13 +346,13 @@ def _import_results(ctx, data: bytes, host_map: dict[str, str], *, actor: str, i
                                                 findings=host_counts[tid], open=open_counts[tid])
                           for tid in run_hosts})
         # Findings first, run last: readers cannot discover an empty run if saving findings fails.
-        ctx.killswitch.guard("ingest.scanner", actor)
+        guard()
         store.save_findings(scan_id, saved, meta=dict(identity, import_id=import_id, trigger="scanner_import",
                                                     imported_count=len(findings), carried_forward_count=carried))
-        ctx.killswitch.guard("ingest.scanner", actor)
+        guard()
         ctx.audit.append("ingest.scanner.publish", actor, dict(result, carried_forward_count=carried),
                          subject=scan_id)
-        ctx.killswitch.guard("ingest.scanner", actor)
+        guard()
         store.save_scan_run(run.to_dict())
         ctx.audit.append("ingest.scanner", actor, dict(result, carried_forward_count=carried), subject=scan_id)
     return dict(result, repeated=False, carried_forward_count=carried)

@@ -226,11 +226,19 @@ class KubectlTransport(LocalTransport):
         self.kubeconfig = str(kubeconfig)
         self.context = context
         self.kubectl = kubectl
+        self.account_binding = None
+        self.account_guard = None
 
     def build_argv(self, command: str) -> tuple[list[str], str | None]:
         argv, stdin = parse_command(command)
         if not argv or argv[0] != "kubectl":
             raise TransportError("kubeconfig transport only runs kubectl commands")
+        if self.account_binding is not None:
+            from cyberthunder.security.kube_credentials import guard_kubeconfig, validate_kubectl_args
+            self.account_guard()
+            guard_kubeconfig(self.account_binding)
+            args = validate_kubectl_args(argv[1:])
+            return ["kubectl", *self.account_binding.kubectl_args(), *args], stdin
         full = [self.kubectl, "--kubeconfig", self.kubeconfig]
         if self.context:
             full += ["--context", self.context]
@@ -242,14 +250,22 @@ class KubectlTransport(LocalTransport):
         except (ValueError, TransportError) as e:
             return CommandResult(command, 126, "", str(e))
         t0 = time.time()
+        options = {}
+        if self.account_binding is not None:
+            from cyberthunder.security.kube_credentials import kube_subprocess_env
+            self.account_guard()
+            options["env"] = kube_subprocess_env()
         try:
             p = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout,
-                               encoding="utf-8", errors="replace")
+                               encoding="utf-8", errors="replace", **options)
             return CommandResult(command, p.returncode, p.stdout, p.stderr, time.time() - t0, t0)
         except FileNotFoundError:
             return CommandResult(command, 127, "", f"{self.kubectl} not found on this machine", time.time() - t0, t0)
         except subprocess.TimeoutExpired:
             return CommandResult(command, 124, "", f"timeout after {timeout}s", time.time() - t0, t0)
+        finally:
+            if self.account_guard is not None:
+                self.account_guard()
 
     def read_file(self, path: str) -> bytes:
         raise TransportError("kubeconfig transport has no file access; use kubectl")

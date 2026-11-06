@@ -33,6 +33,10 @@ def explain_many(body: ExplainBatchBody | None = None, ctx=CtxDep, actor: str = 
         findings = [util.get_finding(ctx, fid) for fid in body.ids]
     else:
         findings = [f for f in ctx.store.load_findings() if f.is_open]
+    from cyberthunder.api.access import require_all
+    from cyberthunder.security.resources import visible_record
+    findings = [f for f in findings if visible_record(ctx, f)]
+    require_all(ctx, [f.host for f in findings], "explain")
     with feature("explain"):
         n = ctx.explain.precompute(findings, background=True)
     return {"queued": int(n or 0)}

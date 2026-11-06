@@ -9,11 +9,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from cyberthunder.findings.schema import Finding, Status
+from cyberthunder.report import access
+from cyberthunder.report.identity import UNVERIFIED, attribution
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
 
-IDENTITY_LABEL = "Unverified (self-asserted)"
+IDENTITY_LABEL = UNVERIFIED
 
 
 def build_assurance(ctx: "AppContext", findings: list[Finding]) -> dict:
@@ -25,6 +27,7 @@ def build_assurance(ctx: "AppContext", findings: list[Finding]) -> dict:
     from cyberthunder.findings.confidence import assess_for_context
     from cyberthunder.findings.review import ReviewService
 
+    access.observations(ctx, findings)
     now = datetime.now(timezone.utc)
     reviews = ReviewService(ctx)
     rows = []
@@ -35,6 +38,8 @@ def build_assurance(ctx: "AppContext", findings: list[Finding]) -> dict:
     for finding in findings:
         confidence = assess_for_context(ctx, finding, now=now)
         review = reviews.summary(finding, now=now)
+        event = review["current"] or {}
+        identity = attribution(event.get("reviewed_by"), event.get("reviewed_principal"))
         status_counts[finding.status.value] += 1
         if finding.is_open:
             counts["raw_open"] += 1
@@ -49,11 +54,14 @@ def build_assurance(ctx: "AppContext", findings: list[Finding]) -> dict:
             "source": finding.source, "rule_id": finding.rule_id,
             "severity": finding.severity.value, "status": finding.status.value,
             "evidence": finding.evidence or "", "citations": finding.citations,
-            "confidence": confidence, "review": review, "identity_label": IDENTITY_LABEL,
+            "confidence": confidence, "review": review, "reviewer_identity": identity,
+            "identity_label": identity["label"],
         })
     counts.update(total=len(findings), scanner_pass=status_counts[Status.NOT_A_FINDING.value],
                   scanner_not_applicable=status_counts[Status.NOT_APPLICABLE.value],
                   scanner_not_reviewed=status_counts[Status.NOT_REVIEWED.value],
                   scanner_error=status_counts[Status.ERROR.value])
+    label = ("Recorded per review; verification describes identity at the decision time"
+             if any(row["reviewer_identity"]["verified"] for row in rows) else IDENTITY_LABEL)
     return {"assessed_at": now.isoformat(timespec="seconds"), "counts": counts,
-            "by_status": status_counts, "findings": rows, "identity_label": IDENTITY_LABEL}
+            "by_status": status_counts, "findings": rows, "identity_label": label}

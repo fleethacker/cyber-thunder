@@ -35,8 +35,13 @@ registerHooks({
 const { ProposalPlanView } = await import('./ProposalPlan.tsx');
 const { ProposalCard } = await import('./ProposalCard.tsx');
 const { AppStateProvider } = await import('../state/AppState.tsx');
+const { IdentityProvider } = await import('../state/Identity.tsx');
+const DevAppStateProvider = ({ children }) => createElement(IdentityProvider, {
+  identity: { mode: 'dev', authenticated: false, login_available: false, permissions: [] }, logout: async () => {},
+}, createElement(AppStateProvider, {}, children));
+const { PermissionProvider } = await import('./PermissionGate.tsx');
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => 'IT1 Reviewer' } });
-const render = (component, props) => renderToStaticMarkup(createElement(MantineProvider, {}, createElement(AppStateProvider, {}, createElement(component, props))));
+const render = (component, props) => renderToStaticMarkup(createElement(MantineProvider, {}, createElement(DevAppStateProvider, {}, createElement(PermissionProvider, { can: () => true }, createElement(component, props)))));
 const plan = {
   version: 1, mode: 'static', generated_at: '2026-11-05T12:34:56Z', proposal_id: 'fixture-proposal', proposal_state: 'approved',
   target: { id: 'fixture-target', name: 'Fixture host', asset_type: 'linux', simulated: true, in_scope: true },

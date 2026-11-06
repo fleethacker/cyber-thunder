@@ -3,15 +3,49 @@
 Base path `/api/v1`. JSON in and out. Served by `cyberthunder serve` from the same process as the UI.
 Interactive docs at `/api/docs`.
 
-**Identity.** Every request may carry `X-Actor: <name>` (the UI sends the name the Sailor typed).
-Every POST, PUT, PATCH and DELETE route except the read-only `POST /policy/evaluate` and `POST /discovery/scopes/preview` requires it to name a person: a missing or
-blank header, a bare or prefixed machine identity (`agent`, `llm`, `system`, `agent:*`, `llm:*`, `system:*`) and any
-`policy:*` value are refused with `400`. Approvals, denials, kill switch, scope and policy changes are recorded under
-that actor. Request validation errors return `400` with a string `detail`, not the framework default `422`.
+**Identity.** In `CT_AUTH_MODE=oidc` or `mesh`, API requests require a validated Bearer access token or
+browser session cookie. `X-Actor` cannot override the verified principal. Workloads cannot perform
+human-only approval/administration actions. Each action requires both a role permission and the
+server's access-policy grant; target connections require explicit credentials for that operation.
+See [authorization and configuration](AUTHORIZATION.md).
 
-**Errors.** `{"detail": "..."}`. `404` unknown id · `409` illegal proposal transition or duplicate live
+Cookie-authenticated POST/PUT/PATCH/DELETE requests (including read-only previews) require the session's
+`X-CSRF-Token` and an `Origin` matching the configured HTTPS callback origin. Other unsafe methods
+have the same requirement. Do not combine a session cookie with Bearer credentials. Bearer-only API
+callers do not use browser CSRF tokens. Authentication errors never return tokens or key material.
+
+In loopback-only `dev` mode, `X-Actor: <name>` is a typed, explicitly unverified test identity. Write
+routes require a nonempty human name except read-only policy/scope previews; reserved machine/policy
+names are refused. References to a "named actor" below mean a verified principal in verified modes,
+or this test name in development. Request validation errors return `400` with a string `detail`.
+
+**Visibility.** Scoped collections filter resources before counts and pagination. Per-target `read`
+or `export` does not grant global history. Node-wide read views require node `read` and `read.all`
+plus current-inventory read access; global reports/history exports require node `export` plus that
+inventory access. Audit requires node `audit`. Query selectors do not narrow these authorization checks.
+Reported `permissions` describe role capabilities, not a promise of access to any particular target.
+
+**Errors.** `{"detail": "..."}`. `401` missing/invalid/expired authentication · `404` unknown id · `409` illegal proposal transition or duplicate live
 proposal or stale preference revision · `403` scope violation or machine actor on a human edge · `423` kill-switch guard ·
 `400` invalid body/validation · `413` upload size limit · `503` adapter/transport failure (detail carries the message).
+Role, policy and credential denials also return `403`. Browser logout rejects invalid CSRF with `403`.
+
+## Browser identity (root paths)
+
+These paths are outside `/api/v1` and have their own session/CSRF checks. Responses are not cached.
+
+| Method | Path | Contract |
+|---|---|---|
+| GET | `/auth/status` | Public `{mode, authenticated, login_available, permissions}`; a valid session adds `csrf_token` and public `principal` (`actor`, `name`, `roles`, issuer/subject/source/verified evidence). No OAuth tokens or secrets. Development reports unauthenticated/unverified. |
+| GET | `/auth/login` | Starts Authorization Code + PKCE; redirects to the configured provider. No caller-selected return URL or query parameters. `404` if browser login is disabled. |
+| GET | `/auth/callback` | Fixed registered HTTPS callback; consumes one-time state/nonce and sets an opaque Secure/HttpOnly/SameSite=Lax cookie, then redirects to the configured application origin. |
+| POST | `/auth/logout` | Live session + CSRF + matching Origin; deletes the local session and clears cookies, `204`. Does not revoke independent provider tokens. |
+
+Session tokens live only in bounded memory in one server process; restart requires login. Logout/expiry
+invalidates the lease checked by background operations before subsequent sensitive work. Already-issued
+target commands cannot be cancelled this way. `/auth/status`, `/api/v1/status`, `/api/v1/audit/verify`
+and `/api/v1/audit/stream` are passive lookups and do not extend idle expiry; refresh itself does not
+count as activity. See [browser session details](BROWSER_IDENTITY.md).
 
 **Shapes.** `Finding` = `Finding.to_dict()`. `Finding+` adds `cat` ("CAT I"), `explanation` (Explanation or null),
 `fix` (FixEntry.to_dict() or null), `proposal` ({id, state} or null), and `categories` (overlapping
@@ -27,6 +61,7 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
 | Method | Path | Body → Response |
 |---|---|---|
 | GET | `/status` | → `AppContext.status()` + `link` {kbps, latency_ms, connected} + `outbox` {pending} |
+| GET | `/whoami` | → `{mode, principal, permissions, verified}`. Principal includes actor and verified identity evidence; permissions are role capabilities subject to access policy. |
 | GET | `/runtime/context` | → local runtime kind/OS markers, container-local boundary and nonsecret hints; no DNS or network; physical host remains unknown ([host setup](HOST_SCOPE.md)) |
 
 ## Targets (inventory = scope)
@@ -96,9 +131,9 @@ plus `progress` {done, total}. `AuditRecord` = one chain record. `Explanation` =
   return zero matches, allowing saved selections to survive changes in the current view.
 
 ## Cluster
-| GET | `/cluster/survey` | `?target_id` → Kubernetes namespace/workload survey using the authorized inventory connection. Requires `X-Actor`, an in-scope target and a released kill switch |
+| GET | `/cluster/survey` | `?target_id` → Kubernetes namespace/workload survey using the authorized connection. Requires a permitted actor (`X-Actor` only in dev), an in-scope target and a released kill switch |
 |---|---|---|
-| POST | `/cluster/baseline` | `{target_id?, use_openai?: bool}` → persisted namespace image-risk baseline. Requires `X-Actor`, an in-scope target and a released kill switch. Audit `cluster.baseline` |
+| POST | `/cluster/baseline` | `{target_id?, use_openai?: bool}` → persisted namespace image-risk baseline. Requires a permitted actor (`X-Actor` only in dev), an in-scope target and a released kill switch. Audit `cluster.baseline` |
 | GET | `/cluster/risk` | → latest persisted namespace risk profiles |
 | GET | `/cluster/known-good` | → `{exceptions: [KnownGoodException]}`. Exceptions are applied to future Kubernetes scans before summaries and proposals |
 | POST | `/cluster/known-good/exceptions` | `{target_id, reason, rule_id?, rule_version?, group_id?, object?, object_prefix?, expires_at?}` → KnownGoodException, `201`. Audit `known_good.add` |

@@ -22,7 +22,7 @@ def _svc(ctx):
 
 
 def _known_good(ctx) -> KubernetesKnownGoodState:
-    return KubernetesKnownGoodState(ctx.store)
+    return KubernetesKnownGoodState(ctx.store, ctx=ctx)
 
 
 @router.get("/survey")
@@ -53,9 +53,6 @@ def known_good(ctx=CtxDep) -> dict:
 
 @router.post("/known-good/exceptions", status_code=201)
 def add_known_good(body: KnownGoodBody, ctx=CtxDep, actor: str = ActorDep) -> dict:
-    target = ctx.inventory.get(body.target_id)
-    if target.asset_type != "kubernetes":
-        raise ValueError(f"target {target.id!r} is a {target.asset_type} target, not kubernetes")
     item = _known_good(ctx).add(actor=actor, reason=body.reason, target_id=body.target_id, rule_id=body.rule_id,
                                 rule_version=body.rule_version, group_id=body.group_id, object=body.object,
                                 object_prefix=body.object_prefix, expires_at=body.expires_at)
@@ -75,6 +72,6 @@ def add_known_good_from_finding(finding_id: str, body: KnownGoodFromFindingBody,
 
 @router.delete("/known-good/exceptions/{exception_id}", status_code=204)
 def delete_known_good(exception_id: str, ctx=CtxDep, actor: str = ActorDep) -> None:
-    if not _known_good(ctx).delete(exception_id):
+    if not _known_good(ctx).delete(exception_id, actor=actor):
         raise KeyError(f"unknown known-good exception {exception_id!r}")
     ctx.audit.append("known_good.delete", actor, {"id": exception_id}, subject=exception_id)

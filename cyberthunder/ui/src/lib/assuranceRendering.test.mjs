@@ -36,8 +36,13 @@ registerHooks({
 const { ProposalCard } = await import('../components/ProposalCard.tsx');
 const { ConfidenceBadge, ReviewBadge } = await import('../components/FindingAssurance.tsx');
 const { AppStateProvider } = await import('../state/AppState.tsx');
+const { IdentityProvider } = await import('../state/Identity.tsx');
+const DevAppStateProvider = ({ children }) => createElement(IdentityProvider, {
+  identity: { mode: 'dev', authenticated: false, login_available: false, permissions: [] }, logout: async () => {},
+}, createElement(AppStateProvider, {}, children));
+const { PermissionProvider } = await import('../components/PermissionGate.tsx');
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => '' } });
-const render = (component, props) => renderToStaticMarkup(createElement(MantineProvider, {}, createElement(AppStateProvider, {}, createElement(component, props))));
+const render = (component, props) => renderToStaticMarkup(createElement(MantineProvider, {}, createElement(DevAppStateProvider, {}, createElement(PermissionProvider, { can: () => true }, createElement(component, props)))));
 const review = { active: true, suppressed: true, disposition: 'false_positive', current: { reason: 'Reviewed test baseline' } };
 const proposal = { id: 'test-proposal', finding_id: 'test-finding', title: 'Test finding', host: 'fixture', severity: 'medium',
   state: 'approved', created_at: '2026-11-05T12:00:00Z', history: [], citations: [], fix_ref: 'test:fix', finding: { review }, fix: null };

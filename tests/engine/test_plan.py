@@ -21,9 +21,10 @@ ACTOR = "ITC Rivera"
 HOST = "rhel-01"
 
 
-def persist(ctx, findings, sid="plan-scan", offset=0):
+def persist(ctx, findings, sid="plan-scan", offset=0, *, targets=None):
     started = (datetime.now(timezone.utc) + timedelta(seconds=offset)).isoformat()
-    ctx.store.save_scan_run({"id": sid, "started_at": started, "status": "done"})
+    ctx.store.save_scan_run({"id": sid, "started_at": started, "status": "done",
+                             "targets": sorted({f.host for f in findings}) if targets is None else targets})
     ctx.store.save_findings(sid, findings)
 
 
@@ -230,7 +231,7 @@ def test_dynamic_stored_content_can_be_reconstructed_without_library_write(ctx, 
     ctx.library = FixLibrary()
     if historical:
         policy_approve(ctx, p)
-        persist(ctx, [], "new-scan", offset=10)
+        persist(ctx, [], "new-scan", offset=10, targets=[finding.host])
         assert ctx.store.get_finding(finding.id) is not None
     before = stored_state(ctx)
     forbid_side_effects(monkeypatch, ctx)
@@ -270,7 +271,7 @@ def test_readiness_uses_current_matching_finding_only(ctx, monkeypatch, current)
         findings = [replace(finding, collection_provenance={"simulated": False, "observed_at": old})]
     else:
         findings = [finding]
-    persist(ctx, findings, "current-scan", offset=10)
+    persist(ctx, findings, "current-scan", offset=10, targets=sorted({finding.host} | {f.host for f in findings}))
     # Both the historical store fallback and engine cache would otherwise return the old good observation.
     assert ctx.engine._findings[finding.id].host == HOST
     forbid_side_effects(monkeypatch, ctx)

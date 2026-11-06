@@ -44,7 +44,24 @@ class Outbox:
         self.store = store
         self.link = link
         self.audit = audit
+        self.ctx = None
         self._lock = threading.Lock()
+
+    def _authorize(self, action: str, entry: dict | None = None, actor: str | None = None) -> None:
+        if self.ctx is None:
+            return
+        from cyberthunder.control.principal import authorize
+        authorize(self.ctx, action, actor=actor)
+        if entry is not None:
+            from cyberthunder.security.resources import authorize_artifact
+            authorize_artifact(self.ctx, (entry.get("meta") or {}).get("authorization_scopes"), action)
+
+    def _visible(self, entry: dict, action: str = "read") -> bool:
+        try:
+            self._authorize(action, entry)
+            return True
+        except PermissionError:
+            return False
 
     @property
     def pending_dir(self) -> Path:
@@ -55,6 +72,7 @@ class Outbox:
         return self.store.synced_dir
 
     def enqueue(self, kind: str, name: str, data: bytes, meta: dict | None = None, *, actor: str = "operator") -> dict:
+        self._authorize("export", {"meta": meta}, actor)
         if isinstance(data, str):
             data = data.encode("utf-8")
         with self._lock:
@@ -88,15 +106,18 @@ class Outbox:
         return out
 
     def list(self) -> dict[str, list[dict]]:
-        return {"pending": self._entries(self.pending_dir), "synced": self._entries(self.synced_dir)}
+        self._authorize("read")
+        return {"pending": [e for e in self._entries(self.pending_dir) if self._visible(e)],
+                "synced": [e for e in self._entries(self.synced_dir) if self._visible(e)]}
 
     def sync(self, force: bool = False, *, actor: str = "operator") -> dict[str, Any]:
         """Stage pending files locally. force=True permits manual courier staging while offline."""
+        self._authorize("export", actor=actor)
         state = self.link.state()
         self.link.kill.guard("outbox.sync", actor)
         if not state.connected and not force:
             if self.audit is not None:
-                self.audit.append("outbox.sync", actor, {"pending": len(self._entries(self.pending_dir))},
+                self.audit.append("outbox.sync", actor, {"pending": sum(self._visible(e, "export") for e in self._entries(self.pending_dir))},
                                   outcome="blocked")
             raise LinkDisconnected("link is disconnected; entries stay queued until it reconnects")
         sent: list[dict] = []
@@ -106,7 +127,12 @@ class Outbox:
         with self._lock:
             self.synced_dir.mkdir(parents=True, exist_ok=True)
             for entry in self._entries(self.pending_dir):
+                if not self._visible(entry, "export"):
+                    continue
+                self._authorize("export", entry, actor)
                 self.link.kill.guard("outbox.sync", actor)
+                if not isinstance(entry.get("id"), str) or Path(entry["id"]).name != entry["id"] or ":" in entry["id"]:
+                    raise ValueError("invalid outbox entry identifier")
                 src = self.pending_dir / entry["id"]
                 if not src.exists():
                     continue

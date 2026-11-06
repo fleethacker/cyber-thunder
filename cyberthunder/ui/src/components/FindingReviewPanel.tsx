@@ -9,6 +9,7 @@ import { useAppState } from '../state/AppState';
 import { actorProblem } from './ActorChip';
 import { CodeBlock, Collapsible, ErrorBox, JsonView } from './common';
 import { ReviewBadge } from './FindingAssurance';
+import { ReviewIdentity, ReviewerIdentity } from './IdentityProvenance';
 
 function sameReviewBasis(a: FindingReview, b: FindingReview): boolean {
   return a.revision === b.revision && a.evidence_fingerprint === b.evidence_fingerprint
@@ -122,6 +123,7 @@ export function FindingReviewPanel({ finding, opened, onToggle, onFinding, onRev
           <ReviewBadge review={summary} onClick={onToggle} />
         </Group>
         <Text size="xs" c="dimmed">A review records a human decision. It does not approve a fix or change the scanner result.</Text>
+        {summary?.current && <ReviewIdentity event={summary.current} />}
         {summary?.reopened_reason && <Alert color="yellow" title="Review reopened"><Text size="sm">{summary.reopened_reason}</Text><Text size="sm">Review the current evidence before recording another decision.</Text></Alert>}
         {isSuppressed(summary) && <Alert color="orange" title="New proposals are blocked">
           <Text size="sm">{summary?.current?.reason}</Text>
@@ -131,9 +133,7 @@ export function FindingReviewPanel({ finding, opened, onToggle, onFinding, onRev
           {opened ? 'Hide review form and history' : `Review and history${summary ? ` (${summary.history_count})` : ''}`}
         </Button>
         {opened && <Stack gap="sm">
-          <Alert color="blue" title="Self-asserted reviewer identity">
-            <Text size="sm">Recorded as {actor || '(set your name in the header)'}. This prototype does not verify that identity.</Text>
-          </Alert>
+          <ReviewerIdentity actor={actor} />
           {unavailable && <Alert color="gray" title="Review service unavailable">This server may need an upgrade, or the finding may no longer be current. Unreviewed means no current human decision is available. Your input is retained.</Alert>}
           {error && <ErrorBox error={error} />}
           <Button size="xs" variant="light" loading={loading} disabled={saving} onClick={() => void load()} style={{ alignSelf: 'flex-start' }}>Refresh current evidence and history</Button>
@@ -185,7 +185,7 @@ export function FindingReviewPanel({ finding, opened, onToggle, onFinding, onRev
           {review?.history.slice().reverse().map((event) => <Paper key={event.id} withBorder p="sm" radius="sm">
             <Stack gap={4}>
               <Group justify="space-between"><Text fw={600} size="sm">{REVIEW_LABELS[event.disposition]}</Text><Text size="xs">{fmtTime(event.reviewed_at)}</Text></Group>
-              <Text size="xs" c="dimmed">{event.reviewed_by} · self-asserted identity (unverified)</Text>
+              <ReviewIdentity event={event} />
               <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>{event.reason}</Text>
               {event.supporting_evidence && <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>Supporting evidence: {event.supporting_evidence}</Text>}
               <Text size="xs">Expiry: {event.expires_at ? fmtTime(event.expires_at) : 'None'}</Text>

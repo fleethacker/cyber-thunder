@@ -50,7 +50,7 @@ Pending {{ r.decisions.proposed }} | Approved {{ r.decisions.approved }} | Appli
 | Verified change | Host | Approved by | Verified at (UTC) |
 |---|---|---|---|
 {% for v in r.verified %}
-| {{ v.title }} | {{ v.host }} | {{ v.decided_by or "-" }} | {{ v.verified_at or "-" }} |
+| {{ v.title }} | {{ v.host }} | {{ v.decision_identity.text | md_cell }} | {{ v.verified_at or "-" }} |
 {% endfor %}
 {% else %}
 No verified changes yet.
@@ -60,7 +60,7 @@ No verified changes yet.
 | Reverted or failed change | Host | Approved by | When (UTC) | Why |
 |---|---|---|---|---|
 {% for x in r.reverted %}
-| {{ x.title }} | {{ x.host }} | {{ x.decided_by or "-" }} | {{ x.at or "-" }} | {{ x.why }} |
+| {{ x.title }} | {{ x.host }} | {{ x.decision_identity.text | md_cell }} | {{ x.at or "-" }} | {{ x.why | md_cell }} |
 {% endfor %}
 {% endif %}
 
@@ -68,7 +68,7 @@ No verified changes yet.
 
 {% for t in r.top %}
 {{ loop.index }}. **{{ t.cat }}** {{ t.host }}: {{ t.title }}. {{ t.risk or "No explanation generated yet." }} [{{ t.citations | join(", ") }}]
-   Scanner status: {{ t.assurance.status }}; confidence: **{{ t.assurance.confidence.grade }}** - {{ t.assurance.confidence.reason | md_cell }}; review: {{ t.assurance.review.disposition }}. Reviewer identity: {{ t.assurance.identity_label }}.
+   Scanner status: {{ t.assurance.status }}; confidence: **{{ t.assurance.confidence.grade }}** - {{ t.assurance.confidence.reason | md_cell }}; review: {{ t.assurance.review.disposition }}. Reviewer identity: {{ t.assurance.identity_label | md_cell }}.
 {% else %}
 No open findings to rank.
 {% endfor %}

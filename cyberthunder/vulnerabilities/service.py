@@ -14,11 +14,13 @@ import time
 import uuid
 import zipfile
 from contextlib import ExitStack, contextmanager
+from contextvars import copy_context
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cyberthunder.control.identity import MAX_ACTOR_LEN, normalize_actor, require_human
 from cyberthunder.control.killswitch import KillSwitchEngaged
+from cyberthunder.control.principal import authorize
 from cyberthunder.ingest.link import Link
 
 from . import engine
@@ -118,7 +120,9 @@ class VulnerabilityService:
         self.store.write_json(self.state_path, state)
 
     def _guard(self, actor: str, *, online: bool = False, deadline: float | None = None,
-               stage: Path | None = None):
+               stage: Path | None = None, action: str | None = "admin"):
+        if action is not None:
+            authorize(self.ctx, action, actor=actor)
         self.ctx.killswitch.guard("vulnerabilities.manage", actor)
         if online and not Link(self.store, self.ctx.settings).connected:
             raise UpdateStopped("Database update stopped: link disconnected")
@@ -143,6 +147,7 @@ class VulnerabilityService:
 
     def save_settings(self, changes: dict, *, actor: str) -> dict:
         actor = require_human(actor)
+        self._guard(actor)
         if not isinstance(changes, dict) or set(changes) - {
                 "expected_revision", "auto_update", "interval_hours", "include_java"}:
             raise VulnerabilityError("Unknown database settings")
@@ -162,6 +167,7 @@ class VulnerabilityService:
             prefs.update({k: v for k, v in changes.items() if k != "expected_revision"})
             prefs["revision"] += 1
             self._audit("settings", actor, prefs)
+            self._guard(actor)
             self.store.write_json(self.settings_path, prefs)
         return prefs
 
@@ -360,13 +366,16 @@ class VulnerabilityService:
 
     @contextmanager
     def scan_context(self):
-        self._guard("scanner")
-        engine_status = self._require_engine(guard=lambda: self._guard("scanner"))
+        # Reading an existing generation belongs to the caller's target scan;
+        # it does not confer or require node database-management permission.
+        guard = lambda: self._guard("scanner", action=None)
+        guard()
+        engine_status = self._require_engine(guard=guard)
         with self._selected() as selected:
-            cache, _, databases = self._inspect_selected(selected, lambda: self._guard("scanner"))
+            cache, _, databases = self._inspect_selected(selected, guard)
             snapshot = self._data_status(selected, databases)
             snapshot.update(version=1, cache_dir=cache, engine=engine_status)
-            self._guard("scanner")
+            guard()
             yield copy.deepcopy(snapshot)
 
     def _publish(self, cache: Path, *, actor: str, provenance: str, job_id: str | None = None,
@@ -377,6 +386,7 @@ class VulnerabilityService:
         manifest = {"format": FORMAT, "version": 1, "created_at": created,
                     "provenance": provenance, "source": source, "files": files}
         raw = encoded(manifest)
+        guard()
         with (cache / MANIFEST).open("xb") as stream:
             stream.write(raw)
             stream.flush()
@@ -393,6 +403,7 @@ class VulnerabilityService:
             os.replace(cache, self.generations / generation)
             # This single document is the commit point on both storage backends.
             # A failed write leaves an unselected orphan for retention to reclaim.
+            guard()
             self._write_state(selected=selected, last_success=created, last_error=None)
         return generation
 
@@ -426,11 +437,11 @@ class VulnerabilityService:
                 self._trim_jobs()
             if background:
                 self.threads = [t for t in self.threads if t.is_alive()]
-                thread = threading.Thread(target=self._run_update, args=(job, include_java, lease),
-                                          name="vulnerability-update", daemon=True)
-                self.threads.append(thread)
                 try:
+                    thread = threading.Thread(target=copy_context().run, args=(self._run_update, job, include_java, lease),
+                                              name="vulnerability-update", daemon=True)
                     thread.start()
+                    self.threads.append(thread)
                 except Exception:
                     self._finish(job, "failed", error="Database update worker could not start")
                     raise VulnerabilityUnavailable("Database update worker could not start") from None
@@ -455,6 +466,7 @@ class VulnerabilityService:
         stage = self.staging / job["id"]
         generation = None
         try:
+            self._guard(job["actor"], online=True)
             stage.mkdir()
             cache, home = stage / "cache", stage / "home"
             cache.mkdir()
@@ -480,8 +492,10 @@ class VulnerabilityService:
             generation = self._publish(cache, actor=job["actor"], provenance="official_download",
                                        job_id=job["id"], guard=guard)
             self._finish(job, "completed", generation=generation)
-        except (KillSwitchEngaged, UpdateStopped) as exc:
-            error = "Database update stopped by kill switch" if isinstance(exc, KillSwitchEngaged) else str(exc)
+        except (KillSwitchEngaged, UpdateStopped, PermissionError) as exc:
+            error = ("Database update stopped: account authorization expired or was revoked"
+                     if isinstance(exc, PermissionError) else
+                     "Database update stopped by kill switch" if isinstance(exc, KillSwitchEngaged) else str(exc))
             self._finish(job, "stopped", error=error[:256])
         except Exception as exc:
             # Never return subprocess output, filesystem paths, credentials, or
@@ -504,7 +518,7 @@ class VulnerabilityService:
 
     def import_bundle(self, path: Path, *, actor: str) -> dict:
         actor = require_human(actor)
-        self._guard(actor)
+        self._guard(actor, action="import")
         with Lease(self.root / "operation.lock"):
             self._recover()
             self._make_room()
@@ -513,10 +527,11 @@ class VulnerabilityService:
             cache = stage / "cache"
             cache.mkdir()
             deadline = time.monotonic() + self.timeout
-            guard = lambda: self._guard(actor, deadline=deadline, stage=stage)
+            guard = lambda: self._guard(actor, deadline=deadline, stage=stage, action="import")
             with self.store.lock("vulnerabilities"):
                 self._write_state(last_attempt=now())
             try:
+                guard()
                 if regular(Path(path)).st_size > self.max_bundle_bytes:
                     raise VulnerabilityError("Compressed bundle size limit exceeded")
                 import_zip(Path(path), cache, self.max_unpacked_bytes, guard)
@@ -526,7 +541,7 @@ class VulnerabilityService:
                 with self.store.lock("vulnerabilities"):
                     self._write_state(last_error=error)
                 self._audit("import_failed", actor, {"error": error}, outcome="failed")
-                if isinstance(exc, OSError):
+                if isinstance(exc, OSError) and not isinstance(exc, PermissionError):
                     raise VulnerabilityError("Database bundle could not be read") from None
                 raise
             finally:
@@ -571,11 +586,11 @@ class VulnerabilityService:
 
     def export_lease(self, *, actor: str) -> ExportBundle:
         actor = require_human(actor)
-        self._guard(actor)
+        self._guard(actor, action="export")
         with ExitStack() as cleanup:
             with Lease(self.root / "operation.lock"), self._selected() as selected:
                 deadline = time.monotonic() + self.timeout
-                guard = lambda: self._guard(actor, deadline=deadline)
+                guard = lambda: self._guard(actor, deadline=deadline, action="export")
                 cache, manifest, _ = self._inspect_selected(selected, guard)
                 for partial in self.exports.glob("*.partial"):
                     partial.unlink(missing_ok=True)
@@ -583,6 +598,7 @@ class VulnerabilityService:
                 output = self.exports / f"{uuid.uuid4().hex}.zip"
                 partial = output.with_suffix(".partial")
                 try:
+                    guard()
                     require_space(self.exports, self.max_bundle_bytes)
                     with zipfile.ZipFile(partial, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
                         archive.writestr(MANIFEST, encoded(manifest))
@@ -606,6 +622,7 @@ class VulnerabilityService:
                     guard()
                     self._audit("export", actor, {"generation": selected["generation"],
                                                   "provenance": selected["provenance"]})
+                    guard()
                     os.replace(partial, output)
                     lease = Lease(output.with_suffix(".lock"))
                     cleanup.callback(lease.close)

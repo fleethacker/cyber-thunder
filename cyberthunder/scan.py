@@ -8,6 +8,8 @@ and marks the targets it has not reached 'stopped', and nothing is proposed afte
 ScanRun lives at store.scans/<id>/run.json; findings at findings.json; raw artifacts under raw/<target_id>/.
 """
 from __future__ import annotations
+from contextvars import copy_context
+from cyberthunder.control.principal import authorize, operation
 
 import logging
 import threading
@@ -20,6 +22,7 @@ from cyberthunder.adapters.kubernetes.known_good import KubernetesKnownGoodState
 from cyberthunder.control.killswitch import KillSwitchEngaged
 from cyberthunder.findings.schema import Finding, summarize, utcnow
 from cyberthunder.inventory.targets import ScopeViolation
+from cyberthunder.security.resources import check_record
 
 if TYPE_CHECKING:  # pragma: no cover
     from cyberthunder.context import AppContext
@@ -58,6 +61,7 @@ class ScanRun:
     summary: dict = field(default_factory=dict)   # findings.schema.summarize() output
     error: str | None = None
     coverage_incomplete: bool | None = None       # None for legacy runs without coverage observations
+    authorization_scopes: list[dict] | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -85,6 +89,7 @@ class Scanner:
         self._lock = threading.Lock()
 
     # -- lifecycle ---------------------------------------------------------------------
+    @operation("scan")
     def start(self, target_ids: Iterable[str] | None = None, *, modules: Iterable[str] | None = None,
               rule_filter: list[str] | None = None, trigger: str = "manual", requested_by: str = "operator",
               background: bool = True) -> ScanRun:
@@ -93,8 +98,14 @@ class Scanner:
         self.ctx.killswitch.guard("scan.start", requested_by)
         if target_ids is None:
             ids = [t.id for t in self.ctx.inventory.all() if t.in_scope]
+            if getattr(self.ctx.settings, "auth_mode", "dev") != "dev":
+                ids = [tid for tid in ids if self.ctx.may_access(tid, "scan")]
+                if not ids:
+                    raise PermissionError("no targets are authorized for scanning by this account")
         else:
             ids = list(dict.fromkeys(target_ids))
+        for tid in ids:
+            authorize(self.ctx, "scan", actor=requested_by, target=tid)
         run = ScanRun(id=self.ctx.store.new_id("scan-"), targets=ids,
                       modules=list(modules) if modules else list(MODULES),
                       rule_filter=list(rule_filter) if rule_filter else None,
@@ -102,7 +113,8 @@ class Scanner:
         run.results = {tid: TargetScanResult(tid) for tid in ids}
         self._save(run)
         if background:
-            th = threading.Thread(target=self._run_quietly, args=(run,), name=f"scan-{run.id}", daemon=True)
+            inherited = copy_context()
+            th = threading.Thread(target=inherited.run, args=(self._run_quietly, run), name=f"scan-{run.id}", daemon=True)
             with self._lock:
                 self._threads[run.id] = th
             th.start()
@@ -130,9 +142,16 @@ class Scanner:
         try:
             self.run(run)
         except Exception:  # noqa: BLE001  a background thread must not die silently; run() already recorded it
+            if run.status == "pending":
+                run.status, run.error, run.finished_at = "error", "scan authorization expired or was revoked before execution", utcnow()
+                self._save(run)
             log.exception("scan %s failed", run.id)
 
     def _save(self, run: ScanRun) -> None:
+        if run.authorization_scopes is None:
+            previous = self.ctx.store.load_scan_run(run.id)
+            run.authorization_scopes = (previous.get("authorization_scopes") if previous is not None else
+                                        self.ctx.store.capture_resources(run.targets))
         d = run.to_dict()
         with self._lock:
             if run.status in ("pending", "running"):
@@ -151,11 +170,15 @@ class Scanner:
                 time.sleep(0.05)
 
     # -- execution ---------------------------------------------------------------------
+    @operation("scan")
     def run(self, run: ScanRun) -> ScanRun:
         """Execute synchronously: per target -> assert_in_scope -> transport -> adapter.collect -> run_detection
         -> persist. Audit: scan.start, scan.target (per target, with counts/errors), scan.finish."""
         ctx = self.ctx
         actor = run.requested_by
+        for tid in run.targets:
+            authorize(ctx, "scan", actor=actor, target=tid)
+        check_record(ctx, run, "scan")
         run.status = "running"
         self._save(run)
         ctx.audit.append("scan.start", actor, {"targets": run.targets, "modules": run.modules,
@@ -275,6 +298,8 @@ class Scanner:
 
         try:
             target = ctx.inventory.assert_in_scope(tid)
+            check_record(ctx, run, "scan")
+            authorize(ctx, "scan", actor=actor, target=target)
         except ScopeViolation as e:
             res.errors.append(str(e))
             ctx.audit.append("action.blocked", actor, {"action": "scan.collect", "target": tid, "scan_id": run.id,
@@ -318,6 +343,10 @@ class Scanner:
             res.coverage = ScanContentService(ctx).observed(target, collected, findings)
             collected.raw["coverage"] = res.coverage
             run.coverage_incomplete = True
+            # Collection/detection may finish after logout, grant revocation or
+            # target replacement. Do not publish facts under that old request.
+            authorize(ctx, "scan", actor=actor, target=target)
+            check_record(ctx, run, "scan")
             ctx.store.write_json(workdir / "collected.json", collected.to_dict())
             res.errors.extend(collected.errors)
             res.findings = len(findings)
@@ -341,7 +370,7 @@ class Scanner:
         """Mark Kubernetes findings covered by persistent site exceptions before summaries/proposals."""
         if target.asset_type != "kubernetes" or not findings:
             return []
-        matched = KubernetesKnownGoodState(self.ctx.store).apply(findings)
+        matched = KubernetesKnownGoodState(self.ctx.store, ctx=self.ctx).apply(findings)
         if matched:
             ids = sorted(set(matched))
             self.ctx.audit.append("known_good.apply", actor, {"target": target.id, "exceptions": ids,

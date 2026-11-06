@@ -1,4 +1,4 @@
-// Typed fetch wrapper for /api/v1. Every request carries X-Actor (the name typed in Settings).
+// Typed fetch wrapper for /api/v1. Verified sessions carry an opaque cookie and CSRF protection.
 // Errors come back as ApiError with the server's {detail} verbatim.
 import type {
   AssetFacts, AuditPage, AuditRecord, AuditVerify, AutomationPolicy, BulkResult, BulletinResult, ContentManifest, DeltaReport,
@@ -10,11 +10,14 @@ import type {
   VulnerabilityJob, VulnerabilitySettings, VulnerabilitySettingsInput, VulnerabilityStatus,
   HostRegistration, RuntimeContext, TargetReadiness, ScopeRangeInput, ScopeRangePreview, SavedScopeRanges,
 } from './types';
+import { sessionIdentity, sessionHeaders, sessionExpired, authorityRevision } from './identity';
 
 export const API_BASE = '/api/v1';
 const ACTOR_KEY = 'ct.actor';
 
 export function getActor(): string {
+  const session = sessionIdentity();
+  if (session && session.mode !== 'dev') return session.principal?.actor ?? '';
   try {
     return localStorage.getItem(ACTOR_KEY) ?? '';
   } catch {
@@ -23,6 +26,7 @@ export function getActor(): string {
 }
 
 export function setActor(name: string): void {
+  if (sessionIdentity()?.mode !== 'dev' && sessionIdentity() !== null) return;
   try {
     localStorage.setItem(ACTOR_KEY, name.trim());
   } catch {
@@ -58,7 +62,11 @@ export function url(path: string, q?: Query): string {
   return `${API_BASE}${path}${qs(q)}`;
 }
 
-async function parseError(res: Response): Promise<ApiError> {
+function requireAuthority(revision: number): void {
+  if (revision !== authorityRevision()) throw new ApiError(0, 'Account permissions changed while the request was pending. Review and submit again.');
+}
+
+async function parseError(res: Response, revision: number): Promise<ApiError> {
   let detail = `${res.status} ${res.statusText}`;
   try {
     const text = await res.text();
@@ -73,11 +81,14 @@ async function parseError(res: Response): Promise<ApiError> {
   } catch {
     /* keep status text */
   }
+  requireAuthority(revision);
+  if (res.status === 401) sessionExpired();
   return new ApiError(res.status, detail);
 }
 
 export async function request<T>(method: string, path: string, opts: { query?: Query; body?: unknown; form?: FormData } = {}): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const revision = authorityRevision();
+  const headers: Record<string, string> = { Accept: 'application/json', ...sessionHeaders(method) };
   const actor = getActor();
   if (actor) headers['X-Actor'] = actor;
   let body: BodyInit | undefined;
@@ -92,10 +103,15 @@ export async function request<T>(method: string, path: string, opts: { query?: Q
   } catch (e) {
     throw new ApiError(0, `API unreachable: ${(e as Error).message}`);
   }
-  if (!res.ok) throw await parseError(res);
+  requireAuthority(revision);
+  if (!res.ok) throw await parseError(res, revision);
   const ct = res.headers.get('content-type') ?? '';
-  if (ct.includes('application/json')) return (await res.json()) as T;
-  return (await res.text()) as unknown as T;
+  try {
+    return (ct.includes('application/json') ? await res.json() : await res.text()) as T;
+  } finally {
+    // A malformed old response must not publish its parser error to a new account.
+    requireAuthority(revision);
+  }
 }
 
 const get = <T>(p: string, query?: Query) => request<T>('GET', p, { query });
@@ -105,8 +121,11 @@ const del = <T>(p: string) => request<T>('DELETE', p);
 
 const enc = encodeURIComponent;
 
-async function vulnerabilityZip(path: 'import' | 'export', file?: File): Promise<Response> {
-  const headers: Record<string, string> = { Accept: path === 'export' ? 'application/zip' : 'application/json' };
+async function vulnerabilityZip(path: 'import', file: File): Promise<VulnerabilityStatus>;
+async function vulnerabilityZip(path: 'export'): Promise<Blob>;
+async function vulnerabilityZip(path: 'import' | 'export', file?: File): Promise<VulnerabilityStatus | Blob> {
+  const revision = authorityRevision();
+  const headers: Record<string, string> = { Accept: path === 'export' ? 'application/zip' : 'application/json', ...sessionHeaders('POST') };
   const actor = getActor();
   if (actor) headers['X-Actor'] = actor;
   if (file) headers['Content-Type'] = 'application/zip';
@@ -116,8 +135,14 @@ async function vulnerabilityZip(path: 'import' | 'export', file?: File): Promise
   } catch (e) {
     throw new ApiError(0, `API unreachable: ${(e as Error).message}`);
   }
-  if (!res.ok) throw await parseError(res);
-  return res;
+  requireAuthority(revision);
+  if (!res.ok) throw await parseError(res, revision);
+  // Consume the body before returning so a late export cannot cross accounts.
+  try {
+    return path === 'export' ? await res.blob() : await res.json() as VulnerabilityStatus;
+  } finally {
+    requireAuthority(revision);
+  }
 }
 
 export const api = {
@@ -128,8 +153,8 @@ export const api = {
   updateVulnerabilityDatabases: (include_java: boolean) => post<VulnerabilityJob>('/vulnerabilities/update', { include_java }),
   vulnerabilityJobs: () => get<{ jobs: VulnerabilityJob[] }>('/vulnerabilities/jobs'),
   vulnerabilityJob: (id: string) => get<VulnerabilityJob>(`/vulnerabilities/jobs/${enc(id)}`),
-  importVulnerabilityBundle: async (file: File): Promise<VulnerabilityStatus> => (await vulnerabilityZip('import', file)).json(),
-  exportVulnerabilityBundle: async (): Promise<Blob> => (await vulnerabilityZip('export')).blob(),
+  importVulnerabilityBundle: (file: File): Promise<VulnerabilityStatus> => vulnerabilityZip('import', file),
+  exportVulnerabilityBundle: (): Promise<Blob> => vulnerabilityZip('export'),
 
   targets: () => get<{ targets: Target[] }>('/targets'),
   runtimeContext: () => get<RuntimeContext>('/runtime/context'),
@@ -270,6 +295,7 @@ export function subscribeAudit(
   onRecord: (r: AuditRecord) => void,
   opts: { afterSeq?: number; onState?: (s: AuditStreamState) => void } = {},
 ): () => void {
+  const revision = authorityRevision();
   let lastSeq = opts.afterSeq ?? 0;
   let es: EventSource | null = null;
   let stopped = false;
@@ -277,7 +303,7 @@ export function subscribeAudit(
   let timer: number | undefined;
 
   const connect = () => {
-    if (stopped) return;
+    if (stopped || revision !== authorityRevision()) return;
     opts.onState?.('connecting');
     es = new EventSource(url('/audit/stream', { after_seq: lastSeq }));
     es.onopen = () => {
@@ -285,6 +311,7 @@ export function subscribeAudit(
       opts.onState?.('open');
     };
     es.addEventListener('audit', (ev) => {
+      if (revision !== authorityRevision()) return;
       try {
         const rec = JSON.parse((ev as MessageEvent<string>).data) as AuditRecord;
         if (rec.seq > lastSeq) {
@@ -294,6 +321,11 @@ export function subscribeAudit(
       } catch {
         /* ignore malformed event */
       }
+    });
+    es.addEventListener('session-expired', () => {
+      stopped = true;
+      es?.close();
+      if (revision === authorityRevision()) sessionExpired();
     });
     es.onerror = () => {
       es?.close();

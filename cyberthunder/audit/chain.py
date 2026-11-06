@@ -169,6 +169,11 @@ class AuditLog:
                 "details": details or {},
                 "prev_hash": self._head,
             }
+            from cyberthunder.control.principal import current_principal
+            principal = current_principal()
+            if principal is not None:
+                rec["v"] = 2
+                rec["principal"] = principal.evidence()
             rec["hash"] = record_hash(rec)
             with self.path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec, ensure_ascii=False, sort_keys=True) + "\n")

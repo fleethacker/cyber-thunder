@@ -35,7 +35,8 @@ def observation(**changes):
 
 
 def persist(ctx, finding, scan_id="scan-1", started_at="2026-11-05T10:00:00Z", **run):
-    ctx.store.save_scan_run({"id": scan_id, "started_at": started_at, "status": "done", **run})
+    ctx.store.save_scan_run({"id": scan_id, "started_at": started_at, "status": "done",
+                             "targets": [finding.host], **run})
     ctx.store.save_findings(scan_id, [finding])
 
 
@@ -177,7 +178,8 @@ def test_stale_revision_and_missing_current_finding_cannot_write(env):
     decision(service, finding)
     with pytest.raises(ReviewConflict, match="revision changed"):
         decision(service, finding, expected_revision=0)
-    ctx.store.save_scan_run({"id": "scan-2", "started_at": "2026-11-05T11:00:00Z", "status": "done"})
+    ctx.store.save_scan_run({"id": "scan-2", "started_at": "2026-11-05T11:00:00Z", "status": "done",
+                             "targets": [finding.host]})
     ctx.store.save_findings("scan-2", [])
     assert ctx.store.get_finding(finding.id) is not None  # historical fallback is deliberately bypassed
     with pytest.raises(KeyError, match="not in the current"):
@@ -365,7 +367,7 @@ def test_recurrence_never_reactivates_old_review_without_intermediate_get(env, c
     # No summary/history call between A -> B -> A. Publication alone must invalidate.
     for index, finding in ((2, changed), (3, original)):
         sid = f"scan-{index}"
-        run = {"id": sid, "started_at": f"2026-11-05T1{index}:00:00Z", "status": "done"}
+        run = {"id": sid, "started_at": f"2026-11-05T1{index}:00:00Z", "status": "done", "targets": [finding.host]}
         if order == "findings_first":
             ctx.store.save_findings(sid, [finding])
             ctx.store.save_scan_run(run)
@@ -413,10 +415,12 @@ def test_partial_overlay_and_completed_full_scan_absence_invalidate_correctly(en
     persist(ctx, other, "scan-2", "2026-11-05T11:00:00Z", trigger="verify")
     assert service.history(finding) == before
     # Incremental full-scan publication is not a final removal of an unseen rule.
-    ctx.store.save_scan_run({"id": "scan-3", "started_at": "2026-11-05T12:00:00Z", "status": "running"})
+    ctx.store.save_scan_run({"id": "scan-3", "started_at": "2026-11-05T12:00:00Z", "status": "running",
+                             "targets": [finding.host]})
     ctx.store.save_findings("scan-3", [other])
     assert service.history(finding) == before
-    ctx.store.save_scan_run({"id": "scan-3", "started_at": "2026-11-05T12:00:00Z", "status": "done"})
+    ctx.store.save_scan_run({"id": "scan-3", "started_at": "2026-11-05T12:00:00Z", "status": "done",
+                             "targets": [finding.host]})
     # Reappearance cannot resurrect the pre-removal decision.
     persist(ctx, finding, "scan-4", "2026-11-05T13:00:00Z")
     assert not service.summary(finding)["suppressed"] and service.summary(finding)["revision"] == 2
@@ -698,7 +702,7 @@ def test_no_review_changed_evidence_waits_while_identical_and_unrelated_scans_pr
             same = replace(finding, collected_at="2026-11-05T15:00:00Z", raw_ref="moved-result.xml")
             ctx.store.save_findings("scan-1", [same])
             ctx.store.save_scan_run({"id": "scan-1", "started_at": "2026-11-05T10:00:00Z",
-                                     "status": "done", "progress": "updated"})
+                                     "status": "done", "progress": "updated", "targets": [finding.host]})
             persist(ctx, observation(rule_id="unrelated"), "other-partial", "2026-11-05T11:00:00Z", trigger="verify")
             assert time.monotonic() - started < 2
             assert not pending.done()
@@ -712,7 +716,7 @@ def test_no_review_changed_evidence_waits_while_identical_and_unrelated_scans_pr
 @pytest.mark.parametrize("with_rows", [False, True])
 def test_no_review_full_scan_completion_locks_removal_but_progress_does_not(env, with_rows):
     ctx, service, finding = env
-    run = {"id": "new-full", "started_at": "2026-11-05T11:00:00Z", "status": "running"}
+    run = {"id": "new-full", "started_at": "2026-11-05T11:00:00Z", "status": "running", "targets": [finding.host]}
     rows = [observation(rule_id="other-rule")] if with_rows else []
     with service.remediation_guard(finding):
         # Pending metadata and incremental findings cannot turn omissions into final removals.

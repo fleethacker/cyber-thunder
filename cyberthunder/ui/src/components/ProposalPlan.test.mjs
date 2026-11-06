@@ -1,18 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import test from 'node:test';
-import ts from 'typescript';
+import { evaluate } from '../lib/moduleTestSupport.mjs';
 
-const require = createRequire(import.meta.url);
-const compile = (path) => ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
-  fileName: path, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
-}).outputText;
-function evaluate(source, imports = {}) {
-  const exports = {};
-  new Function('require', 'exports', source)((name) => imports[name] ?? require(name), exports);
-  return exports;
-}
+const compile = (path) => new URL(path, import.meta.url);
+
 const source = compile('./ProposalPlan.tsx');
 const { ApiError, errorText } = evaluate(compile('../api/client.ts'));
 const { actorProblem } = evaluate(compile('./ActorChip.tsx'), { '../state/AppState': {} });

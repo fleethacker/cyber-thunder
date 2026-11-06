@@ -11,7 +11,8 @@ from datetime import date, timedelta
 from typing import TYPE_CHECKING
 
 from cyberthunder.control.approvals import ProposalState
-from cyberthunder.findings.current import CurrentFindings
+from cyberthunder.report import access
+from cyberthunder.report.identity import attribution
 from cyberthunder.findings.schema import Severity, Status
 from cyberthunder.report.assurance import build_assurance
 from cyberthunder.report.onepager import discovery_open, latest_proposals, resolve_scan
@@ -65,7 +66,7 @@ def poam_rows(ctx: "AppContext", scan_id: str | None = None) -> list[dict]:
     disc = [f for f in discovery_open(ctx) if f.id not in {x.id for x in findings}]
     findings = sorted([*findings, *disc], key=lambda f: (-f.severity.rank, f.host, f.rule_version or f.rule_id))
     assurance = build_assurance(ctx, findings)
-    lifecycle = CurrentFindings.for_context(ctx)
+    lifecycle = access.lifecycle(ctx)
     for f, assessed in zip(findings, assurance["findings"]):
         current = lifecycle.assess(f)
         review = assessed["review"]
@@ -98,7 +99,7 @@ def poam_rows(ctx: "AppContext", scan_id: str | None = None) -> list[dict]:
         due = "" if status == "Completed" else (today + timedelta(days=SCHEDULE_DAYS.get(f.severity, 180))).isoformat()
         comments = "Discovery sweep" if f.source == "discovery" else f"Scan {sid}"
         if p and p.decided_by:
-            comments += f"; {p.state.value} by {p.decided_by}"
+            comments += f"; {p.state.value} by " + attribution(p.decided_by, p.decided_principal)["text"]
         if current.rollback:
             comments += f"; rollback attempt {current.rollback['proposal_id']} ok={current.rollback['ok']}"
         if not f.rule_version:
@@ -118,7 +119,9 @@ def poam_rows(ctx: "AppContext", scan_id: str | None = None) -> list[dict]:
             "Review Reason": event.get("reason", ""), "Review Supporting Evidence": event.get("supporting_evidence", ""),
             "Review Expires At": event.get("expires_at") or "", "Reviewed At": event.get("reviewed_at", ""),
             "Review Reopened Reason": review["reopened_reason"] or "",
-            "Review Evidence Fingerprint": review["evidence_fingerprint"], "Reviewer Identity": assessed["identity_label"],
+            "Review Evidence Fingerprint": review["evidence_fingerprint"],
+            "Reviewer Identity": (assessed["reviewer_identity"]["text"] if review["identity_verified"]
+                                  else assessed["identity_label"]),
         })
     return rows
 

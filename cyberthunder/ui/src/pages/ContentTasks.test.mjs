@@ -3,7 +3,7 @@ import test from 'node:test';
 import { browser, errorText, evaluate, format, libraryFixture, linkPresentation, mount, tasks, text, ui } from '../lib/contentTestSupport.mjs';
 
 async function setup(t, query = '', initial = {}) {
-  const env = browser(t), calls = [];
+  const env = browser(t), calls = [], checkSources = [];
   let params = new URLSearchParams(query);
   const context = { actor: 'IT1 Operator', status: { kill: { engaged: false }, link: { connected: true } }, statusError: null, ...initial };
   const library = libraryFixture();
@@ -11,7 +11,7 @@ async function setup(t, query = '', initial = {}) {
     const libHooks = evaluate(new URL('../lib/hooks.ts', import.meta.url), { react: hooks, '../api/client': { errorText } });
     return evaluate(new URL('./Content.tsx', import.meta.url), {
       react: hooks, '@mantine/core': ui, 'react-router-dom': { useSearchParams: () => [params, (next) => { params = next; void panel.rerender(); }] },
-      '../api/client': { errorText, api: { stigLibrary: async () => { calls.push('read'); return library; }, checkUpdates: async () => { calls.push('check'); } } },
+      '../api/client': { errorText, api: { stigLibrary: async () => { calls.push('read'); return library; }, checkUpdates: async (source) => { calls.push('check'); checkSources.push(source); return { index_entries: 417, updates: [] }; } } },
       '../components/ActorChip': { actorProblem: (actor) => actor ? null : 'Set a name' },
       '../components/ContentUpdates': { ContentUpdates: 'ContentUpdates', jobRunning: (job) => ['running', 'queued'].includes(job.state) },
       '../components/LibrarySelections': ui, '../components/LibraryTables': ui, '../components/common': ui,
@@ -20,7 +20,7 @@ async function setup(t, query = '', initial = {}) {
     }).default;
   });
   env.cleanup(() => panel.unmount()); await panel.settle();
-  return { ...panel, calls, context, env, library, params: () => params,
+  return { ...panel, calls, checkSources, context, env, library, params: () => params,
     tabs: () => panel.find((node) => node.type === ui.Tabs),
     selections: () => panel.find((node) => node.type === 'LibrarySelections'),
   };
@@ -88,4 +88,45 @@ test('local freshness, import times and scanner limitations stay explicit', asyn
   assert.ok(panel.nodes().some((node) => text(node) === 'No successful check recorded'));
   assert.ok(panel.nodes().some((node) => text(node) === panel.library.sync.last_import_at));
   assert.ok(panel.nodes().some((node) => node.type === 'Alert' && text(node).includes('do not confirm scan coverage')));
+});
+
+test('restricted and null link status do not fall back to a cached connected library or permit live checks', async (t) => {
+  const panel = await setup(t);
+  panel.library.connected = true;
+  for (const change of [
+    { global_details: false, link: null },
+    { global_details: true, link: null },
+    { global_details: false, link: { connected: true, reachability: 'reachable' } },
+  ]) {
+    Object.assign(panel.context.status, change);
+    await panel.rerender();
+    const badge = panel.nodes().find((node) => node.type === 'Badge' && /Link restricted|Reachability unknown/.test(text(node)));
+    assert.ok(badge);
+    assert.equal(badge.props.color, 'gray');
+    const button = panel.button('Check cyber.mil for updates');
+    assert.equal(button.props.disabled, true);
+    button.props.onClick(); await panel.settle();
+    assert.equal(panel.button('Refresh local view').props.disabled, false);
+  }
+  assert.ok(!panel.calls.includes('check'));
+});
+
+test('unavailable live index keeps saved catalog provenance and offers an explicit offline snapshot check', async (t) => {
+  const panel = await setup(t);
+  Object.assign(panel.library.catalog, { source: 'live', saved_at: '2026-01-01T00:00:00Z', live_status: 'unavailable', live_error: 'Changed download page' });
+  panel.library.sync.last_successful_check_at = '2026-01-01T00:00:00Z';
+  panel.context.status.link.connected = false;
+  await panel.rerender();
+  assert.ok(panel.nodes().some((node) => node.props?.title === 'Live index unavailable'));
+  assert.ok(panel.nodes().some((node) => text(node) === 'Last live index'));
+  assert.ok(panel.nodes().some((node) => text(node).includes('Live freshness is unconfirmed')));
+  assert.equal(panel.button('Check cyber.mil for updates').props.disabled, true);
+  await panel.click('Check supplied snapshot');
+  assert.deepEqual(panel.checkSources, ['snapshot']);
+  assert.ok(panel.nodes().some((node) => node.props?.title === 'Snapshot comparison complete' && text(node).includes('417 snapshot publications')));
+  assert.equal(panel.library.sync.last_successful_check_at, '2026-01-01T00:00:00Z');
+  panel.selections().props.onDirtyChange(true); await panel.settle();
+  assert.equal(panel.button('Check supplied snapshot').props.disabled, true);
+  panel.button('Check supplied snapshot').props.onClick(); await panel.settle();
+  assert.deepEqual(panel.checkSources, ['snapshot']);
 });

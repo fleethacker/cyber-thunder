@@ -5,7 +5,7 @@ import { IconDots, IconPencil, IconPlus, IconTrash, IconZoomScan } from '@tabler
 import { useMemo, useRef, useState } from 'react';
 import { api, errorText } from '../api/client';
 import type { AssetFacts, Severity, Target } from '../api/types';
-import { ConfirmReasonModal } from '../components/ConfirmReasonModal';
+import { PermissionButton, PermissionConfirm, PermissionGate, usePermissions } from '../components/PermissionGate';
 import { DiscoveryPanel } from '../components/DiscoveryPanel';
 import { AssetIcon, AsyncView, Empty, ErrorBox, JsonView, Loading, Mono, PageTitle, SeverityBadge, SimulatedBadge } from '../components/common';
 import { TargetForm } from '../components/TargetForm';
@@ -28,6 +28,7 @@ export default function Assets() {
   const [facts, setFacts] = useState<{ target: Target; data?: AssetFacts; error?: string } | null>(null);
   const [loadingDemo, setLoadingDemo] = useState(false);
   const blocked = useSetupAccess();
+  const permission = usePermissions();
   const inFlight = useRef(false);
 
   const counts = useMemo(() => {
@@ -41,7 +42,7 @@ export default function Assets() {
   }, [open.data]);
 
   const changeScope = async (reason: string) => {
-    if (!scopeFor || !reason.trim() || blocked || inFlight.current) return;
+    if (!permission.can('admin') || !scopeFor || !reason.trim() || blocked || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setModalError(null);
@@ -61,7 +62,7 @@ export default function Assets() {
   };
 
   const remove = async () => {
-    if (!removeFor || blocked || inFlight.current) return;
+    if (!permission.can('admin') || !removeFor || blocked || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setModalError(null);
@@ -78,7 +79,7 @@ export default function Assets() {
   };
 
   const discover = async (t: Target) => {
-    if (blocked || !t.in_scope) return;
+    if (!permission.can('discover') || blocked || !t.in_scope) return;
     setFacts({ target: t });
     try {
       setFacts({ target: t, data: await api.discover(t.id) });
@@ -88,7 +89,7 @@ export default function Assets() {
   };
 
   const loadDemo = async () => {
-    if (blocked || inFlight.current) return;
+    if (!permission.can('admin') || blocked || inFlight.current) return;
     inFlight.current = true;
     setLoadingDemo(true);
     try {
@@ -109,8 +110,8 @@ export default function Assets() {
         title="Assets"
         subtitle="Only explicitly authorized inventory assets may be scanned or changed with approval. Discovery search ranges are separate."
         right={<>
-          <Button variant="light" onClick={() => setHostSetup(true)}>Set up deployment host</Button>
-          <Button leftSection={<IconPlus size={16} />} disabled={!!blocked} onClick={() => setForm({ open: true, target: null })}>Add asset</Button>
+          <PermissionButton action="admin" variant="light" onClick={() => { if (permission.can('admin')) setHostSetup(true); }}>Set up deployment host</PermissionButton>
+          <PermissionButton action="admin" leftSection={<IconPlus size={16} />} disabled={!!blocked} onClick={() => { if (permission.can('admin')) setForm({ open: true, target: null }); }}>Add asset</PermissionButton>
           <Button variant="light" onClick={() => { void st.reload(); void open.reload(); }} loading={st.loading}>Refresh</Button>
         </>}
       />
@@ -120,7 +121,7 @@ export default function Assets() {
         what="Loading inventory"
         isEmpty={(d) => d.length === 0}
         empty={
-          <Empty title="No assets in the inventory" action={<Button loading={loadingDemo} disabled={!!blocked} onClick={() => void loadDemo()}>Load simulated range</Button>}>
+          <Empty title="No assets in the inventory" action={<PermissionButton action="admin" loading={loadingDemo} disabled={!!blocked} onClick={() => void loadDemo()}>Load simulated range</PermissionButton>}>
             Add assets by hand, or load the simulated range for a demonstration.
           </Empty>
         }
@@ -151,7 +152,7 @@ export default function Assets() {
                         <Table.Td><Text size="sm">{t.transport}</Text></Table.Td>
                         <Table.Td><Mono>{t.address ? `${t.address}${t.port ? `:${t.port}` : ''}` : '-'}</Mono></Table.Td>
                         <Table.Td>
-                          <Switch checked={t.in_scope} disabled={!!blocked || busy} onChange={() => { setModalError(null); setScopeFor(t); }} aria-label={`Scope for ${t.name}`} color="teal" />
+                          <PermissionGate allowed={permission.can('admin')} reason={permission.reason('admin') || ''}><Switch checked={t.in_scope} disabled={!!blocked || busy} onChange={() => { if (permission.can('admin')) { setModalError(null); setScopeFor(t); } }} aria-label={`Scope for ${t.name}`} color="teal" /></PermissionGate>
                         </Table.Td>
                         <Table.Td><Text size="sm">{fmtAgo(t.last_scan)}</Text></Table.Td>
                         <Table.Td>
@@ -163,14 +164,16 @@ export default function Assets() {
                         </Table.Td>
                         <Table.Td>
                           <Group gap={4} wrap="nowrap">
-                            <Button size="xs" variant="light" leftSection={<IconZoomScan size={14} />} disabled={!!blocked || !t.in_scope} onClick={() => void discover(t)}>Read asset facts</Button>
-                            <Menu position="bottom-end">
+                            <PermissionButton action="discover" size="xs" variant="light" leftSection={<IconZoomScan size={14} />} disabled={!!blocked || !t.in_scope} onClick={() => void discover(t)}>Read asset facts</PermissionButton>
+                            {permission.can('admin') ? <Menu position="bottom-end">
                               <Menu.Target><ActionIcon variant="subtle" aria-label="More"><IconDots size={16} /></ActionIcon></Menu.Target>
                               <Menu.Dropdown>
-                                <Menu.Item disabled={!!blocked || busy} leftSection={<IconPencil size={14} />} onClick={() => setForm({ open: true, target: t })}>Edit</Menu.Item>
-                                <Menu.Item disabled={!!blocked || busy} color="red" leftSection={<IconTrash size={14} />} onClick={() => { setModalError(null); setRemoveFor(t); }}>Remove</Menu.Item>
+                                <Menu.Item disabled={!!blocked || busy} leftSection={<IconPencil size={14} />} onClick={() => { if (permission.can('admin')) setForm({ open: true, target: t }); }}>Edit</Menu.Item>
+                                <Menu.Item disabled={!!blocked || busy} color="red" leftSection={<IconTrash size={14} />} onClick={() => { if (permission.can('admin')) { setModalError(null); setRemoveFor(t); } }}>Remove</Menu.Item>
                               </Menu.Dropdown>
-                            </Menu>
+                            </Menu> : <PermissionGate allowed={false} reason={permission.reason('admin') || ''}>
+                              <ActionIcon variant="subtle" aria-label={`Edit or remove ${t.name}`}><IconDots size={16} /></ActionIcon>
+                            </PermissionGate>}
                           </Group>
                         </Table.Td>
                       </Table.Tr>
@@ -186,10 +189,10 @@ export default function Assets() {
 
       <DiscoveryPanel onInventoryChanged={() => void st.reload()} />
 
-      <HostSetup opened={hostSetup} onClose={() => setHostSetup(false)} onSaved={() => void st.reload()}
+      <HostSetup opened={hostSetup && permission.can('admin')} onClose={() => setHostSetup(false)} onSaved={() => void st.reload()}
         onUseLocal={(defaults) => { setHostSetup(false); setForm({ open: true, target: null, defaults }); }} />
       <TargetForm opened={form.open} initial={form.target} defaults={form.defaults} onClose={() => setForm({ open: false, target: null })} onSaved={() => void st.reload()} />
-      <ConfirmReasonModal
+      <PermissionConfirm action="admin"
         opened={!!scopeFor}
         onClose={() => { if (!inFlight.current) setScopeFor(null); }}
         title={scopeFor?.in_scope ? `Remove ${scopeFor?.name} from scope` : `Put ${scopeFor?.name} in scope`}
@@ -202,7 +205,7 @@ export default function Assets() {
         error={modalError ?? blocked}
         onConfirm={(r) => void changeScope(r)}
       />
-      <ConfirmReasonModal
+      <PermissionConfirm action="admin"
         opened={!!removeFor}
         onClose={() => { if (!inFlight.current) setRemoveFor(null); }}
         title={`Remove ${removeFor?.name} from the inventory`}

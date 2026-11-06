@@ -5,8 +5,10 @@ freshness(receipt), readiness(proposal_id, assessment_id=None). Reads never coll
 call a model, write state or append audit records. A fresh receipt is advisory only.
 """
 from __future__ import annotations
+from cyberthunder.control.principal import authorize, operation
 
 from copy import deepcopy
+from contextvars import copy_context
 from datetime import datetime, timedelta, timezone
 import math
 import threading
@@ -20,6 +22,7 @@ from cyberthunder.explain.service import finding_fingerprint
 from cyberthunder.remediation.dependencies import collect_dependencies, current_target, target_binding_sha256
 from cyberthunder.remediation.engine import EngineError
 from cyberthunder.remediation.plan import _bound_fix
+from cyberthunder.security.resources import check_record
 
 from .packet import (LEVELS, TTL_SECONDS, PacketError, digest, evidence_digest, fix_allowlist,
                      identifier, sanitize_packet, timestamp)
@@ -49,10 +52,14 @@ def _bounded_call(call, timeout):
     if timeout <= 0 or not _MODEL_SLOTS.acquire(blocking=False):
         return None, "model_busy"
     done, result = threading.Event(), []
+    deadline = time.monotonic() + timeout
 
     def work():
         try:
-            result.append((call(), None))
+            result.append((None, "model_timeout") if time.monotonic() >= deadline else (call(), None))
+        except PermissionError as exc:
+            # A rejected identity is not a model failure eligible for fallback.
+            result.append((None, exc))
         except Exception:
             result.append((None, "model_error"))
         finally:
@@ -60,12 +67,14 @@ def _bounded_call(call, timeout):
             done.set()
 
     try:
-        threading.Thread(target=work, daemon=True, name="impact-model").start()
+        threading.Thread(target=copy_context().run, args=(work,), daemon=True, name="impact-model").start()
     except Exception:
         _MODEL_SLOTS.release()
         return None, "model_error"
     if not done.wait(timeout):
         return None, "model_timeout"
+    if isinstance(result[0][1], PermissionError):
+        raise result[0][1]
     return result[0]
 
 
@@ -100,11 +109,14 @@ class ImpactService:
         self.ctx = ctx
         self.directory = ctx.store.root / "change_assessments"
 
-    def _snapshot(self, proposal_id):
+    def _snapshot(self, proposal_id, *, action="read"):
         """Local bindings only; avoids static_plan's audit and historical finding fallback."""
         proposal = deepcopy(self.ctx.gate.get(proposal_id))
+        check_record(self.ctx, proposal, action)
         target = current_target(self.ctx, proposal.host)
         current = next((f for f in self.ctx.store.current_findings() if f.id == proposal.finding_id), None)
+        if current is not None:
+            check_record(self.ctx, current, action)
         if current is not None and current.host != proposal.host:
             raise ImpactError("current finding target differs from proposal")
         fix, fix_hash, recorded_hash = _bound_fix(self.ctx.engine, proposal, current, target)
@@ -122,11 +134,13 @@ class ImpactService:
 
     def _guard(self, proposal_id, actor, expected=None):
         require_human(actor)
+        check_record(self.ctx, self.ctx.gate.get(proposal_id), "plan")
+        authorize(self.ctx, "plan", actor=actor, target=self.ctx.gate.get(proposal_id).host)
         # guard() includes the entire operator-provided kill reason in its audit. Use
         # the same status check here and emit only our fixed error code in assess().
         if self.ctx.killswitch.is_engaged():
             raise KillSwitchEngaged("kill switch engaged; assessment stopped")
-        snapshot = self._snapshot(proposal_id)
+        snapshot = self._snapshot(proposal_id, action="plan")
         if expected is not None and snapshot[0] != expected:
             raise ImpactError("assessment bindings changed; collect a new assessment")
         return snapshot
@@ -170,8 +184,15 @@ class ImpactService:
             status["fallback_reason"] = "model_timeout"
             return None, status
         deadline = time.monotonic() + budget
+
+        def checked_call(call):
+            # Recheck in the worker immediately before its bounded backend IO.
+            guard()
+            return call()
+
         guard()
-        available, error = _bounded_call(backend.available, min(PROBE_TIMEOUT_S, max(0, deadline - time.monotonic())))
+        available, error = _bounded_call(lambda: checked_call(backend.available),
+                                        min(PROBE_TIMEOUT_S, max(0, deadline - time.monotonic())))
         guard()
         if error or not isinstance(available, tuple) or not available or available[0] is not True:
             status["fallback_reason"] = error or "probe_unavailable"
@@ -189,7 +210,8 @@ class ImpactService:
                 status["fallback_reason"] = "model_timeout"
                 break
             status["attempts"] = attempt + 1
-            response, error = _bounded_call(lambda: generate_selected(backend, identity, prompt, timeout), timeout)
+            response, error = _bounded_call(
+                lambda: checked_call(lambda: generate_selected(backend, identity, prompt, timeout)), timeout)
             guard()
             if selected_identity(backend) != identity or (response is not None and not response[1]):
                 status.update(name=None, fallback_reason="model_selection_changed")
@@ -207,6 +229,7 @@ class ImpactService:
             # Reuse the bounded prompt; rejected output never enters a retry.
         return None, status
 
+    @operation("plan")
     def assess(self, proposal_id, *, actor, live=True):
         """Collect, assess and publish one immutable UUID receipt; never change a proposal."""
         actor = require_human(actor)
@@ -275,6 +298,7 @@ class ImpactService:
                 path = self._path(receipt["id"])
                 if self.ctx.store.read_json(path) is not None:
                     raise ImpactError("assessment ID collision; retry")
+                guard()
                 self.ctx.store.write_json(path, receipt)
             audit.update({"assessment_id": receipt["id"], "evidence_sha256": packet["evidence_sha256"],
                           "model_used": status["used"], "model_validated": status["validated"],

@@ -210,7 +210,7 @@ def select(entries: list[Entry], targets: Iterable, collected: Mapping[str, Mapp
     requested_kinds = set(content_kinds) if content_kinds is not None else None
 
     def ok(e: Entry) -> bool:
-        return e.allowed_by(hosts, allow_http)
+        return e.format_supported and e.allowed_by(hosts, allow_http)
 
     sel = Selection()
     for t in targets:
@@ -273,7 +273,9 @@ def select(entries: list[Entry], targets: Iterable, collected: Mapping[str, Mapp
             allowed = [e for e in live if ok(e)]
             for e in live:
                 if not ok(e):
-                    sel.skipped.append(_row(e, None, reason=f"external host {e.host}: not on the allow-list"))
+                    reason = ("unsupported publication: " + "; ".join(e.accounting(hosts, allow_http)["classification_reasons"])
+                              if not e.format_supported else f"external host {e.host}: not on the allow-list")
+                    sel.skipped.append(_row(e, None, reason=reason))
             best = _newest(allowed)
             if best is None:
                 continue

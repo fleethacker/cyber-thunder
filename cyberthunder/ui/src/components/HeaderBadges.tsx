@@ -6,8 +6,9 @@ import { linkLabel, rateLabel } from '../lib/linkPresentation';
 import { useAppState } from '../state/AppState';
 
 export function ChainBadge() {
-  const { verify, stream } = useAppState();
-  if (!verify) return <Badge color="gray" variant="light" size="lg">Chain: checking</Badge>;
+  const { verify, stream, status } = useAppState();
+  if (status?.global_details === false) return <Badge color="gray" variant="light" size="lg">Chain: restricted</Badge>;
+  if (!verify) return <Badge color="gray" variant="light" size="lg">Chain: unknown</Badge>;
   const streamNote = stream === 'open' ? 'live' : stream === 'connecting' ? 'connecting to stream' : 'stream reconnecting';
   if (verify.ok) {
     return (
@@ -29,11 +30,13 @@ export function ChainBadge() {
 
 export function LinkBadge() {
   const { status } = useAppState();
+  if (status?.global_details === false) return <Badge color="gray" variant="light" size="lg">Link and queue: restricted</Badge>;
   const link = status?.link;
   if (!link) return <Badge color="gray" variant="light" size="lg">Link: unknown</Badge>;
-  const pending = status?.outbox?.pending ?? 0;
+  const pending = status?.outbox?.pending;
+  const queue = pending == null ? 'queue unknown' : `${pending} queued`;
   return (
-    <Tooltip label={`${rateLabel(link)} · physical latency unknown · ${pending} queued`} withArrow>
+    <Tooltip label={`${rateLabel(link)} · physical latency unknown · ${queue}`} withArrow>
       <Badge
         color={link.reachability === 'unknown' ? 'gray' : link.connected ? 'teal' : 'orange'}
         variant="light"
@@ -41,7 +44,7 @@ export function LinkBadge() {
         tt="none"
         leftSection={link.connected ? <IconLink size={14} /> : <IconLinkOff size={14} />}
       >
-        {linkLabel(link)} · {pending} queued
+        {linkLabel(link)} · {queue}
       </Badge>
     </Tooltip>
   );
@@ -49,8 +52,9 @@ export function LinkBadge() {
 
 export function ModelBadge() {
   const { status } = useAppState();
+  if (status?.global_details === false) return <Badge color="gray" variant="light" size="lg">Model: restricted</Badge>;
   const llm = status?.llm;
-  if (!llm) return null;
+  if (!llm) return <Badge color="gray" variant="light" size="lg">Model: unknown</Badge>;
   const name = `${llm.backend}${llm.model ? `/${llm.model}` : ''}`;
   return (
     <Tooltip label={llm.detail ?? (llm.available ? 'model available' : 'model unavailable: template fallback')} withArrow multiline maw={400}>

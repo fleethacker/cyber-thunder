@@ -25,10 +25,10 @@ Original scanner status: **{{ f.status }}**. {% if review.suppressed %}**SUPPRES
 
 Confidence: **{{ f.confidence.grade }}** - {{ f.confidence.reason | md_cell }}
 
-Review disposition: **{{ review.disposition }}**; active: {{ "yes" if review.active else "no" }}; suppressed: {{ "yes" if review.suppressed else "no" }}; reviewer identity: {{ f.identity_label }}.
+Review disposition: **{{ review.disposition }}**; active: {{ "yes" if review.active else "no" }}; suppressed: {{ "yes" if review.suppressed else "no" }}; reviewer identity: {{ f.identity_label | md_cell }}.
 
 {% if event %}
-Last review disposition: {{ event.disposition }}; reviewer: {{ event.reviewed_by | md_cell }}; reviewed at: {{ event.reviewed_at | md_cell }}; expiry: {{ (event.expires_at or "none") | md_cell }}. Reason: {{ event.reason | md_cell }}
+Last review disposition: {{ event.disposition }}; reviewer: {{ f.reviewer_identity.text | md_cell }}; reviewed at: {{ event.reviewed_at | md_cell }}; expiry: {{ (event.expires_at or "none") | md_cell }}. Reason: {{ event.reason | md_cell }}
 
 Supporting evidence: {{ (event.supporting_evidence or "none supplied") | md_cell }}
 {% else %}

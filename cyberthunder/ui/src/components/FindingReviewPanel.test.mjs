@@ -1,21 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import test from 'node:test';
-import ts from 'typescript';
+import { evaluate } from '../lib/moduleTestSupport.mjs';
 
-const require = createRequire(import.meta.url);
-const compile = (path) => ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
-  fileName: path, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
-}).outputText;
+const compile = (path) => new URL(path, import.meta.url);
 const panelSource = compile('./FindingReviewPanel.tsx');
 const helperSource = compile('../lib/findingAssurance.ts');
 const clientSource = compile('../api/client.ts');
-function evaluate(source, imports) {
-  const exports = {};
-  new Function('require', 'exports', source)((name) => imports[name] ?? require(name), exports);
-  return exports;
-}
+
 const helpers = evaluate(helperSource, {});
 const { ApiError, errorText } = evaluate(clientSource, {});
 const ui = new Proxy({}, { get: (_, name) => name });

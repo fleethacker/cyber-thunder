@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 30 and len(windows) == 5
+    assert len(linux) == 32 and len(windows) == 22
     assert sum(reason == UDS_REASON for reason in linux.values()) == len(UDS_TESTS) == 19
     assert sum(reason == SHARING_REASON for reason in linux.values()) == 8
     policy = RegressionPolicy(ROOT, "linux")
@@ -212,6 +212,67 @@ def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     assert [skip["allowed"] for skip in policy.skips] == [True, False]
     with pytest.raises(ValueError, match="Unsupported CI platform"):
         expected_skips("unknown")
+
+
+@pytest.mark.parametrize("platform,node,reason", [
+    *[("win32", f"tests/security/test_access_file_trust.py::{name}",
+       "requires POSIX owner/mode and descriptor-relative filesystem semantics") for name in (
+        "test_posix_policy_write_permissions_denied[400]",
+        "test_posix_policy_write_permissions_denied[386]",
+        "test_posix_policy_write_permissions_denied[438]",
+        "test_posix_policy_write_permissions_denied[950]",
+        "test_posix_writable_parent_denied[504]",
+        "test_posix_writable_parent_denied[455]",
+        "test_posix_untrusted_owner_denied[file]",
+        "test_posix_untrusted_owner_denied[parent]",
+        "test_posix_permission_change_during_parse_denied",
+        "test_posix_root_sticky_directory_exception_never_applies_to_file",
+        "test_posix_parent_swap_to_symlink_before_open_denied_and_fds_closed",
+    )],
+    *[("win32", f"tests/security/test_kube_credentials.py::test_real_posix_config_permission_failure[{mode}]",
+       "real POSIX file permissions") for mode in (420, 416, 438)],
+    ("linux", "tests/security/test_access_file_trust.py::test_actual_windows_junction_parent_denied",
+     "requires Windows NTFS junction support"),
+])
+def test_file_trust_skip_requires_exact_case_reason_platform_and_phase(platform, node, reason):
+    other_platform = "linux" if platform == "win32" else "win32"
+    for host, candidate, explanation, phase, accepted in (
+        (platform, node, reason, "setup", True),
+        (other_platform, node, reason, "setup", False),
+        (platform, node, reason + " changed", "setup", False),
+        (platform, node + "[new-case]", reason, "setup", False),
+        (platform, node, reason, "teardown", False),
+    ):
+        policy = RegressionPolicy(ROOT, host)
+        policy.pytest_runtest_logreport(SimpleNamespace(
+            nodeid=candidate, when=phase, outcome="skipped", skipped=True,
+            longrepr=("file.py", 1, "Skipped: " + explanation),
+        ))
+        assert policy.skips[0]["allowed"] is accepted
+        assert bool(policy.errors) is not accepted
+
+
+@pytest.mark.parametrize("node,reason", [
+    ("tests/security/test_access_file_trust.py::test_symlink_at_any_component_is_rejected_before_open[file]",
+     "symlink creation unavailable on this filesystem (errno=13, winerror=1314)"),
+    ("tests/security/test_access_file_trust.py::test_actual_windows_junction_parent_denied",
+     "Windows junction creation unavailable (winerror=5)"),
+    ("tests/security/test_kube_credentials.py::test_real_symlinks_in_file_or_parent_chain_are_denied[False]",
+     "symlink creation unavailable"),
+    ("tests/security/test_kube_credentials.py::test_real_symlinks_in_file_or_parent_chain_are_denied[True]",
+     "symlink creation unavailable"),
+    ("tests/security/test_kube_credentials.py::test_hardlinked_credential_files_are_denied",
+     "hardlink creation unavailable"),
+])
+def test_missing_real_filesystem_capability_is_not_a_platform_allowance(node, reason):
+    for platform in ("linux", "win32"):
+        policy = RegressionPolicy(ROOT, platform)
+        policy.pytest_runtest_logreport(SimpleNamespace(
+            nodeid=node, when="call", outcome="skipped", skipped=True,
+            longrepr=("file.py", 1, "Skipped: " + reason),
+        ))
+        assert policy.skips[0]["allowed"] is False
+        assert any("Unexpected skip" in error for error in policy.errors)
 
 
 def test_workflow_has_read_only_triggers_full_matrix_and_immutable_actions():

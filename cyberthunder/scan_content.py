@@ -13,7 +13,7 @@ from cyberthunder.ingest.content.store import ContentStore
 
 VERSION = 1
 OBSERVATION_MAX_AGE_S = 86400
-CONFIG_OPTIONS = ("benchmark_path", "profile", "scap_datastream", "scap_profile")
+CONFIG_OPTIONS = ("benchmark_path", "profile", "scap_datastream", "scap_profile", "cpe_alias")
 OBSERVATION_VALUES = {
     "status": {"unknown", "not_requested", "unavailable", "available", "error", "collected", "partial", "not_configured", "no_rules"},
     "content_status": {"unknown", "unavailable", "readable"},

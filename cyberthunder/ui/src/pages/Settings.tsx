@@ -11,18 +11,28 @@ import { LinkControls } from '../components/LinkControls';
 import { PolicyEditor } from '../components/PolicyEditor';
 import { useAsync } from '../lib/hooks';
 import { useAppState } from '../state/AppState';
+import { useIdentity } from '../state/Identity';
 
 function ActorCard() {
+  const { identity, logout } = useIdentity();
   const { actor, setActor } = useAppState();
   const [draft, setDraft] = useState(actor);
   useEffect(() => setDraft(actor), [actor]);
   const problem = actorProblem(draft);
+  if (identity.mode !== 'dev') return <Card withBorder radius="md"><Stack gap="xs">
+    <Text fw={700}>Signed-in account</Text>
+    <Text>{identity.principal?.name}</Text>
+    <Badge color="teal" w="fit-content">Verified by the identity provider</Badge>
+    <Text size="sm">Roles: {identity.principal?.roles.join(', ') || 'No roles assigned'}. Your permissions can differ by environment and target.</Text>
+    <Text size="sm" c="dimmed">Target accounts are assigned by policy for each operation. App administration does not grant target administrator access.</Text>
+    <Button variant="default" w="fit-content" onClick={() => void logout()}>Sign out</Button>
+  </Stack></Card>;
   return (
     <Card withBorder radius="md">
       <form onSubmit={(e) => { e.preventDefault(); if (!problem) { setActor(draft); notifications.show({ message: `Acting as ${draft.trim()}` }); } }}>
         <Stack gap="xs">
-          <Text fw={700}>Acting as</Text>
-          <Text size="sm" c="dimmed">Sent as X-Actor on every request; approvals, denials, kill switch and policy changes are recorded under this name. Kept in this browser only.</Text>
+          <Text fw={700}>Local test identity (unverified)</Text>
+          <Text size="sm" c="dimmed">This typed name labels the audit in local test mode. It is not a verified login. Configure organization sign-in before granting shared access.</Text>
           <Group align="flex-end">
             <TextInput value={draft} onChange={(e) => setDraft(e.currentTarget.value)} placeholder="IT1 Smith" error={draft ? problem : null} w={260} />
             <Button type="submit" disabled={!!problem || draft.trim() === actor}>Save</Button>
@@ -35,12 +45,13 @@ function ActorCard() {
 
 function ModelCard() {
   const { status } = useAppState();
-  const llm = status?.llm;
+  const restricted = status?.global_details === false;
+  const llm = restricted ? null : status?.llm;
   return (
     <Card withBorder radius="md">
       <Stack gap="xs">
         <Text fw={700}>Local model</Text>
-        {!llm ? <Loading /> : (
+        {!llm ? <Text size="sm" c="dimmed">{restricted ? 'Model status is restricted for this account.' : 'Model status is unknown.'}</Text> : (
           <>
             <Group gap="xs">
               <Badge color={llm.available ? 'blue' : 'yellow'} variant="light">{llm.available ? 'available' : 'fallback: template'}</Badge>
@@ -105,6 +116,8 @@ function DemoControls() {
 }
 
 export default function Settings() {
+  const { status } = useAppState();
+  const restricted = status?.global_details === false;
   return (
     <Stack gap="lg">
       <PageTitle title="Settings" />
@@ -112,8 +125,10 @@ export default function Settings() {
         <ActorCard />
         <ModelCard />
       </SimpleGrid>
-      <Paper withBorder p="md" radius="md"><PolicyEditor /></Paper>
-      <LinkControls />
+      {restricted || status?.policy.enabled == null
+        ? <UnavailableSetting title="Standing approval policy" restricted={restricted} />
+        : <Paper withBorder p="md" radius="md"><PolicyEditor /></Paper>}
+      {restricted || !status?.link ? <UnavailableSetting title="Link observations and controls" restricted={restricted} /> : <LinkControls />}
       <Card withBorder radius="md">
         <Group justify="space-between">
           <Stack gap={4}>
@@ -123,7 +138,14 @@ export default function Settings() {
           <Button component={Link} to="/content" variant="light">Open STIG Library</Button>
         </Group>
       </Card>
-      <DemoControls />
+      {restricted || !status ? <UnavailableSetting title="Demonstration controls" restricted={restricted} /> : <DemoControls />}
     </Stack>
   );
+}
+
+function UnavailableSetting({ title, restricted }: { title: string; restricted: boolean }) {
+  return <Paper withBorder p="md" radius="md"><Stack gap="xs">
+    <Group><Text fw={700}>{title}</Text><Badge color="gray" variant="light">{restricted ? 'Restricted' : 'Unknown'}</Badge></Group>
+    <Text size="sm" c="dimmed">{restricted ? 'Node-wide details are not available to this account.' : 'Node status did not report these details.'}</Text>
+  </Stack></Paper>;
 }

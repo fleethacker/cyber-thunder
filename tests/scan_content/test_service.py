@@ -70,7 +70,7 @@ def test_facts_refine_product_but_missing_download_is_explicit(ctx):
     assert not result["complete"]
 
 
-@pytest.mark.parametrize("change", ["age", "configuration", "future", "invalid_time"])
+@pytest.mark.parametrize("change", ["age", "configuration", "cpe_alias", "future", "invalid_time"])
 def test_old_or_rebound_observations_cannot_claim_current_capability(ctx, change):
     at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat() if change == "age" else None
     if change == "future":
@@ -80,6 +80,8 @@ def test_old_or_rebound_observations_cannot_claim_current_capability(ctx, change
     save_collection(ctx, at=at)
     if change == "configuration":
         ctx.inventory.get("host").options["benchmark_path"] = "/new.xml"
+    if change == "cpe_alias":
+        ctx.inventory.get("host").options["cpe_alias"] = {"source": "rocky", "version": "9"}
     result = row(ctx)
     assert result["scanner"]["stale"]
     assert result["scanner"]["status"] in {"unknown", "configured_unverified"}

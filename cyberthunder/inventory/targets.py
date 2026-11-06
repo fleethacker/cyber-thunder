@@ -8,7 +8,9 @@ import contextlib
 import copy
 import json
 import os
+import re
 import stat
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -44,8 +46,15 @@ class Target:
     last_scan: str | None = None
     notes: str = ""
     added_at: str = field(default_factory=utcnow)
+    environment: str = "default"
+    authorization_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.authorization_id, str) or not re.fullmatch(r"[a-f0-9]{32,64}", self.authorization_id):
+            raise ValueError("invalid target authorization identity")
+        if (not isinstance(self.environment, str) or not self.environment or len(self.environment) > 128
+                or self.environment != self.environment.strip() or any(ord(c) < 33 for c in self.environment)):
+            raise ValueError("environment must be a non-empty name without whitespace (128 characters at most)")
         if self.asset_type not in ASSET_TYPES:
             raise ValueError(f"unknown asset_type {self.asset_type!r}; expected one of {ASSET_TYPES}")
         if self.transport not in TRANSPORTS:
@@ -56,6 +65,12 @@ class Target:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Target":
+        if "authorization_id" not in d:
+            import hashlib
+            # A stable identity for legacy inventories; no legacy artifact is
+            # classified merely by loading this target. New registrations use UUIDs.
+            identity = {k: d.get(k) for k in ("id", "added_at", "address", "environment", "asset_type", "transport")}
+            d = {**d, "authorization_id": hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()}
         return cls(**d)
 
     @property
@@ -182,6 +197,16 @@ class Inventory:
             self._save_locked(p, own=own)
 
     def _save_locked(self, p: Path, *, own: bool) -> None:
+        if own:
+            for tid, target in self._targets.items():
+                previous = self._base.get(tid)
+                if previous is not None:
+                    before = Target.from_dict(previous)
+                    if any(getattr(before, field) != getattr(target, field)
+                           for field in ("environment", "address", "asset_type", "transport")):
+                        # Moving away and back must not reactivate decisions or exceptions
+                        # recorded for the prior authorization boundary or endpoint.
+                        target.authorization_id = uuid.uuid4().hex
         data = {"targets": [t.to_dict() for t in self._targets.values()]}
         if p.suffix in (".yaml", ".yml"):
             import yaml
@@ -197,6 +222,7 @@ class Inventory:
 
     def add_new(self, target: Target) -> Target:
         """Create once under the same cross-process lock used by save; preserve other writers."""
+        target.authorization_id = uuid.uuid4().hex
         if self.path is None:
             if target.id in self._targets:
                 raise FileExistsError("target id already exists")

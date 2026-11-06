@@ -41,10 +41,10 @@ def passive(ctx, monkeypatch):
     assert ctx.audit.verify().ok
 
 
-def seed(ctx, *, partial=False, host="other", rule="unrelated", run_id="baseline"):
+def seed(ctx, *, partial=False, host="other", rule="unrelated", run_id="baseline", targets=None):
     f = Finding(host=host, source="hunt", rule_id=rule, title="Existing observation", severity="high", status="open",
                 scan_id=run_id)
-    run = ScanRun(id=run_id, targets=[host], status="done", started_at="2020-01-01T00:00:00+00:00",
+    run = ScanRun(id=run_id, targets=targets or [host], status="done", started_at="2020-01-01T00:00:00+00:00",
                   rule_filter=[rule] if partial else None)
     ctx.store.save_findings(run_id, [f])
     ctx.store.save_scan_run(run.to_dict())
@@ -341,7 +341,8 @@ def test_consistent_compliance_duplicates_keep_stable_mapped_identity(passive, r
 
 def test_historical_repeat_does_not_reassert_old_results(passive):
     result = run_import(passive)
-    fresh = seed(passive, run_id="new-full")
+    # The replacement actually covers the imported hosts, as well as the new one.
+    fresh = seed(passive, run_id="new-full", targets=["other", *MAPPING.values()])
     run = passive.store.load_scan_run("new-full")
     run["started_at"] = "2099-01-01T00:00:00+00:00"
     passive.store.save_scan_run(run)

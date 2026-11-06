@@ -79,8 +79,13 @@ def _read_available(stream):
                 return b""
             raise ReadFailure("invalid_output")
         return stream.read(min(4096, available.value)) if available.value else None
-    import select
-    return stream.read(4096) if select.select([stream], [], [], 0)[0] else None
+    import selectors
+    # The platform selector handles descriptors above select's fixed ceiling.
+    # Close its own kernel resource after every nonblocking readiness check.
+    with selectors.DefaultSelector() as readiness:
+        readiness.register(stream, selectors.EVENT_READ)
+        ready = readiness.select(timeout=0)
+    return stream.read(4096) if ready else None
 
 
 def _process(argv, timeout, *, cwd=None, env=None, guard=lambda: None):
@@ -125,37 +130,35 @@ def _process(argv, timeout, *, cwd=None, env=None, guard=lambda: None):
 
 
 def _ssh(transport, command, timeout, guard):
-    # Reuse the transport's resolved connection values, with explicit connect/auth/channel limits.
-    import paramiko
-
+    # Share host trust policy; keep bounded probes free of implicit identities.
     deadline = time.monotonic() + timeout
+
+    def check():
+        transport._guard()
+        guard()
+
+    check()
     if not transport._password and not transport._key:
         # Automatic agent/key discovery can try an unbounded number of identities.
         raise ReadFailure("explicit_ssh_credential_required")
-    client = paramiko.SSHClient()
-    client.load_system_host_keys()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client = transport.connect_client(timeout=min(3, timeout), guard=guard, allow_agent=False)
     try:
-        client.connect(transport.host, port=transport.port, username=transport.username,
-                       password=transport._password, key_filename=transport._key,
-                       timeout=min(3, timeout), auth_timeout=min(3, timeout),
-                       banner_timeout=min(3, timeout), channel_timeout=min(3, timeout),
-                       look_for_keys=False, allow_agent=False)
-        guard()
+        check()
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ReadFailure("timeout")
         channel = client.get_transport().open_session(timeout=remaining)
         try:
-            guard()
+            check()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ReadFailure("timeout")
             channel.settimeout(remaining)
             channel.exec_command(command)
-            guard()
+            check()
             out, err = bytearray(), bytearray()
             while True:
+                check()
                 if time.monotonic() >= deadline:
                     raise ReadFailure("timeout")
                 if channel.recv_ready():
@@ -164,6 +167,7 @@ def _ssh(transport, command, timeout, guard):
                     err.extend(channel.recv_stderr(4096))
                 _check_size(out, err)
                 if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+                    check()
                     return CommandResult("", channel.recv_exit_status(),
                                          out.decode("utf-8", "replace"), err.decode("utf-8", "replace"))
                 time.sleep(0.01)
@@ -248,6 +252,14 @@ def read_command(transport, command, *, timeout, guard):
     from cyberthunder.transport.ssh import SSHTransport
     from cyberthunder.transport.winrm import WinRMTransport
 
+    caller_guard = guard
+    def guard():
+        caller_guard()
+        for name in ("account_guard", "_guard"):
+            check = getattr(transport, name, None)
+            if callable(check):
+                check()
+
     guard()
     if isinstance(transport, FixtureTransport):
         result = _fixture(transport, command)
@@ -255,7 +267,9 @@ def read_command(transport, command, *, timeout, guard):
         argv, stdin = transport.build_argv(command)
         if stdin is not None:
             raise ReadFailure("unsupported_command")
-        result = _process(argv, timeout, guard=guard)
+        from cyberthunder.security.kube_credentials import kube_subprocess_env
+        env = kube_subprocess_env() if getattr(transport, "account_binding", None) is not None else None
+        result = _process(argv, timeout, guard=guard, env=env)
     elif type(transport) is LocalTransport:
         argv = shlex.split(command) if command.startswith("systemctl show ") else transport._argv(command)
         result = _process(argv, timeout, cwd=transport.cwd, env=transport.env, guard=guard)

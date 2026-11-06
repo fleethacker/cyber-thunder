@@ -1,6 +1,6 @@
 // Standing approval policy editor. Default is off. Enabling needs a reason and is signed by the current
 // actor (server sets signed_by/signed_at). "Evaluate against current queue" previews what would auto-approve.
-import { Alert, Badge, Button, Card, Checkbox, Group, MultiSelect, Select, Stack, Switch, Table, TagsInput, Text, TextInput } from '@mantine/core';
+import { Alert, Badge, Card, Checkbox, Group, MultiSelect, Select, Stack, Switch, Table, TagsInput, Text, TextInput } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconPlus, IconTrash } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
@@ -9,7 +9,7 @@ import { ASSET_TYPES, type AutomationPolicy, type PolicyDecision, type PolicyRul
 import { fmtTime } from '../lib/format';
 import { useAsync } from '../lib/hooks';
 import { useAppState } from '../state/AppState';
-import { ConfirmReasonModal } from './ConfirmReasonModal';
+import { PermissionButton, PermissionConfirm, PermissionGate, usePermissions } from './PermissionGate';
 import { ErrorBox, Loading, SeverityBadge } from './common';
 
 const NEW_RULE: PolicyRule = {
@@ -24,7 +24,7 @@ function RuleEditor({ rule, onChange, onRemove }: { rule: PolicyRule; onChange: 
       <Stack gap="xs">
         <Group justify="space-between">
           <TextInput label="Rule name" value={rule.name} onChange={(e) => set('name', e.currentTarget.value)} w={260} />
-          <Button size="xs" color="red" variant="subtle" leftSection={<IconTrash size={14} />} onClick={onRemove}>Remove rule</Button>
+          <PermissionButton action="policy" size="xs" color="red" variant="subtle" leftSection={<IconTrash size={14} />} onClick={onRemove}>Remove rule</PermissionButton>
         </Group>
         <Group gap="sm" wrap="wrap" align="flex-end">
           <MultiSelect label="Asset types (empty = any)" data={ASSET_TYPES} value={rule.asset_types} onChange={(v) => set('asset_types', v)} w={260} clearable />
@@ -50,6 +50,7 @@ function RuleEditor({ rule, onChange, onRemove }: { rule: PolicyRule; onChange: 
 
 export function PolicyEditor() {
   const st = useAsync(() => api.policy(), []);
+  const permission = usePermissions();
   const { actor, refresh } = useAppState();
   const [rules, setRules] = useState<PolicyRule[]>([]);
   const [confirm, setConfirm] = useState<'enable' | 'disable' | 'save' | null>(null);
@@ -61,6 +62,7 @@ export function PolicyEditor() {
   useEffect(() => { if (st.data) setRules(st.data.rules.map((r) => ({ ...NEW_RULE, ...r }))); }, [st.data]);
 
   const put = async (enabled: boolean, reason: string) => {
+    if (!permission.can('policy') || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -77,10 +79,12 @@ export function PolicyEditor() {
   };
 
   const evaluate = async () => {
+    if (!permission.can('read') || previewing) return;
     setPreviewing(true);
     setError(null);
     try {
       const queue = (await api.proposals({ state: 'proposed' })).proposals;
+      if (!permission.can('read')) return;
       const out = await Promise.all(queue.map(async (p) => ({ p, d: await api.evaluatePolicy(p.id) })));
       setPreview(out);
     } catch (e) {
@@ -100,26 +104,29 @@ export function PolicyEditor() {
           <Badge color={pol.enabled ? 'cyan' : 'gray'} variant={pol.enabled ? 'filled' : 'light'}>{pol.enabled ? 'enabled' : 'off'}</Badge>
           <Text size="xs" c="dimmed">v{pol.version}</Text>
         </Group>
-        <Switch
+        <PermissionGate allowed={permission.can('policy')} reason={permission.reason('policy') || ''}><Switch
           size="lg"
           label={pol.enabled ? 'Enabled' : 'Off'}
           checked={pol.enabled}
-          onChange={() => { setError(null); setConfirm(pol.enabled ? 'disable' : 'enable'); }}
+          onChange={() => { if (permission.can('policy')) { setError(null); setConfirm(pol.enabled ? 'disable' : 'enable'); } }}
           color="cyan"
-        />
+        /></PermissionGate>
       </Group>
       <Alert color={pol.enabled ? 'cyan' : 'gray'} variant="light">
         {pol.enabled
           ? `Signed by ${pol.signed_by} at ${fmtTime(pol.signed_at)}: "${pol.reason ?? ''}". Matching fixes are approved on their behalf and recorded as policy:${pol.signed_by}. Applying still respects the kill switch.`
           : 'Off: a human approves every change. A policy is a signed statement by a named person that narrow, low-risk fixes may be approved on their behalf.'}
       </Alert>
+      {!permission.can('policy') && <Alert color="yellow">{permission.reason('policy')} Saved rules and queue evaluation remain available.</Alert>}
+      <fieldset disabled={!permission.can('policy') || busy} style={{ border: 0, padding: 0, margin: 0 }}>
       {rules.map((r, i) => (
         <RuleEditor key={i} rule={r} onChange={(nr) => setRules(rules.map((x, j) => (j === i ? nr : x)))} onRemove={() => setRules(rules.filter((_, j) => j !== i))} />
       ))}
+      </fieldset>
       <Group gap="sm">
-        <Button variant="light" leftSection={<IconPlus size={14} />} onClick={() => setRules([...rules, { ...NEW_RULE, name: `rule ${rules.length + 1}` }])}>Add rule</Button>
-        <Button variant="light" onClick={() => { setError(null); setConfirm('save'); }}>Save rules</Button>
-        <Button variant="subtle" loading={previewing} onClick={() => void evaluate()}>Evaluate against current queue</Button>
+        <PermissionButton action="policy" variant="light" leftSection={<IconPlus size={14} />} onClick={() => { if (permission.can('policy')) setRules([...rules, { ...NEW_RULE, name: `rule ${rules.length + 1}` }]); }}>Add rule</PermissionButton>
+        <PermissionButton action="policy" variant="light" onClick={() => { if (permission.can('policy')) { setError(null); setConfirm('save'); } }}>Save rules</PermissionButton>
+        <PermissionButton action="read" variant="subtle" loading={previewing} onClick={() => void evaluate()}>Evaluate against current queue</PermissionButton>
       </Group>
       {error && <ErrorBox error={error} />}
       {preview && (
@@ -141,7 +148,7 @@ export function PolicyEditor() {
         )
       )}
       <Text size="xs" c="dimmed">Evaluation uses the saved policy; save rule changes first.</Text>
-      <ConfirmReasonModal
+      <PermissionConfirm action="policy"
         opened={!!confirm}
         onClose={() => setConfirm(null)}
         title={confirm === 'enable' ? 'Enable standing approval' : confirm === 'disable' ? 'Turn standing approval off' : 'Save policy rules'}

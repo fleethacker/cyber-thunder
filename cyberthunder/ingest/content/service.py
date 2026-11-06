@@ -6,6 +6,8 @@ failure, quarantine, import and manifest is written to the audit log with the UR
 and actor, and nothing more.
 """
 from __future__ import annotations
+from contextvars import copy_context
+from cyberthunder.control.principal import authorize
 
 import copy
 import json
@@ -115,13 +117,14 @@ class ContentService:
         return Path(p) if p else ix.BUNDLED_SNAPSHOT
 
     def _save_catalog(self, entries: list[ix.Entry], source: str, stats: dict | None = None) -> None:
-        self.store.state.write_json(self.catalog_cache, {"saved_at": utcnow(), "source": source, "stats": stats or {},
+        self.store.state.write_json(self.catalog_cache, {"schema_version": 2, "saved_at": utcnow(), "source": source,
+                                                         "stats": stats or {}, "accounting": ix.reconcile(entries),
                                                          "entries": [e.to_dict() for e in entries]})
 
     def catalog_entries(self) -> tuple[list[ix.Entry], str]:
         """The newest index this node has seen: the last live check, else the bundled snapshot."""
         doc = self.store.state.read_json(self.catalog_cache)
-        if doc and isinstance(doc.get("entries"), list):
+        if doc and isinstance(doc.get("entries"), list) and doc["entries"]:
             return [ix.Entry.from_dict(e) for e in doc["entries"]], str(doc.get("source") or "cache")
         return ix.load_snapshot(self._snapshot_path()), "snapshot"
 
@@ -187,6 +190,7 @@ class ContentService:
 
     def check_updates(self, actor: str, *, source: str = "live", include_automation: bool = False,
                       include_compilation: bool = False, products: Iterable[str] = ()) -> dict:
+        authorize(self.ctx, "admin", actor=actor)
         from cyberthunder.ingest.content.library import ContentLibrary
         library = ContentLibrary(self)
         live = (source or "live").lower() == "live"
@@ -221,12 +225,16 @@ class ContentService:
             try:
                 res = self._fetch_live()
             except (ix.IndexFetchError, ContentNetworkError) as e:
+                from cyberthunder.ingest.content.library import ContentLibrary
+                ContentLibrary(self).record_index("unavailable", str(e))
                 self.audit.append("content.check", actor, {"url": url, "seconds": round(time.monotonic() - t0, 3),
                                                            "error": str(e)[:300]}, outcome="failed")
-                raise _ingest_error(f"index check failed: {e}") from None
+                raise _ingest_error(f"live index unavailable: {e}. Saved catalog and snapshot checks remain available") from None
             entries = res.entries
             stats = res.stats()
             self._save_catalog(entries, "live", stats)
+            from cyberthunder.ingest.content.library import ContentLibrary
+            ContentLibrary(self).record_index("available")
         else:
             path = self._snapshot_path()
             entries = ix.load_snapshot(path)
@@ -241,6 +249,7 @@ class ContentService:
         wire = int(stats.get("wire_bytes") or 0)
         report = {"checked_at": utcnow(), "checked_by": actor, "source": source, "url": url,
                   "index_entries": len(entries), "index_bytes": int(stats.get("bytes") or 0), "index_wire_bytes": wire,
+                  "accounting": ix.reconcile(entries, self.client.allowed_hosts, self.client.allow_http),
                   "gzip": bool(stats.get("gzip")), "seconds": stats.get("seconds"),
                   "classname": stats.get("classname"), "rediscovered": bool(stats.get("rediscovered")),
                   "index_estimate_seconds": transfer_seconds(wire, link) if wire else None,
@@ -283,6 +292,8 @@ class ContentService:
             e = by_name.get(n) or by_disk.get(n)
             if e is None:
                 raise _ingest_error(f"{n} is not in the STIG index this node holds; run a check first")
+            if not e.format_supported:
+                raise _ingest_error(f"{n} is an unsupported publication; metadata only")
             if not e.allowed_by(self.client.allowed_hosts, self.client.allow_http):
                 raise _ingest_error(f"{n} is hosted on {e.host}, which is not on the content allow-list")
             row = dict(known.get(e.filename) or {})
@@ -294,6 +305,7 @@ class ContentService:
 
     def pull(self, actor: str, *, filenames: list[str] | None = None, all_matching: bool = False, pace: bool = False,
              background: bool = True) -> dict:
+        authorize(self.ctx, "admin", actor=actor)
         if pace and self._link().mode != "test":
             raise ValueError("pacing requires explicit link test mode")
         self._refuse_if_down("content.fetch", actor)
@@ -324,7 +336,7 @@ class ContentService:
             return job
         if background:
             snapshot = copy.deepcopy(job)          # the thread keeps mutating its own copy
-            t = threading.Thread(target=self._run_job, args=(job, items, actor), name=f"content-{job['id']}",
+            t = threading.Thread(target=copy_context().run, args=(self._run_job, job, items, actor), name=f"content-{job['id']}",
                                  daemon=True)
             self.threads.append(t)
             t.start()
@@ -357,6 +369,7 @@ class ContentService:
             save(True)
             staging = self.store.root / "incoming"
             for f, item in zip(job["files"], items):
+                authorize(self.ctx, "admin", actor=actor)
                 if self.ctx.killswitch.is_engaged():
                     f.update(state="stopped", error="kill switch engaged")
                     job["state"] = "stopped"
@@ -385,6 +398,10 @@ class ContentService:
                     if now - polled[0] < 0.5:
                         return None
                     polled[0] = now
+                    try:
+                        authorize(self.ctx, "admin", actor=actor)
+                    except PermissionError:
+                        return "account authorization expired or was revoked"
                     if self.ctx.killswitch.is_engaged():
                         return "kill switch engaged"
                     if job["pace"] and self._link().mode != "test":
@@ -631,7 +648,7 @@ class ContentService:
                 log.warning("content check on reconnect failed: %s", e)
                 out["error"] = str(e)
 
-        t = threading.Thread(target=run, name="content-reconnect", daemon=True)
+        t = threading.Thread(target=copy_context().run, args=(run,), name="content-reconnect", daemon=True)
         self.threads.append(t)
         t.start()
         out["content_check"] = "started"

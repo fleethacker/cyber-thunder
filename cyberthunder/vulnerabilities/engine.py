@@ -83,10 +83,12 @@ def _read_available(stream) -> bytes | None:
         if not available.value:
             return None
         return stream.read(min(4096, available.value))
-    import select
-    if not select.select([stream], [], [], 0)[0]:
-        return None
-    return stream.read(4096)
+    import selectors
+    # POSIX pipes can have descriptor numbers beyond select's fixed ceiling.
+    with selectors.DefaultSelector() as readiness:
+        readiness.register(stream, selectors.EVENT_READ)
+        ready = readiness.select(timeout=0)
+    return stream.read(4096) if ready else None
 
 
 def run(argv: list[str], *, home: Path, timeout: float, guard: Callable[[], None],

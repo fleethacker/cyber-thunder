@@ -47,6 +47,10 @@ function Big({ label, value, color }: { label: string; value: number | string; c
 export default function Commander() {
   const st = useAsync(snapshot, []);
   const { status, verify } = useAppState();
+  const restricted = status?.global_details === false;
+  const audit = restricted ? null : verify;
+  const link = restricted ? null : status?.link;
+  const pending = restricted ? null : status?.outbox.pending;
   useInterval(() => void st.reload(), 10000);
   const s = st.data;
   return (
@@ -56,6 +60,7 @@ export default function Commander() {
         <Text c="dimmed">{s ? `as of ${fmtTime(s.at)}` : ''} · refreshes every 10 s</Text>
       </Group>
       {st.error && <ErrorBox error={st.error} />}
+      {restricted && <Text c="dimmed">Node-wide details are restricted. Counts cover only assets visible to your account ({status.targets} inventory assets).</Text>}
       {!s ? (!st.error && <Loading />) : (
         <>
           <SimpleGrid cols={{ base: 1, sm: 3 }}>
@@ -74,18 +79,18 @@ export default function Commander() {
         <Paper withBorder p="lg" radius="md">
           <Text size="lg" c="dimmed" fw={700} tt="uppercase">Audit trail</Text>
           <Group gap="sm" mt="xs">
-            <Badge size="xl" color={verify?.ok ? 'green' : 'red'}>{verify ? (verify.ok ? 'verified' : `tampered at #${verify.bad_seq}`) : 'checking'}</Badge>
-            <Text fz={24} fw={700}>{verify?.count ?? '-'} records</Text>
+            <Badge size="xl" color={audit ? audit.ok ? 'green' : 'red' : 'gray'}>{restricted ? 'restricted' : audit ? (audit.ok ? 'verified' : `tampered at #${audit.bad_seq}`) : 'unknown'}</Badge>
+            <Text fz={24} fw={700}>{restricted ? 'Record count restricted' : audit ? `${audit.count} records` : 'Record count unknown'}</Text>
           </Group>
-          <Text fz={22} mt="xs">head <HashText value={verify?.head} /></Text>
+          <Text fz={22} mt="xs">{restricted ? 'Head restricted' : audit ? <>head <HashText value={audit.head} /></> : 'Head unknown'}</Text>
         </Paper>
         <Paper withBorder p="lg" radius="md">
           <Text size="lg" c="dimmed" fw={700} tt="uppercase">Link</Text>
           {status ? (
             <>
-              <Badge size="xl" mt="xs" color={status.link.connected ? 'teal' : 'orange'}>{linkLabel(status.link)}</Badge>
-              <Text fz={24} fw={700} mt="xs">{rateLabel(status.link)}</Text>
-              <Text fz={18} c="dimmed">{status.outbox.pending} reports queued for sync</Text>
+              <Badge size="xl" mt="xs" color={!link ? 'gray' : link.connected ? 'teal' : 'orange'}>{restricted ? 'Link restricted' : linkLabel(link)}</Badge>
+              <Text fz={24} fw={700} mt="xs">{restricted ? 'Rate restricted' : rateLabel(link)}</Text>
+              <Text fz={18} c="dimmed">{restricted ? 'Queue count restricted' : pending == null ? 'Queue count unknown' : `${pending} reports queued for sync`}</Text>
               {status.kill.engaged && <Badge size="xl" color="red" mt="sm">Kill switch engaged</Badge>}
             </>
           ) : <Loading />}

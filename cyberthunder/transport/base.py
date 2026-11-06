@@ -77,18 +77,23 @@ def sudo_wrap(command: str) -> str:
     return f"sudo -n sh -c {shlex.quote(command)}"
 
 
-def make_transport(target: "Target", settings: "Settings | None" = None) -> Transport:
-    """Build the transport for a target. Generic kinds here; anything else is asked of the adapter."""
+def make_transport(target: "Target", settings: "Settings | None" = None, *,
+                   guard=None, on_security_event=None) -> Transport:
+    """Build a transport, forwarding settings and per-instance SSH/WinRM callbacks.
+
+    Other kinds retain their adapter construction; application authorization
+    wrappers remain responsible for guarding those transports.
+    """
     kind = target.transport
     if kind == "local":
         from .local import LocalTransport
         return LocalTransport()
     if kind == "ssh":
         from .ssh import SSHTransport
-        return SSHTransport.from_target(target)
+        return SSHTransport.from_target(target, settings, guard=guard, on_security_event=on_security_event)
     if kind == "winrm":
         from .winrm import WinRMTransport
-        return WinRMTransport.from_target(target)
+        return WinRMTransport.from_target(target, settings, guard=guard, on_security_event=on_security_event)
     if kind == "fixture":
         from .fixture import FixtureTransport
         return FixtureTransport(target.options["fixture_dir"])

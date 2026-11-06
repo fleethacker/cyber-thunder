@@ -70,6 +70,11 @@ class RuntimeTasks:
         self._threads: list[threading.Thread] = []
 
     def start(self) -> None:
+        if getattr(self.ctx.settings, "auth_mode", "dev") != "dev":
+            # Scheduled jobs need their own bounded workload credential; a typed scheduler name
+            # cannot inherit a human session or the service's ambient target access.
+            log.info("Verified mode: scheduled tasks require a configured workload identity")
+            return
         bootstrap_cluster_target(self.ctx)
         self._start_interval("content-updates", self.ctx.settings.content_check_interval_s, self._check_content)
         self._start_interval("scan", self.ctx.settings.scan_interval_s, self._scan_inventory)

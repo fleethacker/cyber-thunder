@@ -106,7 +106,7 @@ def test_discovery_panel_is_wired_to_the_routes():
         assert call in panel, call
     assert "<ScopeEditor" in panel
     editor = (SRC / "components" / "ScopeEditor.tsx").read_text(encoding="utf-8")
-    assert "api.previewScopeRanges(" in editor and "api.saveScopeRanges(" in editor
+    assert "scopeRecipesApi.preview(" in editor and "scopeRecipesApi.save(" in editor
     assert "in_scope: scope === 'in'" in panel          # explicit decision, never a default
     assert "placeholder" not in panel.splitlines()[0].lower()
 

@@ -40,6 +40,10 @@ MACHINE_PREFIXES = tuple(f"{a}:" for a in sorted(AGENT_ACTORS)) + ("policy:",)
 def require_actor(x_actor: str | None = Header(default=None)) -> str:
     """Mutating requests must name the human acting. Machine identities are refused here so they can never
     reach an approval, denial, kill switch or policy edge through the API."""
+    from cyberthunder.control.principal import current_principal
+    principal = current_principal()
+    if principal is not None and principal.verified:
+        return principal.actor
     if not (x_actor or "").strip():
         raise HTTPException(400, "X-Actor header is required: type your name in Settings before making changes")
     from cyberthunder.control.identity import require_human
@@ -109,7 +113,9 @@ def run_background(fn: Callable[[], Any], name: str, *, early_wait: float = 0.2)
             box["error"] = e
             log.warning("background task %s failed: %s", name, e)
 
-    t = threading.Thread(target=target, name=name, daemon=True)
+    from contextvars import copy_context
+    inherited = copy_context()
+    t = threading.Thread(target=inherited.run, args=(target,), name=name, daemon=True)
     with _threads_lock:
         _threads[:] = [x for x in _threads if x.is_alive()]
         _threads.append(t)
@@ -196,6 +202,9 @@ def current_proposals(ctx: "AppContext") -> dict[str, Proposal]:
         return {}
     out: dict[str, Proposal] = {}
     for p in props:
+        from cyberthunder.security.resources import visible_record
+        if not visible_record(ctx, p):
+            continue
         cur = out.get(p.finding_id)
         if cur is None or p.state.value not in TERMINAL_STATES or cur.state.value in TERMINAL_STATES:
             out[p.finding_id] = p
@@ -226,6 +235,9 @@ def finding_plus(ctx: "AppContext", finding: Finding, with_proposal: bool = True
     d["needs_rescan"] = current.needs_rescan
     if with_proposal:
         p = proposal_for(ctx, finding.id)
+        from cyberthunder.security.resources import visible_record
+        if p is not None and (p.host != finding.host or not visible_record(ctx, p)):
+            p = None
         d["proposal"] = {"id": p.id, "state": p.state.value} if p is not None else None
     return d
 
@@ -241,6 +253,9 @@ def proposal_plus(ctx: "AppContext", p: Proposal) -> dict:
         finding = ctx.store.get_finding(p.finding_id)
     except Exception as exc:  # noqa: BLE001
         log.debug("finding lookup failed for proposal %s: %s", p.id, exc)
+    from cyberthunder.security.resources import visible_record
+    if finding is not None and (finding.host != p.host or not visible_record(ctx, finding)):
+        finding = None
     d["finding"] = finding_plus(ctx, finding, with_proposal=False) if finding is not None else None
     target = None
     try:
@@ -268,15 +283,24 @@ def proposal_plus(ctx: "AppContext", p: Proposal) -> dict:
 
 def get_proposal(ctx: "AppContext", pid: str) -> Proposal:
     try:
-        return ctx.gate.get(pid)
+        p = ctx.gate.get(pid)
+        from cyberthunder.security.resources import check_record
+        check_record(ctx, p)
+        return p
     except KeyError:
+        if getattr(ctx.settings, "auth_mode", "dev") != "dev":
+            raise PermissionError("proposal is unavailable to this account") from None
         raise KeyError(f"unknown proposal {pid!r}") from None
 
 
 def get_finding(ctx: "AppContext", fid: str, scan_id: str | None = None) -> Finding:
     f = ctx.store.get_finding(fid, scan_id)
     if f is None:
+        if getattr(ctx.settings, "auth_mode", "dev") != "dev":
+            raise PermissionError("finding is unavailable to this account")
         raise KeyError(f"unknown finding {fid!r}")
+    from cyberthunder.security.resources import check_record
+    check_record(ctx, f)
     return f
 
 
@@ -428,11 +452,20 @@ def sort_findings(findings: list[Finding], sort_by: str, sort_dir: str, *, assur
 
 def list_findings(ctx: "AppContext", *, scan_id: str | None, limit: int, offset: int,
                   sort_by: str = "default", sort_dir: str = "asc", **filters) -> dict:
-    if scan_id and ctx.store.load_scan_run(scan_id) is None:
-        raise KeyError(f"unknown scan {scan_id!r}")
+    from cyberthunder.security.resources import check_record, visible_record
+    if scan_id:
+        record = ctx.store.load_scan_run(scan_id)
+        if record is None:
+            if getattr(ctx.settings, "auth_mode", "dev") != "dev":
+                raise PermissionError("scan is unavailable to this account")
+            raise KeyError(f"unknown scan {scan_id!r}")
+        check_record(ctx, record)
     sid = scan_id or ctx.store.latest_scan_id()
+    if sid and not visible_record(ctx, ctx.store.load_scan_run(sid) or {}):
+        sid = None
     # The default view includes partial overlays; sid remains its baseline metadata anchor.
     all_f = ctx.store.load_findings(scan_id) if scan_id else ctx.store.load_findings()
+    all_f = [f for f in all_f if visible_record(ctx, f)]
     # Filters and the summary count a verified fix as closed, so the open totals move when a fix lands.
     lifecycle = CurrentFindings.for_context(ctx)
     scanned = {f.id: f for f in all_f}
@@ -470,7 +503,7 @@ def link_state(ctx: "AppContext") -> dict:
     return Link(ctx.store, ctx.settings).state().to_dict()
 
 
-def outbox_pending(ctx: "AppContext") -> int:
+def outbox_pending(ctx: "AppContext") -> int | None:
     svc = getattr(ctx, "ingest", None)
     if svc is not None:
         try:
@@ -482,6 +515,9 @@ def outbox_pending(ctx: "AppContext") -> int:
             return len((to_plain(listing) or {}).get("pending", []))
         except Exception as e:  # noqa: BLE001
             log.debug("ingest outbox unavailable: %s", e)
+    if getattr(getattr(ctx, "settings", None), "auth_mode", "dev") != "dev":
+        # Never fall back from a denied filtered listing to unfiltered disk counts.
+        return None
     d = ctx.store.outbox_dir
     if not d.exists():
         return 0

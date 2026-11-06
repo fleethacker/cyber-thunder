@@ -1,3 +1,4 @@
+import { permissionFixture } from './permissionTestSupport.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { actorProblem, errorText, evaluate, mount, target, types, ui } from '../lib/setupTestSupport.mjs';
@@ -9,6 +10,7 @@ const access = (ctx) => evaluate(new URL('./setupAccess.ts', import.meta.url), {
 
 async function setup(t, initial = null, defaults) {
   const ctx = context(), calls = [];
+  const permissions = permissionFixture();
   let saved = 0, closed = 0;
   const props = { opened: true, initial, defaults, onSaved: () => saved++, onClose: () => closed++ };
   const api = new Proxy({
@@ -18,10 +20,11 @@ async function setup(t, initial = null, defaults) {
   const panel = mount((hooks) => evaluate(new URL('./TargetForm.tsx', import.meta.url), {
     react: hooks, '@mantine/core': ui, '../api/client': { api, errorText }, '../api/types': types,
     './setupAccess': access(ctx),
+    './PermissionGate': permissions.imports,
   }).TargetForm, props);
   t.after(() => panel.unmount());
   await panel.settle();
-  return { ...panel, calls, ctx, saved: () => saved, closed: () => closed,
+  return { ...panel, calls, ctx, permissions: permissions.state, saved: () => saved, closed: () => closed,
     async update(next) { Object.assign(props, next); await panel.rerender(props); },
   };
 }
@@ -133,4 +136,49 @@ test('setup action guard rejects missing/machine actors and unknown or engaged k
   assert.ok(setupActionProblem({ ...context(), status: { kill: { engaged: true } } }));
   assert.ok(setupActionProblem({ ...context(), statusError: 'unavailable' }));
   assert.equal(setupActionProblem(context()), null);
+});
+
+test('target form rechecks admin permission for direct submit and an already-reviewed registration', async (t) => {
+  const panel = await setup(t);
+  await panel.change('ID', 'host'); await panel.change('Inventory authorization', 'out');
+  await panel.change('Authorization reason', 'Record only'); await panel.submit();
+  const submit = panel.find((node) => node.type === 'form').props.onSubmit;
+  panel.permissions.actions = ['read']; await panel.rerender();
+  submit({ preventDefault() {} }); await panel.settle();
+  assert.equal(panel.calls.length, 0);
+  assert.equal(panel.button('Confirm registration').props.disabled, true);
+  await panel.click('Back to declarations');
+  await panel.change('Name', 'Draft remains editable');
+  await panel.submit(); assert.equal(panel.calls.length, 0);
+  await panel.click('Cancel'); assert.equal(panel.closed(), 1);
+});
+
+test('environment defaults and existing declarations survive edits; environment moves retain server denial', async (t) => {
+  const legacy = await setup(t, target());
+  assert.equal(legacy.control('Environment').props.value, 'default');
+  await legacy.submit(); assert.equal(legacy.calls[0].body.environment, 'default');
+  const panel = await setup(t, target({ environment: 'production-é' }));
+  assert.equal(panel.control('Environment').props.value, 'production-é');
+  await panel.change('Name', 'Alias only'); await panel.submit();
+  assert.equal(panel.calls[0].body.environment, 'production-é');
+  panel.calls[0].reject(new Error('Current environment is not authorized')); await panel.settle();
+  await panel.change('Environment', 'other-environment'); await panel.submit();
+  assert.equal(panel.calls[1].body.environment, 'other-environment');
+  assert.equal('in_scope' in panel.calls[1].body, false);
+  panel.calls[1].reject(new Error('Destination environment is not authorized')); await panel.settle();
+  assert.equal(panel.saved(), 0); assert.equal(panel.closed(), 0);
+  assert.equal(panel.control('Environment').props.value, 'other-environment');
+  assert.ok(panel.nodes().some((node) => node.props?.children === 'Destination environment is not authorized'));
+});
+
+test('environment rejects empty, oversized, whitespace, control and wildcard identifiers without silent normalization', async (t) => {
+  const panel = await setup(t, target());
+  for (const value of ['', 'x'.repeat(129), 'team one', ' team', 'team\t', 'team\u00a0one', 'team\u0000one', '\ud800', '*', 'team[1]']) {
+    await panel.change('Environment', value);
+    assert.equal(panel.control('Environment').props.value, value);
+    assert.match(panel.control('Environment').props.error, /explicit environment/);
+    await panel.submit(); assert.equal(panel.calls.length, 0);
+  }
+  await panel.change('Environment', 'é'.repeat(128)); await panel.submit();
+  assert.equal(panel.calls[0].body.environment, 'é'.repeat(128));
 });

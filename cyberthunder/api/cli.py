@@ -11,13 +11,18 @@ def cmd_serve(a: argparse.Namespace) -> int:
     settings = Settings.from_env(state_dir=a.state_dir)
     host = a.host or settings.host
     port = a.port or settings.port
+    from cyberthunder.api.auth import validate_bind
+    validate_bind(settings, host)
     if a.reload:
+        if settings.auth_mode != "dev":
+            raise ValueError("reload is available only with development authentication")
         # the reloader re-imports the app in a child process, so state comes through the environment
         import uvicorn
 
         os.environ["CT_STATE_DIR"] = str(settings.state_dir)
         uvicorn.run("cyberthunder.api.app:create_app", factory=True, reload=True, host=host, port=port,
-                    log_level="info")
+                    log_level="info", ssl_certfile=settings.tls_cert, ssl_keyfile=settings.tls_key,
+                    proxy_headers=False)
         return 0
     from cyberthunder.api.app import serve
     from cyberthunder.context import AppContext

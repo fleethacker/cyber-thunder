@@ -9,7 +9,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, errorText } from '../api/client';
 import type { ProposalPlus } from '../api/types';
 import { ASSET_TYPES } from '../api/types';
-import { ConfirmReasonModal } from '../components/ConfirmReasonModal';
+import { PermissionButton, PermissionConfirm, usePermissions, type PermissionRequirement } from '../components/PermissionGate';
 import { Empty, ErrorBox, Loading, PageTitle } from '../components/common';
 import { FindingDrawer } from '../components/FindingDrawer';
 import { ImpactReview } from '../components/ImpactReview';
@@ -25,10 +25,14 @@ import { canRequestRollback, HISTORY_STATES, matchesProposalDates, matchesPropos
 const SHOWN_AFTER_ACTION = ['applied', 'verified', 'failed', 'rolled_back', 'denied', 'cancelled'];
 
 type Sort = 'severity' | 'host' | 'age';
+const impactPermission = (p: ProposalPlus, inspectOnly: boolean): PermissionRequirement =>
+  inspectOnly ? 'plan' : [p.state === 'approved' ? 'review' : 'approve', 'plan'];
+
 type ImpactSession = { proposal: ProposalPlus; inspectOnly: boolean; batch: boolean; saved?: boolean };
 
 export default function Decisions() {
   const nav = useNavigate();
+  const { can, reason: permissionReason } = usePermissions();
   const [params, setParams] = useSearchParams();
   const requestedId = params.get('proposal');
   const { status, statusError, actor } = useAppState();
@@ -150,7 +154,8 @@ export default function Decisions() {
     if (focus >= visible.length) setFocus(Math.max(0, visible.length - 1));
   }, [visible.length, focus]);
 
-  const run = useCallback(async (p: ProposalPlus, fn: () => Promise<unknown>, ok: string) => {
+  const run = useCallback(async (p: ProposalPlus, action: PermissionRequirement, fn: () => Promise<unknown>, ok: string) => {
+    if (!can(action)) { setActionError(permissionReason(action)); return false; }
     if (impactRef.current) return false;
     if (actionBlockRef.current || inFlight.current.has(p.id)) {
       setActionError(actionBlockRef.current ?? 'An action is already in progress for this proposal.');
@@ -179,6 +184,7 @@ export default function Decisions() {
   const openImpact = useCallback((p: ProposalPlus, inspectOnly = false, batch = false) => {
     if (impactRef.current || inFlight.current.has(p.id) || rollbackFor || denyFor || drawer) return;
     const historical = !['proposed', 'approved'].includes(p.state);
+    if (!historical && !can(impactPermission(p, inspectOnly))) { setActionError(permissionReason(impactPermission(p, inspectOnly))); return; }
     if (!historical && actionBlockRef.current) { setActionError(actionBlockRef.current); return; }
     const session = { proposal: p, inspectOnly: historical || inspectOnly, batch };
     impactRef.current = session;
@@ -203,32 +209,33 @@ export default function Decisions() {
   const actions: ProposalActions = useMemo(() => ({
     approve: (p) => { if (p.state === 'proposed') openImpact(p); },
     impact: (p, inspectOnly) => openImpact(p, inspectOnly),
-    deny: (p) => { if (impactRef.current || actionBlockRef.current || inFlight.current.has(p.id)) return; setDenyError(null); setDenyFor([p]); },
+    deny: (p) => { if (!can('deny') || impactRef.current || actionBlockRef.current || inFlight.current.has(p.id)) return; setDenyError(null); setDenyFor([p]); },
     apply: (p) => {
       if (isSuppressed(p.finding?.review)) {
         setActionError(`Apply blocked by human review: ${p.finding?.review?.current?.reason || 'Review the current finding before applying.'}`);
         return;
       }
-      void run(p, () => api.apply(p.id), `Applying: ${p.title}`);
+      void run(p, 'apply', () => api.apply(p.id), `Applying: ${p.title}`);
     },
     rollback: (p) => {
-      if (impactRef.current || actionBlock || watchingRollback.has(p.id) || !canRequestRollback(p)) return;
+      if (!can('rollback') || impactRef.current || actionBlock || watchingRollback.has(p.id) || !canRequestRollback(p)) return;
       setRollbackError(null);
       setRollbackFor(p);
     },
-    verify: (p) => void run(p, () => api.verify(p.id), `Verification recorded: ${p.title}`),
+    verify: (p) => void run(p, 'verify', () => api.verify(p.id), `Verification recorded: ${p.title}`),
     openFinding: (id) => { if (!impactRef.current) setDrawer(id); },
   }), [run, actionBlock, watchingRollback, openImpact]);
 
   const confirmRollback = async () => {
-    if (!currentRollback || actionBlockRef.current || !canRequestRollback(currentRollback) || inFlight.current.has(currentRollback.id) || watchingRollback.has(currentRollback.id)) return;
+    if (!can('rollback') || !currentRollback || actionBlockRef.current || !canRequestRollback(currentRollback) || inFlight.current.has(currentRollback.id) || watchingRollback.has(currentRollback.id)) return;
     const p = currentRollback;
     setRollbackError(null);
-    const accepted = await run(p, async () => {
+    const accepted = await run(p, 'rollback', async () => {
       try {
         // Recheck the selected proposal before requesting a rollback of an older change.
         const latest = await api.proposal(p.id);
         upsert(latest);
+        if (!can('rollback')) throw new Error(permissionReason('rollback')!);
         if (actionBlockRef.current) throw new Error(actionBlockRef.current);
         if (!canRequestRollback(latest)) throw new Error('This proposal is no longer applied or verified.');
         rollbackRequests.current.add(p.id);
@@ -250,6 +257,8 @@ export default function Decisions() {
 
   const confirmDeny = async (note: string) => {
     if (!denyFor || impactRef.current) return;
+    const required = denyFor.length > 1 ? ['deny', 'approve'] : 'deny';
+    if (!can(required)) { setDenyError(permissionReason(required)); return; }
     if (actionBlockRef.current) { setDenyError(actionBlockRef.current); return; }
     setDenyError(null);
     try {
@@ -272,6 +281,7 @@ export default function Decisions() {
 
   const bulkApprove = () => {
     if (impactRef.current || reviewBatch) return;
+    if (!can(['approve', 'plan'])) { setActionError(permissionReason(['approve', 'plan'])); return; }
     if (actionBlockRef.current) { setActionError(actionBlockRef.current); return; }
     const proposals = visible.filter((p) => selected.has(p.id) && p.state === 'proposed');
     if (!proposals.length || proposals.some((p) => inFlight.current.has(p.id))) return;
@@ -310,6 +320,7 @@ export default function Decisions() {
   };
 
   const startScan = async () => {
+    if (!can('scan') || startingScan) return;
     setStartingScan(true);
     try {
       await api.startScan({});
@@ -370,7 +381,7 @@ export default function Decisions() {
           <Text size="sm">{reviewBatch.completed} of {reviewBatch.ids.length} approved. Each proposal needs its own review and decision. Unprocessed proposals remain selected.</Text>
           {reviewBatch.completed < reviewBatch.ids.length && <Text size="sm">Review {reviewBatch.completed + 1} of {reviewBatch.ids.length}: {reviewBatch.ids[reviewBatch.completed]}</Text>}
           <Group>
-            {reviewBatch.completed < reviewBatch.ids.length && <Button variant="light" disabled={!!impact || !!actionBlock} onClick={continueReviews}>Continue selected reviews</Button>}
+            {reviewBatch.completed < reviewBatch.ids.length && <PermissionButton action={['approve', 'plan']} variant="light" disabled={!!impact || !!actionBlock} onClick={continueReviews}>Continue selected reviews</PermissionButton>}
             <Button variant="subtle" disabled={!!impact} onClick={() => setReviewBatch(null)}>{reviewBatch.completed === reviewBatch.ids.length ? 'Finish selected reviews' : 'End selected reviews'}</Button>
           </Group>
         </Stack>
@@ -385,11 +396,11 @@ export default function Decisions() {
             indeterminate={selCount > 0 && selCount < selectable.length}
             onChange={(e) => setSelected(e.currentTarget.checked ? new Set(selectable.map((p) => p.id)) : new Set())}
           />
-          <Button size="sm" color="green" disabled={!selCount || !!actionBlock || !!impact || !!reviewBatch} onClick={bulkApprove}>Review selected ({selCount})</Button>
-          <Button size="sm" color="red" variant="light" disabled={!selCount || !!actionBlock || !!impact || !!reviewBatch}
-            onClick={() => { setDenyError(null); setDenyFor(visible.filter((p) => selected.has(p.id) && p.state === 'proposed')); }}>
+          <PermissionButton action={['approve', 'plan']} size="sm" color="green" disabled={!selCount || !!actionBlock || !!impact || !!reviewBatch} onClick={bulkApprove}>Review selected ({selCount})</PermissionButton>
+          <PermissionButton action={selCount > 1 ? ['deny', 'approve'] : 'deny'} size="sm" color="red" variant="light" disabled={!selCount || !!actionBlock || !!impact || !!reviewBatch}
+            onClick={() => { if (!can(selCount > 1 ? ['deny', 'approve'] : 'deny')) return; setDenyError(null); setDenyFor(visible.filter((p) => selected.has(p.id) && p.state === 'proposed')); }}>
             Deny selected
-          </Button>
+          </PermissionButton>
         </Group>
       )}
 
@@ -408,7 +419,7 @@ export default function Decisions() {
           {visible.length === 0 ? (
             <Empty
               title={view === 'history' ? 'No other proposals match these filters' : 'Nothing waiting for a decision'}
-              action={view === 'queue' ? <Button leftSection={<IconRadar size={18} />} loading={startingScan} onClick={() => void startScan()}>Start a scan</Button> : undefined}
+              action={view === 'queue' ? <PermissionButton action="scan" leftSection={<IconRadar size={18} />} loading={startingScan} onClick={() => void startScan()}>Start a scan</PermissionButton> : undefined}
             >
               {all.length ? 'Clear filters to see more proposals, or switch views.' : 'No proposals have been recorded on this node.'}
             </Empty>
@@ -430,12 +441,17 @@ export default function Decisions() {
         </>
       )}
 
-      {impact && <ImpactReview key={impact.proposal.id} proposal={currentImpact} inspectOnly={impact.inspectOnly}
-        onClose={closeImpact} onChanged={recordImpact} />}
+      {impact && (!['proposed', 'approved'].includes(impact.proposal.state) || can(impactPermission(impact.proposal, impact.inspectOnly))
+        ? <ImpactReview key={impact.proposal.id} proposal={currentImpact} inspectOnly={impact.inspectOnly} onClose={closeImpact} onChanged={recordImpact} />
+        : <PermissionConfirm action={impactPermission(impact.proposal, impact.inspectOnly)} opened title="Change review unavailable" confirmLabel="Continue review" onConfirm={() => {}} onClose={closeImpact} />)}
       <FindingDrawer findingId={drawer} onClose={() => setDrawer(null)} onProposed={upsert} onReviewed={() => void list.reload()} />
-      <RollbackConfirmation proposal={currentRollback} busy={!!currentRollback && busy.has(currentRollback.id)}
-        blockedReason={actionBlock} error={rollbackError} onConfirm={() => void confirmRollback()} onClose={() => setRollbackFor(null)} />
-      <ConfirmReasonModal
+      {currentRollback && !can('rollback')
+        ? <PermissionConfirm action="rollback" opened title="Rollback unavailable" confirmLabel="Confirm rollback" error={rollbackError}
+          body={<Text size="sm">{currentRollback.title} on {currentRollback.target?.name ?? currentRollback.host}. Recorded change history remains available.</Text>}
+          onConfirm={() => void confirmRollback()} onClose={() => setRollbackFor(null)} />
+        : <RollbackConfirmation proposal={currentRollback} busy={!!currentRollback && busy.has(currentRollback.id)}
+          blockedReason={actionBlock} error={rollbackError} onConfirm={() => void confirmRollback()} onClose={() => setRollbackFor(null)} />}
+      <PermissionConfirm action={denyFor && denyFor.length > 1 ? ['deny', 'approve'] : 'deny'}
         opened={!!denyFor}
         onClose={() => setDenyFor(null)}
         title={denyFor && denyFor.length > 1 ? `Deny ${denyFor.length} proposals` : 'Deny this fix'}

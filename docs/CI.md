@@ -3,6 +3,15 @@
 `.github/workflows/regression.yml` runs on pull requests and pushes to `main`.
 Each matrix job uses Python 3.12 and Node 22 on a hosted runner:
 
+The full Linux account-access run exposed `select()`'s fixed descriptor-number
+limit in dependency and vulnerability subprocess readers. Both now use the
+platform selector with a nonblocking check and explicit resource closure; the
+native Windows pipe path is unchanged. Three real-process reproductions with
+POSIX pipe descriptors at or above 1024 failed before the correction. The two
+affected modules then passed 55 tests on Windows 3.12 and 55 on native Linux
+3.12, including output limits, cancellation and inherited-pipe deadlines, with
+no skips. These focused results do not replace the full release gate.
+
 | Runner | Pytest state backends | Collection |
 | --- | --- | --- |
 | `ubuntu-24.04` | JSON and SQLite in the same run | Every test module, including the three deployment modules |
@@ -55,12 +64,24 @@ deselection and collection skips fail the job. Files matching pytest's normal
 three explicitly named Windows omissions. This detects newly ignored modules;
 it does not prove that individual tests have not been deleted or renamed.
 
-The reviewed allowances at the initial baseline are:
+The reviewed allowances are:
 
 | Platform | Exact test(s) | Maximum skips | Required reason |
 | --- | --- | ---: | --- |
 | Both | `tests/explain/test_service.py::test_real_local_model[json]` and `[sqlite]` | 2 | `set CT_TEST_LLM=1 to test against a local model server` |
 | Windows | `tests/engine/test_inventory_guard.py::test_fifo_or_link_replacement_refuses_promptly_and_releases_target_lock` for `existing_fifo`, `fifo_at_open`, and `symlink_at_open` | 3 | `POSIX FIFO and O_NOFOLLOW semantics` |
+| Windows | `tests/security/test_oidc.py::test_posix_private_permissions` | 1 | `POSIX ownership/mode enforcement; Windows requires deployment ACLs` |
+| Windows | `tests/security/test_access.py::test_fifo_is_rejected_without_opening_or_waiting` | 1 | `requires POSIX FIFO` |
+| Windows | `tests/security/test_oidc.py::test_symlink_cache_and_directory_rejected` | 1 | `POSIX symlinks; Windows reparse handling has a separate fixture` |
+| Windows | `tests/security/test_access_file_trust.py::test_posix_policy_write_permissions_denied` for `[400]`, `[386]`, `[438]`, `[950]` | 4 | `requires POSIX owner/mode and descriptor-relative filesystem semantics` |
+| Windows | `tests/security/test_access_file_trust.py::test_posix_writable_parent_denied` for `[504]`, `[455]` | 2 | `requires POSIX owner/mode and descriptor-relative filesystem semantics` |
+| Windows | `tests/security/test_access_file_trust.py::test_posix_untrusted_owner_denied[file]` and `[parent]` | 2 | `requires POSIX owner/mode and descriptor-relative filesystem semantics` |
+| Windows | `tests/security/test_access_file_trust.py::test_posix_permission_change_during_parse_denied` | 1 | `requires POSIX owner/mode and descriptor-relative filesystem semantics` |
+| Windows | `tests/security/test_access_file_trust.py::test_posix_root_sticky_directory_exception_never_applies_to_file` | 1 | `requires POSIX owner/mode and descriptor-relative filesystem semantics` |
+| Windows | `tests/security/test_access_file_trust.py::test_posix_parent_swap_to_symlink_before_open_denied_and_fds_closed` | 1 | `requires POSIX owner/mode and descriptor-relative filesystem semantics` |
+| Windows | `tests/security/test_kube_credentials.py::test_real_posix_config_permission_failure` for `[420]`, `[416]`, `[438]` | 3 | `real POSIX file permissions` |
+| Linux | `tests/security/test_oidc.py::test_windows_junction_cache_path_rejected` | 1 | `Windows directory junction fixture` |
+| Linux | `tests/security/test_access_file_trust.py::test_actual_windows_junction_parent_denied` | 1 | `requires Windows NTFS junction support` |
 | Linux | `tests/report/test_reports.py::test_commander_reproduce_command_runs_in_cmd` | 1 | `runs the command through cmd.exe` |
 | Linux | `tests/test_approval_io.py::test_deny_survives_windows_delete_handle[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |
 | Linux | `tests/state/test_file_read_sharing.py::test_deny_response_survives_windows_inventory_sharing[json]` and `[sqlite]` | 2 | `requires Windows file sharing semantics` |
@@ -99,7 +120,7 @@ test_standalone_setup_rejects_other_contexts_before_creating_password
 test_standalone_setup_rejects_arguments
 ```
 
-That permits at most **30 skipped cases on Linux and 5 on Windows**, with every
+That permits at most **32 skipped cases on Linux and 22 on Windows**, with every
 case individually constrained. Missing Git or Bash is not an allowed skip on
 either runner. Windows runs the command-shell and file-sharing tests that
 Linux skips.
@@ -108,6 +129,29 @@ Linux runs the three FIFO/no-follow inventory races that Windows cannot execute.
 Those cases were also exercised in WSL during rollback review. The remaining
 inventory validation tests run on both platforms; limited Windows link-creation
 privileges use a metadata fixture rather than skipping the rejection check.
+
+The access-policy and kubeconfig additions above cover 14 POSIX-only cases on
+Windows and one Windows-only junction case on Linux. Numeric parameters are
+pytest's decimal IDs for the octal permission values. Linux executes those
+POSIX checks; Windows executes both the access-policy and OIDC real junction
+checks. The kubeconfig module currently has no Windows-only junction test.
+The real symlink and hardlink tests must execute on both runners. Runtime
+reasons such as `symlink creation unavailable`, `hardlink creation unavailable`,
+or a Windows junction creation error are deliberately not allowances. If a
+runner cannot create the required links, its capability must be provisioned
+or the failed coverage reviewed; the skip checker remains red.
+
+Windows mode bits and `st_uid` do not establish an owner SID, DACL, inherited
+permissions, or effective account rights. The file validators check file shape,
+links/reparse metadata and stability; they do not verify Windows ACLs. Before
+deployment, provision and review restrictive DACLs on the policy, kubeconfig,
+referenced credential material, and every ancestor directory. Untrusted accounts
+must not be able to write, replace/delete, take ownership, or change permissions
+on them. Restrict secret-file reads to the intended service account and trusted
+administrators; give the service only the rights its operation requires. Check
+effective inherited permissions for the actual service identity and other local
+accounts. Passing these tests is not DACL acceptance evidence. See
+[account access and file trust](ACCOUNT_ACCESS.md) for the runtime boundary.
 
 `tests/conftest.py` already excludes these Windows modules before collection:
 
@@ -182,3 +226,38 @@ Windows with Python 3.12 and pytest 9.2. Their child processes run tiny syntheti
 suites only. Neither the full repository suite nor a hosted Linux/Windows
 workflow run is claimed here. The UI build is configured for GitHub and was not
 rerun locally as part of this isolated CI change.
+
+The file-trust skip-policy follow-up was checked against actual pytest reports
+from these four modules, with plugin autoload disabled:
+
+```text
+python -m pytest -o addopts= -q -rs -p no:cacheprovider tests/security/test_access.py tests/security/test_access_file_trust.py tests/security/test_kube_credentials.py tests/security/test_oidc.py
+```
+
+Windows Python 3.12.10 / pytest 9.2.0 recorded 294 passes and 15 expected skips
+across the access, access-file-trust and kubeconfig modules. WSL Python 3.14.4 /
+pytest 9.2.0 recorded 308 passes and one expected junction skip in those same
+modules. The WSL run used native Linux cryptography and the shared environment's
+pure Python test dependencies; it is not the hosted Python 3.12 CI environment.
+All 14 new Windows-skipped cases passed on Linux. Both real junction cases
+(access policy and OIDC) passed on Windows. Real symlink and hardlink cases
+passed on both platforms. All observed skip node IDs and reasons matched the
+reviewed platform map; there were no unexpected capability skips on Windows.
+
+The accompanying OIDC module had 208 passes, two expected skips and one failure
+on Windows: `test_total_deadline_stops_trickle_responses[slow_body]` observed no
+server request. An isolated rerun of that case together with the 41 policy
+tests passed (42 passes, no skips):
+
+```text
+python -m pytest -o addopts= -q -p no:cacheprovider tests/ops/test_ci_policy.py "tests/security/test_oidc.py::test_total_deadline_stops_trickle_responses[slow_body]"
+```
+
+The initial WSL OIDC run exposed 24 failures caused by incomplete loopback TLS
+fixture certificates. The fixtures now include the certificate extensions
+required by strict TLS validation; production trust checks were not weakened.
+The corrected focused Linux OIDC run passed 229 tests with one documented
+Windows-junction skip. Browser-session and API identity checks subsequently
+passed 123 tests on each platform without skips; see [BROWSER_IDENTITY](BROWSER_IDENTITY.md).
+Full exact-commit gates, hosted Python 3.12 runners and Windows deployment DACL
+acceptance remain separate checks.

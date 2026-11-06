@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 from cyberthunder.control.approvals import Proposal, ProposalState
 from cyberthunder.findings.current import CurrentFindings
+from cyberthunder.report import access
+from cyberthunder.report.identity import attribution
 from cyberthunder.findings.schema import Finding, Status, utcnow
 from cyberthunder.report.onepager import latest_proposals, resolve_scan
 from cyberthunder.report.render import ReportError
@@ -50,7 +52,8 @@ def _status_for(f: Finding, p: Proposal | None, lifecycle: CurrentFindings | Non
         p = next(candidate for candidate in (lifecycle.proposals[(f.id, f.host)] if lifecycle else [p])
                  if candidate.id == current.remediated["proposal_id"])
         when = current.remediated["verified_at"]
-        return "not_a_finding", f"Fixed by approved change {p.id} ({p.fix_ref}), approved by {p.decided_by}, verified {when}."
+        identity = attribution(p.decided_by, p.decided_principal)["text"]
+        return "not_a_finding", f"Fixed by approved change {p.id} ({p.fix_ref}), approved by {identity}, verified {when}."
     status = CKLB_STATUS[f.status]
     note = ""
     if f.is_open and p:
@@ -148,7 +151,7 @@ def _synthesise(host: str, findings: list[Finding], props: dict[str, Proposal], 
 
 
 def build_checklist(ctx: "AppContext", scan_id: str | None = None, host: str | None = None) -> dict:
-    sid, _run, findings = resolve_scan(ctx, scan_id)
+    sid, _run, findings = resolve_scan(ctx, scan_id, target=host)
     hosts = sorted({f.host for f in findings})
     if host is None:
         if len(hosts) > 1:
@@ -159,9 +162,22 @@ def build_checklist(ctx: "AppContext", scan_id: str | None = None, host: str | N
     mine = [f for f in findings if f.host == host]
     if not mine:
         raise ReportError(f"no findings for host {host!r} in scan {sid}; hosts: {', '.join(hosts)}")
-    props = latest_proposals(ctx)
-    lifecycle = CurrentFindings.for_context(ctx)
-    found = _find_input(ctx.store.scans_dir / sid / "raw", host)
+    associations = {(f.id, f.host) for f in mine}
+    props = latest_proposals(ctx, associations=associations)
+    lifecycle = access.lifecycle(ctx, associations=associations)
+    raw = ctx.store.scans_dir / sid / "raw"
+    if access.verified_mode(ctx):
+        # Display hostnames in imported CKLB metadata are not an ownership boundary.
+        # Only reuse input collected under the authorized target's raw-artifact directory.
+        if Path(host).name != host or host in {".", ".."}:
+            raise PermissionError("checklist raw artifact target is invalid")
+        original_targets = (ctx.store.load_scan_run(sid) or {}).get("targets", [])
+        aliases = [name for name in original_targets if isinstance(name, str)
+                   and name.rstrip(" .").casefold() == host.rstrip(" .").casefold()]
+        if aliases != [host]:
+            raise PermissionError("checklist raw artifact ownership is ambiguous")
+        raw = raw / host
+    found = _find_input(raw, host)
     if found:
         _path, doc = found
         doc = copy.deepcopy(doc)

@@ -11,6 +11,8 @@ import { ApplyTimeline } from './ApplyTimeline';
 import { CitationChips } from './CitationChips';
 import { DiffButton } from './ProposalDiff';
 import { PreviewButton } from './ProposalPlan';
+import { PermissionButton, usePermissions } from './PermissionGate';
+import { RecordedIdentity } from './IdentityProvenance';
 import { RiskTagsForFix } from './FixPanel';
 import { AssetIcon, CodeBlock, Collapsible, Mono, SeverityBadge, SimulatedBadge, StateBadge } from './common';
 
@@ -55,6 +57,7 @@ export function ProposalCard({
   focused?: boolean;
   actionsDisabled?: boolean;
 }) {
+  const permission = usePermissions();
   const f = p.finding;
   const ex = f?.explanation ?? null;
   const fix = p.fix;
@@ -130,10 +133,10 @@ export function ProposalCard({
             : p.assessment?.status === 'not_assessed' ? 'This decision was recorded without a dependency assessment.'
               : 'No dependency assessment is attached to this proposal.'}</Text>
           {actions.impact && <Group>
-            <Button variant="light" disabled={busy || (!historical && actionsDisabled)}
+            <PermissionButton allowed={historical || permission.can(p.state === 'approved' ? ['plan', 'review'] : 'plan')} reason={permission.reason(p.state === 'approved' ? ['plan', 'review'] : 'plan')} variant="light" disabled={busy || (!historical && actionsDisabled)}
               onClick={() => actions.impact?.(p, p.state !== 'approved')}>
               {historical ? 'View impact receipt' : p.state === 'approved' ? 'Review impact before apply' : 'Assess impact'}
-            </Button>
+            </PermissionButton>
           </Group>}
         </Q>
 
@@ -155,9 +158,10 @@ export function ProposalCard({
           </Group>
         )}
         {p.decided_by && (
-          <Text size="xs" c="dimmed">
-            Decision recorded by {p.decided_by} {fmtAgo(p.decided_at)}{p.decision_note ? `: "${p.decision_note}"` : ''}
-          </Text>
+          <Stack gap={4}>
+            <RecordedIdentity label="Decision recorded by" actor={p.decided_by} evidence={p.decided_principal} />
+            <Text size="xs" c="dimmed">{fmtAgo(p.decided_at)}{p.decision_note ? `: "${p.decision_note}"` : ''}</Text>
+          </Stack>
         )}
 
         <ApplyTimeline proposal={p} />
@@ -180,21 +184,21 @@ export function ProposalCard({
         <Group gap="sm">
           {p.state === 'proposed' && (
             <>
-              <Button size="md" color="green" leftSection={<IconCheck size={18} />} loading={busy} disabled={actionsDisabled || busy} onClick={() => actions.approve(p)}>Approve</Button>
-              <Button size="md" color="red" variant="light" leftSection={<IconX size={18} />} disabled={actionsDisabled || busy} onClick={() => actions.deny(p)}>Deny</Button>
+              <PermissionButton action={['approve', 'plan']} size="md" color="green" leftSection={<IconCheck size={18} />} loading={busy} disabled={actionsDisabled || busy} onClick={() => actions.approve(p)}>Approve</PermissionButton>
+              <PermissionButton action="deny" size="md" color="red" variant="light" leftSection={<IconX size={18} />} disabled={actionsDisabled || busy} onClick={() => actions.deny(p)}>Deny</PermissionButton>
             </>
           )}
           {p.state === 'approved' && (
-            <Button size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={actionsDisabled || busy || suppressed} onClick={() => actions.apply(p)}>Apply</Button>
+            <PermissionButton action="apply" size="md" color="blue" leftSection={<IconPlayerPlay size={18} />} loading={busy} disabled={actionsDisabled || busy || suppressed} onClick={() => actions.apply(p)}>Apply</PermissionButton>
           )}
           {p.state === 'applying' && <Button size="md" loading variant="light">Applying</Button>}
           {canRequestRollback(p) && (
-            <Button size="md" color="violet" variant="light" leftSection={<IconArrowBackUp size={18} />} loading={busy} disabled={actionsDisabled || busy} onClick={() => actions.rollback(p)}>Rollback</Button>
+            <PermissionButton action="rollback" size="md" color="violet" variant="light" leftSection={<IconArrowBackUp size={18} />} loading={busy} disabled={actionsDisabled || busy} onClick={() => actions.rollback(p)}>Rollback</PermissionButton>
           )}
           {p.state === 'applied' && fix?.kind === 'runbook' && actions.verify && (
-            <Button size="md" color="teal" variant="light" leftSection={<IconChecklist size={18} />} loading={busy} disabled={actionsDisabled || busy} onClick={() => actions.verify?.(p)}>Verify</Button>
+            <PermissionButton action="verify" size="md" color="teal" variant="light" leftSection={<IconChecklist size={18} />} loading={busy} disabled={actionsDisabled || busy} onClick={() => actions.verify?.(p)}>Verify</PermissionButton>
           )}
-          <PreviewButton proposalId={p.id} busy={busy} />
+          {permission.can('plan') ? <PreviewButton proposalId={p.id} busy={busy} /> : <PermissionButton action="plan" variant="light">Preview change</PermissionButton>}
           <DiffButton proposalId={p.id} state={p.state} />
           <Button size="md" variant="subtle" onClick={() => actions.openFinding(p.finding_id)}>Finding detail</Button>
         </Group>
