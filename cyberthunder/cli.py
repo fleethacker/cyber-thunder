@@ -35,6 +35,7 @@ CLI_MODULES = (
     "cyberthunder.discovery.cli",
     "cyberthunder.state.cli",
     "cyberthunder.vulnerability_cli",
+    "cyberthunder.security.node_hardening_cli",
 )
 
 
@@ -187,6 +188,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
+    from cyberthunder.security.node_hardening_cli import cmd_node_hardening
+    if a.fn is cmd_node_hardening:
+        # Local OS metadata only: no identity settings, AppContext or state writes.
+        return a.fn(a)
     settings = Settings.from_env(state_dir=a.state_dir)
     if settings.auth_mode != "dev" or settings.security_mode == "fleet":
         # Local emergency stop remains available when the identity service is unreachable.
