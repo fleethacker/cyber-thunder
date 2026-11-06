@@ -75,7 +75,7 @@ Example for a human with the `analyst` role, one SSH target `host-a` in environm
   "entries": [{
     "issuer": "https://id.example/realms/operators",
     "subject": "operator-subject-id",
-    "node_actions": ["read", "read.all", "kill.engage"],
+    "node_actions": ["read", "kill.engage"],
     "grants": [{
       "target_ids": ["host-a"],
       "environments": ["range"],
@@ -100,8 +100,9 @@ named resources. This example grants no approve, apply or rollback action.
 
 `node_actions` apply to node operations; they never grant access to every target. Node-wide read
 views and unfiltered history require node `read` **and** `read.all`, plus read access to current
-inventory. The example deliberately includes that global-history permission; remove it for an
-account that should only use scoped views. Targets, findings and proposals are filtered by resource
+inventory. The example leaves out global-history permission, so the account uses scoped views.
+Grant `read.all` separately only to an account authorized to see node-wide historical evidence,
+including evidence outside its current target grants. Targets, findings and proposals are filtered by resource
 access before aggregation/pagination. A per-target `read` or `export` grant does not unlock global
 history. Report-history and global report exports require node `export` and read access across current
 inventory; query filters do not reduce these checks. Audit has a separate node `audit` permission.
