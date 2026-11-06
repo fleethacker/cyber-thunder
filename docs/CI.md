@@ -97,14 +97,20 @@ The reviewed allowances are:
 | Linux | `tests/state/test_file_read_sharing.py::test_audit_checkpoint_survives_windows_sharing` | 1 | `requires Windows file sharing semantics` |
 
 The Linux job acquires UDS CLI 0.39.0 with `scripts/ci_setup_uds.py` into
-`$RUNNER_TEMP/ct-ci-uds` and adds only that directory to the job PATH. This is a
-separate future TST-01 candidate, not current-release acceptance. The helper
+`$RUNNER_TEMP/ct-ci-uds` and adds only that directory to the job PATH. The helper
 supports Linux amd64 only, uses the Python standard library, and verifies the
 reviewed SHA-256 before publishing an executable. Missing downloads, malformed
 content, hash mismatches and unsupported platforms fail setup. Existing cache
 bytes are rehashed on every invocation; a corrupt cache fails without fallback.
 `--offline` permits only an already verified cache. No system installation or
 shared PATH changes are needed. Use a task-owned directory with trusted parents.
+
+After a successful gate, each platform records the [partial release inventory](RELEASE_INVENTORY.md)
+and its hash/source receipt alongside the test reports. It records the UI assets
+rebuilt by that job and declared or observed local dependencies; it does not
+establish installed dependency closure, image contents or vulnerability status.
+Hosted results for the integrated workflow must be retained separately from the
+focused source validation below.
 
 The pin matches the repository bootstrap version; `scripts/wsl-bootstrap.sh`
 is unchanged. Primary sources are the [official release](https://github.com/defenseunicorns/uds-cli/releases/tag/v0.39.0)

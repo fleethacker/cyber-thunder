@@ -1,10 +1,19 @@
-# Offline release inventory — FUTURE ATO-02 candidate
+# Offline release inventory
 
 `scripts/release_inventory.py` collects bounded local release evidence into a
-**partial CycloneDX 1.6 JSON inventory**. This is a separate FUTURE candidate,
-not an ATO-02 completion claim, release gate, deployment approval, or vulnerability
-assessment. It has no application integration and needs only Python 3.12 and Git.
+**partial CycloneDX 1.6 JSON inventory**. This supports ATO-02 without claiming
+complete coverage, deployment approval, or a vulnerability assessment. It runs
+outside the application and needs only Python 3.12 and Git.
 It does not install, import, execute, or resolve dependency packages.
+
+The regression workflow generates this inventory after its successful gate and
+retains both files with the platform's test reports for 14 days. The UI assets
+are the files actually rebuilt in that job. The receipt records any resulting
+dirty status; a source commit alone does not prove those asset bytes. Python
+wheel inventory still describes the checked-in wheelhouse, not the CI runner's
+installed environment. Preserve release artifacts longer under the operator's
+records policy. A failed generation fails the job; an incomplete inventory can
+still succeed and is always labeled partial.
 
 ## Generate evidence
 

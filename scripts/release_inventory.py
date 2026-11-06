@@ -29,7 +29,7 @@ MAX_METADATA = 1024 * 1024
 MAX_RATIO = 200
 MAX_JSON_DEPTH = 64
 LIMITATIONS = [
-    "FUTURE candidate for ATO-02; partial inventory, not release approval.",
+    "ATO-02 support; partial inventory, not release approval.",
     "Declared versions are not installed versions. Wheel presence does not prove installation or dependency closure.",
     "Wheel CRC and hashes prove observed bytes, not trusted origin, signatures, or RECORD authenticity.",
     "npm lock declarations are not downloaded package verification; dev flags do not establish bundle membership.",
@@ -483,7 +483,7 @@ class Inventory:
             raise InventoryError("generator changed during inventory")
         return {"$schema": SCHEMA, "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
                 "metadata": {**({"component": self.application} if self.application else {}), "properties": props(
-                    candidate="FUTURE / ATO-02", coverage="partial", source_commit=commit,
+                    candidate="ATO-02 partial inventory", coverage="partial", source_commit=commit,
                     generator_sha256=digest(generator_bytes),
                     source_head_tree=tree, source_dirty=bool(status), source_status_sha256=digest(status),
                     sources=sources, source_set_sha256=digest(encoded(sources)),
