@@ -185,8 +185,11 @@ a fresh browser acceptance run. The existing intercepted Edge fixture was read,
 not repeated. No production code changed, and the full UI suite, typecheck,
 distribution build and live vCenter acceptance were not repeated for this review.
 
-The integrated release still requires the backend collector and credential-binding
-history checks reviewed in `8f9875f`. Frontend account resets do not establish
+The integrated candidate includes the backend collector and credential-binding
+history checks reviewed in `8f9875f`. Its earlier `de7282e` UI source passed all
+405 UI tests and the production TypeScript/Vite build; this later review adds
+tests and documentation without changing that production source or bundle.
+Frontend account resets do not establish
 per-collector authorization. A saved snapshot may remain displayed until a local
 authority/target change or a subsequent request invalidates it: this UI has no
 push invalidation for server policy, credential mapping or remote vCenter role
