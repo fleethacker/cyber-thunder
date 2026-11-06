@@ -29,7 +29,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = logging.getLogger(__name__)
 
-STATUSES = ("pending", "running", "done", "error", "skipped", "cancelled", "stopped")
+STATUSES = ("pending", "running", "done", "partial", "error", "skipped", "cancelled", "stopped", "timed_out")
 
 
 @dataclass
@@ -62,6 +62,7 @@ class ScanRun:
     error: str | None = None
     coverage_incomplete: bool | None = None       # None for legacy runs without coverage observations
     authorization_scopes: list[dict] | None = None
+    scheduling: dict | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -75,7 +76,8 @@ class ScanRun:
 
     @property
     def progress(self) -> dict:
-        done = sum(1 for r in self.results.values() if r.status in ("done", "error", "skipped", "stopped"))
+        done = sum(1 for r in self.results.values() if r.status in
+                   ("done", "partial", "error", "skipped", "stopped", "cancelled", "timed_out"))
         return {"done": done, "total": len(self.targets)}
 
 
@@ -87,6 +89,9 @@ class Scanner:
         self._threads: dict[str, threading.Thread] = {}
         self._active: dict[str, dict] = {}         # runs in progress, served from memory while they write
         self._lock = threading.Lock()
+        self.threads: list[threading.Thread] = []  # also drained by AppContext.close
+        self._collection_transports: set[int] = set()
+        self._cancellations: dict[str, threading.Event] = {}
 
     # -- lifecycle ---------------------------------------------------------------------
     @operation("scan")
@@ -96,6 +101,7 @@ class Scanner:
         """Create the run, persist it, and run it (in a daemon thread when background=True). Returns at once.
         Raises KillSwitchEngaged (after auditing the block) when the kill switch is engaged."""
         self.ctx.killswitch.guard("scan.start", requested_by)
+        self.ctx.settings.validate_scan_settings()
         if target_ids is None:
             ids = [t.id for t in self.ctx.inventory.all() if t.in_scope]
             if getattr(self.ctx.settings, "auth_mode", "dev") != "dev":
@@ -172,6 +178,39 @@ class Scanner:
     # -- execution ---------------------------------------------------------------------
     @operation("scan")
     def run(self, run: ScanRun) -> ScanRun:
+        self.ctx.settings.validate_scan_settings()
+        scheduled = self.ctx.settings.scan_max_workers != 1 or self.ctx.settings.scan_host_budget_s != 0
+        if scheduled:
+            from cyberthunder.scan_workers import tracked_thread
+            with self._lock:
+                self._cancellations[run.id] = threading.Event()
+            try:
+                with tracked_thread(self, threading.current_thread()):
+                    return self._execute(run, scheduled=True)
+            finally:
+                with self._lock:
+                    self._cancellations.pop(run.id, None)
+        return self._execute(run, scheduled=False)
+
+    def cancel(self, scan_id: str, *, requested_by: str = "operator") -> bool:
+        """Cooperatively stop an active opt-in collection; blocking calls still drain."""
+        run = self.get(scan_id)
+        if run is None:
+            return False
+        if requested_by != run.requested_by:
+            raise PermissionError("only the requesting account can cancel this scan")
+        for tid in run.targets:
+            authorize(self.ctx, "scan", actor=requested_by, target=tid)
+        check_record(self.ctx, run, "scan")
+        with self._lock:
+            event = self._cancellations.get(scan_id)
+            if event is None:
+                return False
+            event.set()
+        self.ctx.audit.append("scan.cancel", requested_by, {"scan_id": scan_id}, subject=scan_id)
+        return True
+
+    def _execute(self, run: ScanRun, *, scheduled: bool) -> ScanRun:
         """Execute synchronously: per target -> assert_in_scope -> transport -> adapter.collect -> run_detection
         -> persist. Audit: scan.start, scan.target (per target, with counts/errors), scan.finish."""
         ctx = self.ctx
@@ -186,21 +225,25 @@ class Scanner:
         all_findings: list[Finding] = []
         updated: list[str] = []
         try:
-            for i, tid in enumerate(run.targets):
-                if self._stopped(run, i):
-                    break
-                res = run.results.setdefault(tid, TargetScanResult(tid))
-                found = self._scan_target(run, res)
-                if found is not None:
-                    all_findings.extend(found)
-                    updated.append(tid)
-                run.findings_count = len(all_findings)
-                ctx.store.save_findings(run.id, all_findings, meta=self._meta(run))
-                self._save(run)
+            if scheduled:
+                from cyberthunder.scan_workers import collect_run
+                all_findings, updated = collect_run(self, run)
+            else:
+                for i, tid in enumerate(run.targets):
+                    if self._stopped(run, i):
+                        break
+                    res = run.results.setdefault(tid, TargetScanResult(tid))
+                    found = self._scan_target(run, res)
+                    if found is not None:
+                        all_findings.extend(found)
+                        updated.append(tid)
+                    run.findings_count = len(all_findings)
+                    ctx.store.save_findings(run.id, all_findings, meta=self._meta(run))
+                    self._save(run)
             run.summary = summarize(all_findings)
             run.findings_count = len(all_findings)
             ctx.store.save_findings(run.id, all_findings, meta=self._meta(run))
-            if run.status != "stopped":
+            if not scheduled and run.status != "stopped":
                 if run.results and all(r.status == "error" for r in run.results.values()):
                     run.status, run.error = "error", "every target failed; see per-target errors"
                 else:
@@ -246,7 +289,10 @@ class Scanner:
 
     @staticmethod
     def _meta(run: ScanRun) -> dict:
-        return {"scan_id": run.id, "trigger": run.trigger, "targets": run.targets, "modules": run.modules}
+        meta = {"scan_id": run.id, "trigger": run.trigger, "targets": run.targets, "modules": run.modules}
+        if run.scheduling is not None:
+            meta["scheduling"] = run.scheduling
+        return meta
 
     def _after_scan(self, run: ScanRun, findings: list[Finding]) -> None:
         ctx = self.ctx

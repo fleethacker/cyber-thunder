@@ -50,6 +50,9 @@ class Settings:
     demo: bool = field(default_factory=lambda: _env_bool("CT_DEMO", False))
     scheduler_actor: str = field(default_factory=lambda: _env("CT_SCHEDULER_ACTOR", "scheduler"))
     scan_interval_s: int = field(default_factory=lambda: _env_num("CT_SCAN_INTERVAL_SECONDS", 0, int))
+    # Opt-in host collection scheduler; zero budget disables timed boundary checks.
+    scan_max_workers: int = field(default_factory=lambda: int(_env("CT_SCAN_MAX_WORKERS", "1")))
+    scan_host_budget_s: float = field(default_factory=lambda: float(_env("CT_SCAN_HOST_BUDGET_SECONDS", "0")))
     content_check_interval_s: int = field(default_factory=lambda: _env_num("CT_CONTENT_CHECK_INTERVAL_SECONDS", 0, int))
     bootstrap_cluster_target: bool = field(default_factory=lambda: _env_bool("CT_BOOTSTRAP_CLUSTER_TARGET", False))
     bootstrap_cluster_target_id: str = field(default_factory=lambda: _env("CT_BOOTSTRAP_CLUSTER_TARGET_ID", "test-cluster"))
@@ -112,6 +115,15 @@ class Settings:
 
     def __post_init__(self):
         StepUpPolicy.from_settings(self)
+        self.validate_scan_settings()
+
+    def validate_scan_settings(self):
+        import math
+        if type(self.scan_max_workers) is not int or not 1 <= self.scan_max_workers <= 32:
+            raise ValueError("scan_max_workers must be an integer from 1 through 32")
+        budget = self.scan_host_budget_s
+        if isinstance(budget, bool) or not isinstance(budget, (int, float)) or not math.isfinite(budget) or budget < 0:
+            raise ValueError("scan_host_budget_s must be finite and nonnegative")
 
     @classmethod
     def from_env(cls, **overrides) -> "Settings":
@@ -123,6 +135,7 @@ class Settings:
                 raise KeyError(f"unknown setting {k}")
             setattr(s, k, Path(v) if isinstance(getattr(s, k), Path) else v)
         StepUpPolicy.from_settings(s)
+        s.validate_scan_settings()
         return s
 
     def to_dict(self) -> dict:
