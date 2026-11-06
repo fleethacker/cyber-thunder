@@ -107,12 +107,30 @@ the worker withheld a `not_reviewed` or `error` replacement of prior unresolved
 evidence, retaining the original observation exactly. It does not expose the
 withheld result or invent its status. Unavailable collection takes precedence;
 a published new actual observation is still affirmative evidence. Absent,
-unrelated, or malformed lists keep the earlier metadata behavior. These paths
-are exercised with persisted helper fixtures on this unchanged base; the reviewed
-scanner commit is not merged into or executed by this batch.
-Changes to those fields during the independent worker review require a focused
-adapter/test review here before later integration. No release gate, deployment,
-or immediate-release dependency is introduced.
+unrelated, or malformed lists keep the earlier metadata behavior.
+
+The assembled follow-up at base `e0c4531` includes the worker, reassessment, and
+retention implementations. `tests/test_reassessment_worker_integration.py`
+executes the real bounded `Scanner.start` path with fixture transports and a
+supported `native` finding source on JSON and SQLite. The scanner itself
+publishes the run, findings, collector artifacts, and scheduling metadata;
+these tests do not manufacture scheduler records. Withheld `not_reviewed` and
+`error` replacements, downgraded pass/not-applicable results, partial omissions,
+and unavailable collection reach the actual `ReassessmentView` and list/detail
+APIs. Original evidence, times, status, confidence, review decisions, proposal
+state, and rollback interpretation remain unchanged. A fresh observation in a
+partial run is separately exercised without advancing target scan freshness.
+An actual mixed-target worker run cannot expand a reader's history authority.
+The retention planner reads the resulting state directly and records
+`current-observation` pinning for the older unresolved observation's source.
+The source also remains incomplete coverage; this does not claim that removing
+the observation alone would make it eligible for export.
+
+The earlier independent review used persisted helper fixtures and inspected the
+release scanner source read-only; it did not merge or execute that source.
+Those historical review receipts retain that limitation. The assembled tests
+add execution evidence without extending the earlier independent review's scope.
+No release gate, deployment, or immediate-release dependency is introduced.
 
 The helper keeps only a request-local run index and lazily reads each selected
 run's observations once. It never creates a state directory, writes a document,
@@ -146,5 +164,11 @@ source and generated UI files to SHA-256 hashes. Negative calibration reproduces
 whole-run detail authorization, revocation during history reads, pre-attempt
 evidence, and named-view timestamp-tie defects on the unmodified candidate.
 Validation uses fixture state only; it does not contact target hosts or
-production systems. The release scanner contract is exercised with fixture
-metadata; its source is neither merged nor executed by this batch.
+production systems. Assembled worker integration receipts are retained separately
+under `.build/reassessment-integration/`, including exact commands, logs, JUnit
+XML, and source SHA-256 manifests. The new module passes 24 cases on Windows
+Python 3.12.10 and the same 24 cases on native Linux Python 3.12.16, run serially
+on CPU 3. Each run covers 12 JSON and 12 SQLite cases, with no failures or skips.
+It executes the assembled scanner source against injected collectors; it does
+not validate live transport behavior, a full release gate, or the combined
+release head.
