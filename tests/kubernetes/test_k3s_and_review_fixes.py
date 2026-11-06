@@ -81,6 +81,10 @@ def test_api_server_rules_not_reviewed_without_a_source(tmp_path, k8s_target):
 class _NodeTransport:
     def __init__(self):
         self.commands = []
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     def run(self, cmd, timeout=None, sudo=False):
         self.commands.append((cmd, sudo))
@@ -96,12 +100,17 @@ def test_collect_reads_k3s_node_when_node_target_is_set(state_dir, tmp_path, mon
     target.options = dict(target.options, node_target="k3s-01-node")
     adapter.reset_simulated(target, settings)
     kt = adapter.make_transport(target, settings)
-    node = Target(id="k3s-01-node", name="k3s-01", asset_type="linux", address="10.0.0.1")
+    node = Target(id="k3s-01-node", name="k3s-01", asset_type="linux", address="10.0.0.1",
+                  in_scope=True, sudo=True)
     nt = _NodeTransport()
-    monkeypatch.setattr(adapter, "node_transport", lambda node_id: (node, nt))
+    def select_node(node_id, *, factory):
+        assert node_id == node.id and factory is None
+        return node, nt
+    monkeypatch.setattr(adapter, "node_transport", select_node)
     col = adapter.collect(target, kt, tmp_path / "scan")
     assert not col.errors, col.errors
     assert (k3s.READ_CONFIG, True) in nt.commands
+    assert nt.closed
     stored = json.dumps(col.to_dict())
     assert "K10" not in stored
     found = adapter.run_detection(target, col)
@@ -121,9 +130,8 @@ def test_node_target_out_of_scope_is_refused(state_dir, tmp_path, monkeypatch):
     target = adapter.demo_targets()[0]
     target.options = dict(target.options, node_target="k3s-01-node")
     adapter.reset_simulated(target, settings)
-    col = adapter.collect(target, adapter.make_transport(target, settings), tmp_path / "scan")
-    assert any("node_target k3s-01-node" in e for e in col.errors)
-    assert k8s_checks.K3S_FLAGS not in col.raw
+    with pytest.raises(PermissionError, match="scope"):
+        adapter.collect(target, adapter.make_transport(target, settings), tmp_path / "scan")
 
 
 # -- detection-5: envFrom secretRef ----------------------------------------------------------------------
