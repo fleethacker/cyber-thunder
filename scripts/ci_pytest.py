@@ -114,6 +114,37 @@ WINDOWS_FILE_TRUST_REVIEW_TESTS = (
 )
 
 
+# Exact cases independently exercised on their native platform; no module allowance.
+NODE_HARDENING_SKIPS = {
+    "linux": {
+        "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;;GR;;;S-1-1-0)]": "native Windows DACL/handle checks",
+        "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;OICIIO;GR;;;S-1-1-0)]": "native Windows DACL/handle checks",
+        "tests/security/test_node_hardening.py::test_windows_directory_read_inheritance_and_mutation_are_not_a_pass[(A;;GW;;;S-1-1-0)]": "native Windows DACL/handle checks",
+        "tests/security/test_node_hardening.py::test_windows_protected_file_does_not_certify_the_state_directory": "native Windows selected-file versus state protection",
+        "tests/security/test_node_hardening.py::test_windows_shared_validator_failure_and_junction_are_unknown_or_unsafe": "native Windows DACL/handle checks",
+        "tests/security/test_node_hardening_review.py::test_windows_unknown_inherit_only_rights_are_not_protected": "native Windows inherited DACL masks",
+        "tests/security/test_node_hardening_review.py::test_windows_midwalk_acl_change_is_not_protected_and_closes_handles": "native Windows SID, held handles and DACL revocation",
+        "tests/security/test_node_hardening_review.py::test_windows_cli_does_not_expand_ambiguous_drive_paths[C:state]": "native Windows drive-relative path syntax",
+        "tests/security/test_node_hardening_review.py::test_windows_cli_does_not_expand_ambiguous_drive_paths[\\\\state]": "native Windows drive-relative path syntax"
+    },
+    "win32": {
+        "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[symlink]": "native Linux descriptor/permission checks",
+        "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[fifo]": "native Linux descriptor/permission checks",
+        "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[foreign_mode]": "native Linux descriptor/permission checks",
+        "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[parent_mode]": "native Linux descriptor/permission checks",
+        "tests/security/test_node_hardening.py::test_linux_unsafe_metadata_is_not_a_pass[owner]": "native Linux descriptor/permission checks",
+        "tests/security/test_node_hardening.py::test_linux_acl_unknown_and_midwalk_change_are_not_silently_passed": "native Linux xattr/descriptor checks",
+        "tests/security/test_node_hardening.py::test_linux_parent_symlink_and_unavailable_permission_metadata": "native Linux no-follow traversal",
+        "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[depth]": "native Linux descriptor lifetime and no-follow races",
+        "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[entries]": "native Linux descriptor lifetime and no-follow races",
+        "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[swap]": "native Linux descriptor lifetime and no-follow races",
+        "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[rename]": "native Linux descriptor lifetime and no-follow races",
+        "tests/security/test_node_hardening_review.py::test_linux_descriptor_traversal_closes_every_handle_on_failure[metadata]": "native Linux descriptor lifetime and no-follow races",
+        "tests/security/test_node_hardening_review.py::test_linux_different_device_is_not_enumerated": "native Linux descriptor filesystem boundary"
+    }
+}
+
+
 def expected_skips(platform: str) -> dict[str, str]:
     if platform not in {"linux", "win32"}:
         raise ValueError(f"Unsupported CI platform: {platform}")
@@ -190,6 +221,7 @@ def expected_skips(platform: str) -> dict[str, str]:
             "test_audit_checkpoint_survives_windows_sharing",
         ):
             allowed[f"tests/state/test_file_read_sharing.py::{name}"] = SHARING_REASON
+    allowed.update(NODE_HARDENING_SKIPS[platform])
     return allowed
 
 

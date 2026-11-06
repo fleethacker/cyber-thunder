@@ -200,7 +200,7 @@ def test_windows_omissions_are_explicit_and_not_linux_allowances(tmp_path):
 
 def test_allowances_are_bounded_by_exact_node_reason_and_platform():
     linux, windows = expected_skips("linux"), expected_skips("win32")
-    assert len(linux) == 95 and len(windows) == 22
+    assert len(linux) == 104 and len(windows) == 35
     native_acl = {node: reason for node, reason in linux.items()
                   if node.startswith("tests/security/test_windows_file_trust.py::")}
     assert len(native_acl) == 46
@@ -285,6 +285,32 @@ def test_missing_real_filesystem_capability_is_not_a_platform_allowance(node, re
         ))
         assert policy.skips[0]["allowed"] is False
         assert any("Unexpected skip" in error for error in policy.errors)
+
+
+@pytest.mark.parametrize("platform,receipt_name,count", [("linux", "linux", 9), ("win32", "windows", 13)])
+def test_node_assessment_allowances_match_native_review_and_refuse_other_cases(platform, receipt_name, count):
+    receipt = json.loads((ROOT / f"docs/node-hardening-review/{receipt_name}.json").read_text())
+    expected = {row["nodeid"]: row["reason"] for row in receipt["assessment_skips"]}
+    actual = {node: reason for node, reason in expected_skips(platform).items()
+              if node.startswith(("tests/security/test_node_hardening.py::",
+                                  "tests/security/test_node_hardening_review.py::"))}
+    assert actual == expected and len(actual) == count
+    other = "linux" if platform == "win32" else "win32"
+    for node, reason in actual.items():
+        for host, candidate, explanation, phase, accepted in (
+            (platform, node, reason, "setup", True),
+            (other, node, reason, "setup", False),
+            (platform, node + "[new]", reason, "setup", False),
+            (platform, node, reason + " changed", "setup", False),
+            (platform, node, reason, "teardown", False),
+        ):
+            policy = RegressionPolicy(ROOT, host)
+            policy.pytest_runtest_logreport(SimpleNamespace(
+                nodeid=candidate, when=phase, outcome="skipped", skipped=True,
+                longrepr=("file.py", 1, "Skipped: " + explanation),
+            ))
+            assert policy.skips[0]["allowed"] is accepted
+            assert bool(policy.errors) is not accepted
 
 
 def test_workflow_has_read_only_triggers_full_matrix_and_immutable_actions():

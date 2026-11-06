@@ -112,7 +112,13 @@ test_standalone_setup_rejects_other_contexts_before_creating_password
 test_standalone_setup_rejects_arguments
 ```
 
-That permits at most **32 skipped cases on Linux and 22 on Windows**, with every
+The node assessment adds 13 exact Linux-only cases on Windows and nine exact
+Windows-only cases on Linux. Their literal IDs and reasons are listed in
+`NODE_HARDENING_SKIPS` in `scripts/ci_pytest.py` and independently exercised in
+[the native review receipts](NODE_HARDENING_REVIEW.md). These are individual
+case allowances, not module omissions.
+
+That permits at most **104 skipped cases on Linux and 35 on Windows**, with every
 case individually constrained. Missing Git or Bash is not an allowed skip on
 either runner. Windows runs the command-shell and file-sharing tests that
 Linux skips.
@@ -133,16 +139,19 @@ or a Windows junction creation error are deliberately not allowances. If a
 runner cannot create the required links, its capability must be provisioned
 or the failed coverage reviewed; the skip checker remains red.
 
-Windows mode bits and `st_uid` do not establish an owner SID, DACL, inherited
-permissions, or effective account rights. The file validators check file shape,
-links/reparse metadata and stability; they do not verify Windows ACLs. Before
+Windows mode bits and `st_uid` do not establish an owner SID or DACL. Protected
+runtime files now use native SID/DACL validation with pinned handle chains;
+unavailable native validation fails closed. Conservative checks can reject a
+safe but unsupported descriptor rather than guessing effective access. Before
 deployment, provision and review restrictive DACLs on the policy, kubeconfig,
 referenced credential material, and every ancestor directory. Untrusted accounts
 must not be able to write, replace/delete, take ownership, or change permissions
 on them. Restrict secret-file reads to the intended service account and trusted
 administrators; give the service only the rights its operation requires. Check
 effective inherited permissions for the actual service identity and other local
-accounts. Passing these tests is not DACL acceptance evidence. See
+accounts. The native fixtures prove those tested cases, not the actual deployed
+service account's protection. The read-only node assessment also does not enforce
+future file creation or cover encryption. See
 [account access and file trust](ACCOUNT_ACCESS.md) for the runtime boundary.
 
 `tests/conftest.py` already excludes these Windows modules before collection:
