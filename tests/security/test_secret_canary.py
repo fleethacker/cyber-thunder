@@ -10,6 +10,7 @@ import shlex
 import socket
 import subprocess
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -180,15 +181,17 @@ def lifecycle(state_dir, monkeypatch, caplog):
     principal = Principal("https://identity.example.test", "fixture-operator", "Fixture operator",
                           kind="human", roles=("analyst", "approver", "admin", "auditor"),
                           expires_at=time.time() + 300)
+    proposer = replace(principal, subject="fixture-proposer", display_name="Fixture proposer",
+                       roles=("analyst",))
     path = state_dir / "auth" / "access.json"
     path.parent.mkdir(mode=0o700)
     path.write_text(json.dumps({"version": 1, "entries": [{
-        "issuer": principal.issuer, "subject": principal.subject,
+        "issuer": account.issuer, "subject": account.subject,
         "node_actions": sorted(ACTIONS),
         "grants": [{"target_ids": [HOST], "actions": sorted(ACTIONS - {"read.all"}),
                     "credential": {"username": "fixture-account", "credential_ref": REFERENCE,
                                    "sudo": True, "options": {}}}],
-    }]}), encoding="utf-8")
+    } for account in (principal, proposer)]}), encoding="utf-8")
     path.chmod(0o600)
 
     load_all()
@@ -196,7 +199,7 @@ def lifecycle(state_dir, monkeypatch, caplog):
     adapter = LifecycleAdapter()
     registry.register(adapter)
     harness = SimpleNamespace(state=seed_state(), probe=CanaryProbe(CANARY), authentications=0,
-                              reject_auth=False, children=[], principal=principal)
+                              reject_auth=False, children=[], principal=principal, proposer=proposer)
     monkeypatch.setattr("paramiko.SSHClient", lambda: MemorySSH(harness))
 
     def no_network(*_, **__):
@@ -287,16 +290,19 @@ def test_lifecycle_keeps_credentials_out_of_outputs(lifecycle, caplog):
 
     # Real SSH account binding, request identity, adapter discover, and audit.
     assert request("POST", f"/targets/{HOST}/discover").json()["hostname"] == HOST
-    with principal_scope(principal):
-        scan = ctx.scanner.start([HOST], background=False, requested_by=principal.actor)
+    with principal_scope(h.proposer):
+        scan = ctx.scanner.start([HOST], background=False, requested_by=h.proposer.actor)
         assert scan.status == "done" and not scan.error
         assert not scan.results[HOST].errors
         finding = next(f for f in ctx.store.load_findings(scan.id) if f.rule_id == RULE_ROOT_LOGIN)
         explanation = ctx.explain.explain(finding)
         assert explanation.validated and not explanation.fallback and h.backend.prompts
-        proposal = ctx.engine.propose(finding, actor=principal.actor)
+        proposal = ctx.engine.propose(finding, actor=h.proposer.actor)
         assert proposal is not None and proposal.state.value == "proposed"
-    request("POST", f"/proposals/{proposal.id}/approve", json={"note": "Fixture change reviewed"})
+        assert proposal.proposed_by == h.proposer.actor != principal.actor
+    approved = request("POST", f"/proposals/{proposal.id}/approve",
+                       json={"note": "Fixture change reviewed"}).json()
+    assert approved["state"] == "approved" and approved["decided_by"] == principal.actor
     original = h.state["files"][SSHD]
     with principal_scope(principal):
         result = ctx.engine.execute(proposal.id, actor=principal.actor)

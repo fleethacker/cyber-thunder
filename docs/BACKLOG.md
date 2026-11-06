@@ -76,8 +76,8 @@ The implementation tests use isolated identity and transport fixtures. They do n
 - Target: roles from the token's groups claim via config. viewer reads; analyst scans, discovers, proposes; approver approves, denies, signs policy; admin releases the kill switch and changes scope; auditor exports and verifies. Engage stays open to every authenticated user and the machine; network callers without a credential are refused (local console and sentinel engage still work); release needs admin, a reason, and alerts on repeated engage/release. A permissions table in `control/roles.py` serves API and CLI; `ApprovalGate.approve` and `KillSwitch.release` re-check the role. The UI disables actions the user cannot take and says why.
 - Done when: a test fails if any non-GET route lacks a role; an analyst approve gets 403 and is audited with reason `role`; a viewer can engage but not release; a role change applies at next token refresh.
 
-**ZT-09 Separation of duties and a two-person rule for CAT I.** Pillars: User, Automation. Step: 30 days. Effort: 3-4 days. Depends: ZT-02 (in dev mode the rule works on typed names, labeled unverified).
-- Today: `Proposal.decided_by` is one field (`control/approvals.py:76`); human proposals record their creator (`api/routes/findings.py:51`) but approve never compares; one approval moves any severity; a policy with `max_severity=None` can auto-approve anything (`control/policy.py:31`). The person who accepts a device into scope can approve and apply its first change alone.
+**ZT-09 Separation of duties and a two-person rule for CAT I.** Pillars: User, Automation. Step: 30 days. Effort: remaining range acceptance and optional first-device rule. Depends: ZT-02 (optional development enforcement uses typed names, labeled unverified).
+- Today: Implemented verified proposer exclusion, distinct issuer/subject approvals, two approvers for CAT I or unknown severity and one for other severities. Server-derived requirements, payload and assessment associations are checked against the original audit record and current facts before approval and immediately before mutation. The UI shows partial approvals and retains each identity; legacy records cannot silently gain verified authority ([SEPARATION_OF_DUTIES](SEPARATION_OF_DUTIES.md)). Live multi-person realm acceptance and the optional first-device-registrar restriction remain open.
 - Target: `proposed_by`, `approvals[]` and `required_approvals` (CAT I = 2, otherwise 1, per enclave). APPROVED only when distinct approvers reach the count, none of them the proposer. A policy never satisfies a CAT I or a second approval. Optional rule: the person who accepted a device cannot be sole approver of its first change.
 - Done when: alice proposes and approves, refused and audited; for a CAT I, bob approves (1 of 2), bob again (refused), carol (APPROVED); a policy matching a CAT I does not auto-approve; old `proposals.json` loads.
 
@@ -471,7 +471,7 @@ Section 2 items by step:
 
 ## 6. Requested capabilities at the testing checkpoint
 
-This checkpoint finishes the active batch and then stops feature work for home/range testing. Remaining work stays in the existing items below; implementation or fixture tests do not establish production readiness.
+This section records the earlier testing checkpoint. Development has resumed; remaining work stays in the existing items below. Implementation or fixture tests do not establish production readiness.
 
 | Request | Implemented boundary | Remaining work |
 |---|---|---|
@@ -487,7 +487,7 @@ This checkpoint finishes the active batch and then stops feature work for home/r
 | Avoid destructive Kubernetes fixes by default | Heuristic indicators select owner-review guidance; retired deletion actions cannot execute; migration/removal guidance states service/data checks | REM-01, VAL-02, MVP-07/09; no automatic investigation closure or service-health guarantee |
 | Persist discovery/scans and run offline with a database | StateStore documents persist through JSON or SQLite; inventory/proposals and hash-chain audit retain their protected file formats | SCL-01/02/03/04/05; PostgreSQL, multi-node operation and measured scale remain open |
 | No default slow-link demonstration behavior in normal use | Unknown/measured production observations; explicit test mode and offline override | CON-03/04; real delivery and continuous monitoring are not supplied by simulation |
-| Verified per-user app and system access | Existing named-actor gates and gateway package SSO | ZT-01 through ZT-31; application identity and per-user target authorization are not closed by packaging |
+| Verified per-user app and system access | Signed account identity, explicit role and target/environment/action grants, account-bound target credentials and independent human approvals; original artifact ownership survives target reassignment | ZT-01 through ZT-31 for live realm/target acceptance and remaining controls; packaging alone does not establish application identity or target authorization |
 | Complete local recovery copy and a judging checkpoint | Source archive, all-ref Git bundle, restore/hash checks and local mirrored evidence are refreshed for merged checkpoints | Runtime state, credentials, VM disks and offline scanner/image caches are separate; retain/restore them under SCL-04 and TST-02. Rehearsal and field evidence remain RNG-01/02/03 and ATO-01 through ATO-04 |
 
 No deferred item in this table is an instruction to start new feature work before the operator resumes.
