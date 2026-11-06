@@ -47,7 +47,9 @@ def _file_lock(path: Path, timeout: float = 15.0):
         else:
             import fcntl
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        yield
+        # Optional descriptor access lets protected callers validate the acquired
+        # file without opening a competing Windows handle. Other callers ignore it.
+        yield fh
     finally:
         try:
             if os.name == "nt":
