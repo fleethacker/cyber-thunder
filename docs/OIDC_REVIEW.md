@@ -136,3 +136,82 @@ Changed paths: `cyberthunder/security/oidc.py`,
 `cyberthunder/security/_oidc_cache.py`, `tests/security/test_oidc_review.py`,
 `docs/OIDC_VALIDATION.md`, and `docs/OIDC_REVIEW.md`. The fetch helper required no
 change. Application-wide gates and live-provider acceptance were not run.
+
+## WSL strict TLS fixture follow-up
+
+Base: `c27369a`, including `abe0120` and its cache invalidation, bracketed-clock
+and final-expiry checks. This follow-up changes only `tests/security/test_oidc.py`
+and this document. The production verifier, cache and fetch helpers are unchanged.
+
+The previously reported 24 WSL failures reproduced exactly in a Linux-native
+checkout under `/tmp/ct-oidc-linux-asduotwu`, on tmpfs. The original OIDC suite
+plus the sixteen independent review regressions returned **24 failed, 202 passed,
+1 skipped in 11.96s**. Cache parents were on that same native filesystem, owned
+by effective UID 1000 with mode `0700`. Application/test sources and cache paths
+for that run were native. The failure was not a Windows mount metadata artifact.
+
+A direct loopback call to the same HTTPS fetch helper exposed the underlying
+TLS error that the production subprocess intentionally sanitizes:
+`SSLCertVerificationError`, verification code **85**, `Missing Authority Key Identifier`.
+The WSL default SSL context had `VERIFY_X509_STRICT` enabled. The generated test
+chain lacked authority/subject key identifiers and key-usage extensions. TLS
+rejected it before any HTTP request reached the fixture server. This explained
+both the positive authentication failures and the protocol/deadline tests that
+expected a request. Cache safety checks were working as intended.
+
+The fixture CA now has subject/authority key identifiers and critical CA signing
+key usage. Server certificates have subject/authority key identifiers, critical
+server key usage and server-auth extended key usage, retaining their existing
+SANs, validity bounds and basic constraints. The test chain satisfies strict
+verification without changing runtime trust settings or suppressing errors.
+
+Three new real loopback cases call the fetch helper with `VERIFY_X509_STRICT`
+explicitly enabled on both platforms, including Python versions where that flag
+is not a default. The valid trusted chain returns the expected JWKS; a wrong
+IP identity fails with verification code 64; an untrusted CA fails with code 20.
+The negative cases assert their specific verification error and no HTTP request,
+so a malformed test chain cannot masquerade as successful hostname/CA rejection
+coverage. Certificate-required and hostname verification remain enabled.
+
+Final focused results, including all sixteen `abe0120` review regressions:
+
+| Environment | Result | Runtime |
+| --- | --- | --- |
+| Windows | **228 passed, 2 skipped**, 38.12s | CPython 3.12.10, OpenSSL 3.0.16, cryptography 50.0.2, PyJWT 2.15.1, pytest 9.2.0 |
+| WSL Ubuntu, native home filesystem | **229 passed, 1 skipped**, 19.47s | CPython 3.14.4, OpenSSL 3.5.5, cryptography 46.0.5, PyJWT 2.10.1, pytest 9.2.0 |
+
+The final WSL source snapshot and pytest base directory were under
+`/home/joshua/.cache/ct-oidc-tests/verification-4ml6rmns`, on the native Linux
+filesystem (`stat -f` reported `ext2/ext3`). A successful online/offline RSA
+case verified the actual cache file owner UID 1000, mode `0600`, and parent
+owner UID 1000, mode `0700`. The recorded pass IDs contain every one of the
+24 original failing node IDs. Windows ran the real junction case. Its two
+existing skips are the POSIX permissions and symlink cases; Linux ran both and
+skipped only `test_windows_junction_cache_path_rejected` with the existing reason
+`Windows directory junction fixture`. No skip was added or widened.
+
+The exact focused selection and pytest options on Windows were:
+
+```text
+python -m pytest tests/security/test_oidc.py tests/security/test_oidc_review.py -o addopts= -q -rs --tb=short -p no:cacheprovider
+```
+
+The Linux run invoked `pytest.main` from the native source snapshot, with
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, `PYTHONPATH` and `TMPDIR` set to that snapshot:
+
+```python
+pytest.main([
+    "-o", "addopts=", "-q", "-s", "--tb=short", "-rs", "-p", "no:cacheprovider",
+    "--basetemp", str(checkout / ".pytest-fixed"),
+    "tests/security/test_oidc.py", "tests/security/test_oidc_review.py",
+], plugins=[receipt])
+```
+
+The receipt plugin recorded outcomes and asserted the cache ownership/modes.
+Shared Windows site-packages were appended after native import paths to supply
+pure Python test dependencies; the interpreter, SSL, cryptography and PyJWT were
+Linux-native. The isolated fetch subprocess loaded the native source and used
+native certificate files. This was focused verification, not a full gate or
+hosted CI run. The earlier WSL failure report is resolved by these fixture
+changes; provider acceptance and Windows DACL provisioning remain external
+requirements described above.

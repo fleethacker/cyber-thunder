@@ -19,7 +19,7 @@ import traceback
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 import jwt
 import pytest
 
@@ -91,6 +91,12 @@ def certificates(tmp_path_factory):
           .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=1))
           .not_valid_after(now + timedelta(days=1))
           .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+          .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+          .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False)
+          .add_extension(x509.KeyUsage(digital_signature=False, content_commitment=False,
+                                      key_encipherment=False, data_encipherment=False,
+                                      key_agreement=False, key_cert_sign=True, crl_sign=True,
+                                      encipher_only=False, decipher_only=False), critical=True)
           .sign(key, hashes.SHA256()))
     ca_path = directory / "ca.pem"
     ca_path.write_bytes(ca.public_bytes(serialization.Encoding.PEM))
@@ -105,6 +111,13 @@ def certificates(tmp_path_factory):
                 .public_key(server_key.public_key()).serial_number(x509.random_serial_number())
                 .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=1))
                 .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                .add_extension(x509.SubjectKeyIdentifier.from_public_key(server_key.public_key()), critical=False)
+                .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False)
+                .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False,
+                                            key_encipherment=True, data_encipherment=False,
+                                            key_agreement=False, key_cert_sign=False, crl_sign=False,
+                                            encipher_only=False, decipher_only=False), critical=True)
+                .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
                 .add_extension(x509.SubjectAlternativeName(names), critical=False)
                 .sign(key, hashes.SHA256()))
         cert_path, key_path = directory / f"{label}.pem", directory / f"{label}.key"
@@ -765,6 +778,41 @@ def test_total_deadline_stops_trickle_responses(environment, signing_keys, monke
     elapsed = time.monotonic() - started
     assert 0.8 <= elapsed < 3
     assert len(server["requests"]) == 1
+
+
+@pytest.mark.parametrize("certificate,trusted,verification_code", [
+    ("valid", True, None), ("wrong-host", True, 64), ("valid", False, 20),
+])
+def test_strict_tls_chain_and_identity(tmp_path, signing_keys, https_server, monkeypatch,
+                                       certificate, trusted, verification_code):
+    from cyberthunder.security._oidc_fetch import fetch
+
+    document = {"keys": [jwk(signing_keys["rsa"])]}
+    server = https_server(document, certificate=certificate)
+    default_context = ssl.create_default_context
+
+    def strict_context(*args, **kwargs):
+        context = default_context(*args, **kwargs)
+        # Exercise strict chain verification even on interpreters where it is
+        # not enabled by default. Keep certificate and hostname checks enabled.
+        context.verify_flags |= ssl.VERIFY_X509_STRICT
+        assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+        return context
+
+    monkeypatch.setattr(ssl, "create_default_context", strict_context)
+    if not trusted:
+        monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "no-trusted-ca.pem"))
+        monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path / "empty-ca-directory"))
+    if verification_code is None:
+        assert json.loads(fetch(server["url"])) == document
+        assert len(server["requests"]) == 1
+    else:
+        with pytest.raises(ssl.SSLCertVerificationError) as error:
+            fetch(server["url"])
+        # A malformed chain must not make the wrong-host or untrusted-CA test
+        # pass accidentally before the intended TLS boundary is reached.
+        assert error.value.verify_code == verification_code
+        assert not server["requests"]
 
 
 def test_tls_certificate_hostname_verification(tmp_path, signing_keys, https_server):
